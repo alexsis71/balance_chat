@@ -247,16 +247,35 @@ class InterpretationMutationCompiler:
     ) -> list[AnalysisOperand]:
         if not metrics:
             raise ContextBindingError("at least one metric is required")
-        if operation == Operation.COMPARE and entity_action == "set" and len(entities) > 1:
-            metric = metrics[0]
-            return [
-                AnalysisOperand(
-                    operand_id=f"operand_{index + 1}",
-                    metric=metric,
-                    entities=[entity],
+        if operation == Operation.COMPARE and entity_action == "set" and entities:
+            by_role: dict[str, list[OperandEntityRef]] = {}
+            for entity in entities:
+                by_role.setdefault(entity.role, []).append(entity)
+            varying_roles = [role for role, values in by_role.items() if len(values) > 1]
+            if len(varying_roles) > 1:
+                raise ContextBindingError(
+                    "compare has multiple varying entity dimensions"
                 )
-                for index, entity in enumerate(entities)
-            ]
+            if varying_roles:
+                if len(metrics) != 1:
+                    raise ContextBindingError(
+                        "comparison matrix requires an explicit decomposition"
+                    )
+                varying_role = varying_roles[0]
+                shared = [
+                    deepcopy(entity)
+                    for role, values in by_role.items()
+                    if role != varying_role
+                    for entity in values
+                ]
+                return [
+                    AnalysisOperand(
+                        operand_id=f"operand_{index + 1}",
+                        metric=metrics[0],
+                        entities=[*deepcopy(shared), deepcopy(entity)],
+                    )
+                    for index, entity in enumerate(by_role[varying_role])
+                ]
         output: list[AnalysisOperand] = []
         for index, metric in enumerate(metrics):
             template = existing[min(index, len(existing) - 1)] if existing else None

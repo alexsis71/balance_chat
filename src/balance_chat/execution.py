@@ -72,12 +72,50 @@ class PipelineScalarTaskRunner:
         request_id: str | None,
     ) -> Mapping[str, Any]:
         return self.runtime.execute(
-            original_query,
+            _render_scalar_query(task),
             task.scalar_intent,
             execute_db=execute_db,
             request_id=f"{request_id}:{task.task_id}" if request_id else task.task_id,
             apply_summary=False,
         )
+
+
+def _render_scalar_query(task: ExecutionTask) -> str:
+    """Render one resolver-safe query from one canonical scalar intent."""
+    intent = task.scalar_intent
+    operand = intent.operands[0]
+    metric_labels = {
+        "distribution": "распределение газа",
+        "incoming": "поступление газа",
+        "export": "экспорт газа",
+        "stock": "запасы газа",
+        "balance": "баланс газа",
+        "flow_balance": "баланс потоков газа",
+    }
+    parts = ["Покажи", metric_labels.get(operand.metric, operand.metric)]
+    by_role = {item.role: item.entity.display_name for item in operand.entities}
+    if by_role.get("balance"):
+        parts.extend(["по балансу", by_role["balance"]])
+    if by_role.get("article"):
+        parts.extend(["по статье", by_role["article"]])
+    if by_role.get("source"):
+        parts.extend(["из", by_role["source"]])
+    if by_role.get("destination"):
+        parts.extend(["в", by_role["destination"]])
+    if by_role.get("route"):
+        parts.extend(["по маршруту", by_role["route"]])
+    periods = operand.periods or intent.periods
+    if periods:
+        period = periods[0]
+        parts.extend(
+            [
+                "за период с",
+                period.date_from.isoformat(),
+                "по",
+                period.date_to.isoformat(),
+            ]
+        )
+    return " ".join(parts)
 
 
 class NativeExecutor:

@@ -5,7 +5,12 @@ from decimal import Decimal
 import pytest
 
 from balance_chat.contracts import AnalysisIntent, AnalysisOperand, Operation, PeriodRef
-from balance_chat.execution import NativeExecutionError, NativeExecutor, ScalarFact
+from balance_chat.execution import (
+    NativeExecutionError,
+    NativeExecutor,
+    PipelineScalarTaskRunner,
+    ScalarFact,
+)
 from balance_chat.planning import NativeMultiOperandPlanner
 
 
@@ -79,3 +84,64 @@ def test_executor_does_not_hide_no_data() -> None:
     )
     assert result.status == "no_data"
     assert result.comparison is None
+
+
+def test_pipeline_runner_renders_each_scalar_without_sibling_operand() -> None:
+    from balance_chat.contracts import CanonicalEntityRef, OperandEntityRef
+
+    class Runtime:
+        def __init__(self) -> None:
+            self.queries = []
+
+        def execute(self, query, *_args, **_kwargs):
+            self.queries.append(query)
+            return {"status": "no_data"}
+
+    intent = AnalysisIntent(
+        operation=Operation.COMPARE,
+        operands=[
+            AnalysisOperand(
+                operand_id="kazan",
+                metric="distribution",
+                entities=[
+                    OperandEntityRef(
+                        role="article",
+                        entity=CanonicalEntityRef(
+                            entity_id="1",
+                            entity_type="article",
+                            display_name="Казань",
+                        ),
+                    )
+                ],
+            ),
+            AnalysisOperand(
+                operand_id="yaroslavl",
+                metric="distribution",
+                entities=[
+                    OperandEntityRef(
+                        role="article",
+                        entity=CanonicalEntityRef(
+                            entity_id="2",
+                            entity_type="article",
+                            display_name="Ярославль",
+                        ),
+                    )
+                ],
+            ),
+        ],
+        periods=[PeriodRef(date_from="2025-05-01", date_to="2025-06-01")],
+    )
+    plan = NativeMultiOperandPlanner().plan(intent)
+    runtime = Runtime()
+    runner = PipelineScalarTaskRunner(runtime)
+
+    runner.run(
+        plan.tasks[1],
+        original_query="Сравни Казань и Ярославль",
+        execute_db=False,
+        request_id="request",
+    )
+
+    assert "Ярославль" in runtime.queries[0]
+    assert "Казань" not in runtime.queries[0]
+    assert "2025-05-01" in runtime.queries[0]

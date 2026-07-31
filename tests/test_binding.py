@@ -164,3 +164,53 @@ def test_reverse_swaps_direction_and_clears_direction_bound_article() -> None:
 
     by_role = {item.role: item.entity.display_name for item in reversed_operand.entities}
     assert by_role == {"source": "B", "destination": "A"}
+
+
+def test_peer_geo_comparison_copies_shared_balance_to_each_operand() -> None:
+    decision = InterpretationDecision.model_validate(
+        {
+            "mode": "standalone",
+            "normalized_message": "сравни поставки в Казань и Ярославль за май 2025",
+            "confidence": 0.99,
+            "draft": {
+                "operation": {"action": "set", "value": "compare"},
+                "metrics": {"action": "set", "values": ["distribution"]},
+                "aggregate_type": {"action": "set", "value": "sum"},
+                "periods": {
+                    "action": "set",
+                    "values": [
+                        {"date_from": "2025-05-01", "date_to": "2025-06-01"}
+                    ],
+                },
+                "entities": {
+                    "action": "set",
+                    "mentions": [
+                        {"text": "ГП ТГ Казань суточный баланс", "role": "balance"},
+                        {"text": "Казань", "role": "destination"},
+                        {"text": "Ярославль", "role": "destination"},
+                    ],
+                },
+                "grouping": {"action": "clear"},
+                "grain": {"action": "clear"},
+                "reverse_direction": False,
+            },
+            "metadata_bundle_version": "2026.07.6",
+        }
+    )
+
+    mutation = InterpretationMutationCompiler(RegistryEntityBinder(_registry())).compile(
+        decision,
+        ContextContractV2(session_id="session"),
+        turn_id="turn-1",
+        user_message=decision.normalized_message,
+    )
+
+    intent = mutation.replace_intent
+    assert intent.operation == Operation.COMPARE
+    assert len(intent.operands) == 2
+    assert [
+        [item.role for item in operand.entities] for operand in intent.operands
+    ] == [["balance", "destination"], ["balance", "destination"]]
+    assert [
+        operand.entities[-1].entity.display_name for operand in intent.operands
+    ] == ["Казань", "Ярославль"]

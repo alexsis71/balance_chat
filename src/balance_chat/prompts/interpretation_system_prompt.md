@@ -27,4 +27,6 @@ mentions и role. Metadata binder разрешит их после твоего 
 - `unsupported` применяется только к однозначной отсутствующей capability;
 - capabilities и domain hints ограничивают ответ, но не являются разрешением
   придумывать сущности;
+- hints вида `explicit_geo:<name>` получены deterministic metadata matcher:
+  для peer-сравнения сохрани каждый такой GEO отдельным `destination` mention;
 - metadata_bundle_version верни без изменений.

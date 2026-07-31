@@ -17,6 +17,7 @@ from .contracts import (
     InterpretationMode,
     MetadataVersionRef,
     OperandEntityRef,
+    Operation,
     ResultReference,
     TransitionOutcome,
 )
@@ -69,6 +70,18 @@ class PipelineV2TurnProcessor:
     ) -> TurnProcessResult:
         started = perf_counter()
         turn_id = str(uuid4())
+        explicit_geos = self._matched_geo_objects(message)
+        peer_entities = self._matched_peer_entities(message)
+        if peer_entities:
+            return self._peer_entity_comparison(
+                state,
+                message=message,
+                peer_entities=peer_entities,
+                execute_db=execute_db,
+                request_id=request_id,
+                turn_id=turn_id,
+                started=started,
+            )
         deterministic = _deterministic_period_mutation(state, message, turn_id)
         deterministic_mode = "deterministic_period"
         if deterministic is None:
@@ -111,7 +124,10 @@ class PipelineV2TurnProcessor:
             message=message,
             state=state,
             capabilities=_capabilities(),
-            domain_hints=_domain_hints(self.registry),
+            domain_hints=[
+                *(f"explicit_geo:{item.canonical_name}" for item in explicit_geos),
+                *_domain_hints(self.registry),
+            ],
             metadata_bundle_version=self.registry.manifest.bundle_version,
             result_references=(
                 self.result_memory.for_interpretation(memory_chunks)
@@ -160,19 +176,10 @@ class PipelineV2TurnProcessor:
         scope = state.active_dialog_scope
         if scope is None or len(scope.intent.operands) != 1 or self._normalize_lemmas is None:
             return None
-        query = self._normalize_lemmas(message)
-        matches: dict[str, Any] = {}
-        for geo in self.registry.geo_objects:
-            for label in (geo.canonical_name, *geo.aliases):
-                normalized = self._normalize_lemmas(label)
-                if normalized and re.search(
-                    rf"(?<!\w){re.escape(normalized)}(?!\w)", query
-                ):
-                    matches[geo.geo_id] = geo
-                    break
+        matches = self._matched_geo_objects(message)
         if len(matches) != 1:
             return None
-        geo = next(iter(matches.values()))
+        geo = matches[0]
         operand = scope.intent.operands[0]
         retained = [
             item
@@ -202,6 +209,124 @@ class PipelineV2TurnProcessor:
             normalized_message=message,
             replace_intent=intent,
         )
+
+    def _matched_geo_objects(self, message: str) -> list[Any]:
+        if self._normalize_lemmas is None:
+            return []
+        query = self._normalize_lemmas(message)
+        matches: dict[str, tuple[int, int, Any]] = {}
+        for geo in self.registry.geo_objects:
+            for label in (geo.canonical_name, *geo.aliases):
+                normalized = self._normalize_lemmas(label)
+                if not normalized:
+                    continue
+                match = re.search(rf"(?<!\w){re.escape(normalized)}(?!\w)", query)
+                if match is None:
+                    continue
+                candidate = (match.start(), -len(normalized), geo)
+                current = matches.get(str(geo.geo_id))
+                if current is None or candidate[:2] < current[:2]:
+                    matches[str(geo.geo_id)] = candidate
+        return [item[2] for item in sorted(matches.values(), key=lambda item: item[:2])]
+
+    def _peer_entity_comparison(
+        self,
+        state,
+        *,
+        message: str,
+        peer_entities: list[OperandEntityRef],
+        execute_db: bool,
+        request_id: str,
+        turn_id: str,
+        started: float,
+    ) -> TurnProcessResult:
+        semantic_envelope = self.runtime.execute_raw(
+            message,
+            execute_db=False,
+            request_id=f"{request_id}:semantics",
+        )
+        try:
+            intent = self.translator.peer_entity_intent(
+                semantic_envelope,
+                peer_entities,
+            )
+        except Exception as exc:
+            raise TurnProcessingError(
+                "explicit peer entity semantics could not be resolved",
+                code="explicit_operand_binding_failed",
+            ) from exc
+        mutation = ContextMutation(
+            turn_id=turn_id,
+            user_message=message,
+            normalized_message=message,
+            replace_intent=intent,
+        )
+        return self._execute_mutation(
+            state,
+            mutation,
+            normalized_message=message,
+            execute_db=execute_db,
+            request_id=request_id,
+            started=started,
+            interpretation_mode="deterministic_peer_entity",
+            memory_chunks=[],
+        )
+
+    def _matched_peer_entities(self, message: str) -> list[list[OperandEntityRef]]:
+        mentions = _peer_destination_mentions(message)
+        if mentions is None:
+            return []
+        output: list[list[OperandEntityRef]] = []
+        for mention in mentions:
+            articles = [
+                item
+                for item in self.registry.find_article_candidates(mention)
+                if str(item.section).strip().lower() == "распределение"
+            ]
+            if len(articles) == 1:
+                article = articles[0]
+                balance = self.registry.balance(article.balance_id)
+                if balance is None:
+                    return []
+                output.append(
+                    [
+                        OperandEntityRef(
+                            role="balance",
+                            entity=CanonicalEntityRef(
+                                entity_id=str(balance.balance_id),
+                                entity_type="balance",
+                                display_name=balance.canonical_name,
+                            ),
+                        ),
+                        OperandEntityRef(
+                            role="article",
+                            entity=CanonicalEntityRef(
+                                entity_id=str(article.article_id),
+                                entity_type="article",
+                                display_name=article.canonical_name,
+                            ),
+                        ),
+                    ]
+                )
+                continue
+            geos = self._matched_geo_objects(mention)
+            if len(geos) == 1:
+                geo = geos[0]
+                output.append(
+                    [
+                        OperandEntityRef(
+                            role="destination",
+                            entity=CanonicalEntityRef(
+                                entity_id=str(geo.geo_id),
+                                entity_type="geo_object",
+                                display_name=_official_name(geo.canonical_name),
+                            ),
+                        )
+                    ]
+                )
+                continue
+            return []
+        return output
 
     def _execute_mutation(
         self,
@@ -461,3 +586,20 @@ def _deterministic_period_mutation(state, message: str, turn_id: str):
 def _official_name(value: str) -> str:
     text = str(value).strip()
     return text[:1].upper() + text[1:] if text else text
+
+
+def _peer_destination_mentions(message: str) -> list[str] | None:
+    text = str(message).lower().replace("ё", "е")
+    if not re.search(r"\bсравн\w*\b", text):
+        return None
+    if re.search(r"\bиз\b.+\b(?:в|до)\b", text):
+        return None
+    match = re.search(
+        r"\bв\s+(.+?)(?=\s+\b(?:за|на)\b|[?.!]*$)",
+        str(message),
+        re.IGNORECASE,
+    )
+    if match is None:
+        return None
+    parts = [item.strip(" ,.;:?!") for item in re.split(r"\s+(?:и|с)\s+|,", match.group(1), flags=re.IGNORECASE)]
+    return parts if len(parts) == 2 and all(parts) else None

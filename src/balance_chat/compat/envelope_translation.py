@@ -7,6 +7,7 @@ from ..contracts import (
     AnalysisIntent,
     AnalysisOperand,
     CanonicalEntityRef,
+    ComparisonSpec,
     OperandEntityRef,
     Operation,
     PeriodRef,
@@ -54,6 +55,41 @@ class PipelineEnvelopeTranslator:
             operands=operands,
             periods=periods,
             grain=raw_intent.get("period_grain") or None,
+        )
+
+    def peer_entity_intent(
+        self,
+        envelope: Mapping[str, Any],
+        peer_entity_sets: list[list[OperandEntityRef]],
+    ) -> AnalysisIntent:
+        """Use legacy shared semantics while ignoring degraded GEO expressions."""
+        if len(peer_entity_sets) != 2 or any(not items for items in peer_entity_sets):
+            raise EnvelopeTranslationError("peer comparison requires two entities")
+        plan = _resolved_plan(envelope)
+        raw_intent = plan.get("_intent") if isinstance(plan.get("_intent"), Mapping) else {}
+        if _operation(raw_intent.get("intent")) != Operation.COMPARE:
+            raise EnvelopeTranslationError("peer GEO semantics did not resolve as compare")
+        metric = str(raw_intent.get("metric") or "").strip()
+        if not metric:
+            raise EnvelopeTranslationError("peer GEO comparison has no canonical metric")
+        operands = [
+            AnalysisOperand(
+                operand_id=f"operand_{index + 1}",
+                metric=metric,
+                aggregate_type=str(raw_intent.get("aggregate_type") or "sum"),
+                entities=[item.model_copy(deep=True) for item in peer_entities],
+            )
+            for index, peer_entities in enumerate(peer_entity_sets)
+        ]
+        return AnalysisIntent(
+            operation=Operation.COMPARE,
+            operands=operands,
+            periods=_periods(plan, raw_intent),
+            grain=raw_intent.get("period_grain") or None,
+            comparison=ComparisonSpec(
+                baseline_operand_id="operand_1",
+                target_operand_id="operand_2",
+            ),
         )
 
     @staticmethod
