@@ -23,10 +23,14 @@ from balance_chat.contracts import (
 )
 from balance_chat.processor import (
     PipelineV2TurnProcessor,
+    _deterministic_grouping_query,
     _deterministic_period_mutation,
+    _distribution_own_consumers_mentions,
     _peer_destination_mentions,
 )
 from balance_chat.reducer import apply_context_transition
+from balance_chat.service import TurnProcessingError
+from balance_chat.interpretation import InterpretationError
 
 
 def _envelope():
@@ -156,6 +160,11 @@ class NeverCalled:
         return False
 
 
+class InvalidInterpreter:
+    def interpret(self, **_kwargs):
+        raise InterpretationError("invalid structured output")
+
+
 def test_standalone_processor_uses_current_resolved_plan_without_llm() -> None:
     processor = PipelineV2TurnProcessor(
         runtime=RawRuntime(),
@@ -200,6 +209,7 @@ def test_explicit_compare_with_month_preserves_canonical_baseline() -> None:
         ),
         TransitionOutcome.SUCCESS,
     )
+
     mutation = _deterministic_period_mutation(
         state, "сравни с июнем 2025", "turn-2"
     )
@@ -221,6 +231,83 @@ def test_peer_entity_detection_does_not_turn_route_into_entity_comparison() -> N
     assert _peer_destination_mentions(
         "Сравни транзит из Казани в Ярославль за май 2025"
     ) is None
+
+
+def test_mixed_metric_comparison_is_not_a_peer_city_comparison() -> None:
+    message = (
+        "Сравни объем поставок в Казань и объем собственных потребителей "
+        "ГП ТГ Казань за май 2025"
+    )
+
+    assert _distribution_own_consumers_mentions(message) == (
+        "Казань",
+        "ГП ТГ Казань",
+    )
+
+
+def test_context_grouping_query_inherits_metric_and_period() -> None:
+    state = apply_context_transition(
+        ContextContractV2(session_id="session"),
+        ContextMutation(
+            turn_id="turn-1",
+            user_message="по областям",
+            replace_intent=AnalysisIntent(
+                operation=Operation.SHOW,
+                operands=[
+                    AnalysisOperand(operand_id="regions", metric="distribution")
+                ],
+                periods=[PeriodRef(date_from="2025-04-01", date_to="2025-05-01")],
+            ),
+        ),
+        TransitionOutcome.SUCCESS,
+    )
+
+    assert _deterministic_grouping_query(
+        state, "суммируй данные по областям"
+    ) == (
+        "Суммируй поставки газа по областям за период с "
+        "2025-04-01 по 2025-04-30"
+    )
+
+
+def test_invalid_interpretation_contract_maps_to_typed_turn_error() -> None:
+    state = apply_context_transition(
+        ContextContractV2(session_id="session"),
+        ContextMutation(
+            turn_id="turn-1",
+            user_message="май",
+            replace_intent=AnalysisIntent(
+                operation=Operation.SHOW,
+                operands=[AnalysisOperand(operand_id="supply", metric="distribution")],
+                periods=[PeriodRef(date_from="2025-05-01", date_to="2025-06-01")],
+            ),
+        ),
+        TransitionOutcome.SUCCESS,
+    )
+    registry = SimpleNamespace(
+        geo_objects=(),
+        geo_groups=(),
+        routes=(),
+        manifest=SimpleNamespace(bundle_version="2026.07.7"),
+    )
+    processor = PipelineV2TurnProcessor(
+        runtime=RawRuntime(),
+        registry=registry,
+        interpreter=InvalidInterpreter(),
+        compiler=object(),
+        executor=object(),
+    )
+
+    with pytest.raises(TurnProcessingError) as raised:
+        processor.process(
+            state,
+            message="а повтори результат",
+            execute_db=False,
+            clarification=None,
+            request_id="request",
+        )
+
+    assert raised.value.code == "interpretation_contract_invalid"
 
 
 def test_peer_articles_include_their_canonical_balances() -> None:
@@ -260,4 +347,37 @@ def test_peer_articles_include_their_canonical_balances() -> None:
     assert [operand[0].entity.display_name for operand in peers] == [
         "ГП ТГ Казань",
         "ГП ТГ Ухта",
+    ]
+
+
+def test_mixed_metric_articles_are_bound_to_separate_operands() -> None:
+    distribution = SimpleNamespace(
+        article_id=1,
+        balance_id=10,
+        canonical_name="Казань",
+        section="Распределение",
+    )
+    own_consumers = SimpleNamespace(
+        article_id=2,
+        balance_id=10,
+        canonical_name="Собственные потребители",
+        section="Распределение",
+    )
+    balance = SimpleNamespace(balance_id=10, canonical_name="ГП ТГ Казань")
+    registry = SimpleNamespace(
+        find_article_candidates=lambda value: (distribution,) if value == "Казань" else (),
+        balance=lambda value: balance if value in {10, "ГП ТГ Казань"} else None,
+        articles_for_balance=lambda value: (distribution, own_consumers),
+    )
+    processor = object.__new__(PipelineV2TurnProcessor)
+    processor.registry = registry
+
+    operands = processor._matched_distribution_own_consumers(
+        "Сравни объем поставок в Казань и объем собственных потребителей "
+        "ГП ТГ Казань за май 2025"
+    )
+
+    assert [operand[1].entity.display_name for operand in operands] == [
+        "Казань",
+        "Собственные потребители",
     ]

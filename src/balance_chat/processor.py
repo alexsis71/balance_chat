@@ -3,12 +3,12 @@ from __future__ import annotations
 import hashlib
 import json
 import re
-from datetime import date
+from datetime import date, timedelta
 from time import perf_counter
 from typing import Any
 from uuid import uuid4
 
-from .binding import InterpretationMutationCompiler
+from .binding import ContextBindingError, InterpretationMutationCompiler
 from .compat.envelope_translation import PipelineEnvelopeTranslator
 from .contracts import (
     CanonicalEntityRef,
@@ -22,8 +22,8 @@ from .contracts import (
     TransitionOutcome,
 )
 from .execution import NativeExecutor
-from .interpretation import HybridInterpretationPolicy, UnifiedInterpreter
-from .planning import NativeMultiOperandPlanner
+from .interpretation import HybridInterpretationPolicy, InterpretationError, UnifiedInterpreter
+from .planning import NativeMultiOperandPlanner, PlanningError
 from .result_memory import PipelineResultMemoryAdapter
 from .service import TurnProcessResult, TurnProcessingError
 
@@ -71,16 +71,41 @@ class PipelineV2TurnProcessor:
         started = perf_counter()
         turn_id = str(uuid4())
         explicit_geos = self._matched_geo_objects(message)
-        peer_entities = self._matched_peer_entities(message)
-        if peer_entities:
-            return self._peer_entity_comparison(
+        mixed_metric_operands = self._matched_distribution_own_consumers(message)
+        if mixed_metric_operands:
+            return self._canonical_entity_comparison(
                 state,
                 message=message,
-                peer_entities=peer_entities,
+                operand_entities=mixed_metric_operands,
                 execute_db=execute_db,
                 request_id=request_id,
                 turn_id=turn_id,
                 started=started,
+                interpretation_mode="deterministic_distribution_own_consumers",
+            )
+        peer_entities = self._matched_peer_entities(message)
+        if peer_entities:
+            return self._canonical_entity_comparison(
+                state,
+                message=message,
+                operand_entities=peer_entities,
+                execute_db=execute_db,
+                request_id=request_id,
+                turn_id=turn_id,
+                started=started,
+                interpretation_mode="deterministic_peer_entity",
+            )
+        grouping_query = _deterministic_grouping_query(state, message)
+        if grouping_query is not None:
+            return self._standalone(
+                state,
+                message=grouping_query,
+                user_message=message,
+                execute_db=execute_db,
+                request_id=request_id,
+                turn_id=turn_id,
+                started=started,
+                interpretation_mode="deterministic_context_grouping",
             )
         deterministic = _deterministic_period_mutation(state, message, turn_id)
         deterministic_mode = "deterministic_period"
@@ -120,22 +145,28 @@ class PipelineV2TurnProcessor:
                 metadata_bundle_version=state.metadata.bundle_version,
                 intent=(state.active_dialog_scope.intent if state.active_dialog_scope else None),
             )
-        decision = self.interpreter.interpret(
-            message=message,
-            state=state,
-            capabilities=_capabilities(),
-            domain_hints=[
-                *(f"explicit_geo:{item.canonical_name}" for item in explicit_geos),
-                *_domain_hints(self.registry),
-            ],
-            metadata_bundle_version=self.registry.manifest.bundle_version,
-            result_references=(
-                self.result_memory.for_interpretation(memory_chunks)
-                if self.result_memory
-                else []
-            ),
-            request_id=request_id,
-        )
+        try:
+            decision = self.interpreter.interpret(
+                message=message,
+                state=state,
+                capabilities=_capabilities(),
+                domain_hints=[
+                    *(f"explicit_geo:{item.canonical_name}" for item in explicit_geos),
+                    *_domain_hints(self.registry),
+                ],
+                metadata_bundle_version=self.registry.manifest.bundle_version,
+                result_references=(
+                    self.result_memory.for_interpretation(memory_chunks)
+                    if self.result_memory
+                    else []
+                ),
+                request_id=request_id,
+            )
+        except InterpretationError as exc:
+            raise TurnProcessingError(
+                "interpretation contract validation failed",
+                code="interpretation_contract_invalid",
+            ) from exc
         if decision.mode == InterpretationMode.CLARIFY:
             if state.active_dialog_scope is None or decision.clarification is None:
                 raise TurnProcessingError("clarification requires active context")
@@ -154,12 +185,18 @@ class PipelineV2TurnProcessor:
             raise TurnProcessingError(
                 f"unsupported capability: {decision.unsupported_capability}"
             )
-        mutation = self.compiler.compile(
-            decision,
-            state,
-            turn_id=turn_id,
-            user_message=message,
-        )
+        try:
+            mutation = self.compiler.compile(
+                decision,
+                state,
+                turn_id=turn_id,
+                user_message=message,
+            )
+        except ContextBindingError as exc:
+            raise TurnProcessingError(
+                "interpretation could not be bound to canonical metadata",
+                code="interpretation_binding_failed",
+            ) from exc
         return self._execute_mutation(
             state,
             mutation,
@@ -229,16 +266,17 @@ class PipelineV2TurnProcessor:
                     matches[str(geo.geo_id)] = candidate
         return [item[2] for item in sorted(matches.values(), key=lambda item: item[:2])]
 
-    def _peer_entity_comparison(
+    def _canonical_entity_comparison(
         self,
         state,
         *,
         message: str,
-        peer_entities: list[OperandEntityRef],
+        operand_entities: list[list[OperandEntityRef]],
         execute_db: bool,
         request_id: str,
         turn_id: str,
         started: float,
+        interpretation_mode: str,
     ) -> TurnProcessResult:
         semantic_envelope = self.runtime.execute_raw(
             message,
@@ -248,7 +286,7 @@ class PipelineV2TurnProcessor:
         try:
             intent = self.translator.peer_entity_intent(
                 semantic_envelope,
-                peer_entities,
+                operand_entities,
             )
         except Exception as exc:
             raise TurnProcessingError(
@@ -268,7 +306,7 @@ class PipelineV2TurnProcessor:
             execute_db=execute_db,
             request_id=request_id,
             started=started,
-            interpretation_mode="deterministic_peer_entity",
+            interpretation_mode=interpretation_mode,
             memory_chunks=[],
         )
 
@@ -309,9 +347,8 @@ class PipelineV2TurnProcessor:
                     ]
                 )
                 continue
-            geos = self._matched_geo_objects(mention)
-            if len(geos) == 1:
-                geo = geos[0]
+            geo = self._exact_geo_object(mention)
+            if geo is not None:
                 output.append(
                     [
                         OperandEntityRef(
@@ -328,6 +365,52 @@ class PipelineV2TurnProcessor:
             return []
         return output
 
+    def _exact_geo_object(self, mention: str):
+        if self._normalize_lemmas is None:
+            return None
+        normalized_mention = self._normalize_lemmas(mention)
+        matches = [
+            geo
+            for geo in self.registry.geo_objects
+            if normalized_mention
+            and any(
+                self._normalize_lemmas(label) == normalized_mention
+                for label in (geo.canonical_name, *geo.aliases)
+            )
+        ]
+        return matches[0] if len(matches) == 1 else None
+
+    def _matched_distribution_own_consumers(
+        self, message: str
+    ) -> list[list[OperandEntityRef]]:
+        mentions = _distribution_own_consumers_mentions(message)
+        if mentions is None:
+            return []
+        destination_name, balance_name = mentions
+        articles = [
+            item
+            for item in self.registry.find_article_candidates(destination_name)
+            if str(item.section).strip().casefold() == "распределение"
+        ]
+        balance = self.registry.balance(balance_name)
+        if len(articles) != 1 or balance is None:
+            return []
+        distribution_article = articles[0]
+        distribution_balance = self.registry.balance(distribution_article.balance_id)
+        own_articles = [
+            item
+            for item in self.registry.articles_for_balance(balance.balance_id)
+            if _normalize_text(item.canonical_name) == "собственные потребители"
+            and str(item.section).strip().casefold() == "распределение"
+        ]
+        if distribution_balance is None or len(own_articles) != 1:
+            return []
+        own_article = own_articles[0]
+        return [
+            _balance_article_entities(distribution_balance, distribution_article),
+            _balance_article_entities(balance, own_article),
+        ]
+
     def _execute_mutation(
         self,
         state,
@@ -342,7 +425,12 @@ class PipelineV2TurnProcessor:
         decision=None,
     ):
         intent = mutation.replace_intent
-        plan = self.planner.plan(intent)
+        try:
+            plan = self.planner.plan(intent)
+        except PlanningError as exc:
+            raise TurnProcessingError(
+                "native intent planning failed", code="native_planning_failed"
+            ) from exc
         try:
             native = self.executor.execute(
                 plan,
@@ -396,7 +484,18 @@ class PipelineV2TurnProcessor:
             diagnostics=diagnostics,
         )
 
-    def _standalone(self, state, *, message, execute_db, request_id, turn_id, started):
+    def _standalone(
+        self,
+        state,
+        *,
+        message,
+        execute_db,
+        request_id,
+        turn_id,
+        started,
+        user_message=None,
+        interpretation_mode="standalone",
+    ):
         envelope = self.runtime.execute_raw(
             message,
             execute_db=execute_db,
@@ -416,7 +515,7 @@ class PipelineV2TurnProcessor:
             ) from exc
         mutation = ContextMutation(
             turn_id=turn_id,
-            user_message=message,
+            user_message=user_message or message,
             normalized_message=message,
             replace_intent=intent,
         )
@@ -425,7 +524,10 @@ class PipelineV2TurnProcessor:
             outcome=_outcome(status),
             response=_public_pipeline_result(envelope),
             diagnostics={
-                "interpretation": {"mode": "standalone", "source": "pipeline"},
+                "interpretation": {
+                    "mode": interpretation_mode,
+                    "source": "pipeline",
+                },
                 "execution": {
                     "status": status,
                     "task_count": 1,
@@ -586,6 +688,78 @@ def _deterministic_period_mutation(state, message: str, turn_id: str):
 def _official_name(value: str) -> str:
     text = str(value).strip()
     return text[:1].upper() + text[1:] if text else text
+
+
+def _normalize_text(value: str) -> str:
+    text = str(value).casefold().replace("ё", "е")
+    return " ".join(re.sub(r"[^0-9a-zа-я]+", " ", text).split())
+
+
+def _balance_article_entities(balance, article) -> list[OperandEntityRef]:
+    return [
+        OperandEntityRef(
+            role="balance",
+            entity=CanonicalEntityRef(
+                entity_id=str(balance.balance_id),
+                entity_type="balance",
+                display_name=balance.canonical_name,
+            ),
+        ),
+        OperandEntityRef(
+            role="article",
+            entity=CanonicalEntityRef(
+                entity_id=str(article.article_id),
+                entity_type="article",
+                display_name=article.canonical_name,
+            ),
+        ),
+    ]
+
+
+def _deterministic_grouping_query(state, message: str) -> str | None:
+    scope = state.active_dialog_scope
+    if scope is None or len(scope.intent.periods) != 1:
+        return None
+    text = _normalize_text(message)
+    if not re.search(r"^(?:суммируй|сгруппируй|объедини)\b", text):
+        return None
+    if not re.search(r"\bпо\s+(?:областям|регионам|краям)\b", text):
+        return None
+    metrics = {operand.metric for operand in scope.intent.operands}
+    if len(metrics) != 1:
+        return None
+    metric = next(iter(metrics))
+    metric_labels = {
+        "distribution": "поставки газа",
+        "incoming": "поступление газа",
+        "export": "экспорт газа",
+        "stock": "запасы газа",
+    }
+    metric_label = metric_labels.get(metric)
+    if metric_label is None:
+        return None
+    period = scope.intent.periods[0]
+    inclusive_to = period.date_to - timedelta(days=1)
+    return (
+        f"Суммируй {metric_label} по областям за период с "
+        f"{period.date_from.isoformat()} по {inclusive_to.isoformat()}"
+    )
+
+
+def _distribution_own_consumers_mentions(message: str) -> tuple[str, str] | None:
+    match = re.search(
+        r"\bсравн\w*\b.*?\bпостав\w*\b(?:\s+газ\w*)?\s+в\s+"
+        r"(?P<destination>.+?)\s+и\s+(?:объем\w*\s+)?"
+        r"собственн\w+\s+(?:потребител\w*|нужд\w*)\s+"
+        r"(?P<balance>.+?)(?=\s+\b(?:за|на)\b|[?.!]*$)",
+        str(message),
+        re.IGNORECASE,
+    )
+    if match is None:
+        return None
+    destination = match.group("destination").strip(" ,.;:?!")
+    balance = match.group("balance").strip(" ,.;:?!")
+    return (destination, balance) if destination and balance else None
 
 
 def _peer_destination_mentions(message: str) -> list[str] | None:

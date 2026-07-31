@@ -11,7 +11,7 @@ from balance_chat.contracts import (
     PeriodRef,
     TransitionOutcome,
 )
-from balance_chat.service import BalanceChatService, TurnProcessResult
+from balance_chat.service import BalanceChatService, TurnProcessResult, TurnProcessingError
 from balance_chat.store import InMemoryContextStore
 
 
@@ -52,6 +52,14 @@ class FakeProcessor:
                     "embedding": [0.1, 0.2],
                 }
             },
+        )
+
+
+class InvalidContractProcessor:
+    def process(self, *_args, **_kwargs):
+        raise TurnProcessingError(
+            "interpretation contract validation failed",
+            code="interpretation_contract_invalid",
         )
 
 
@@ -165,3 +173,21 @@ def test_degraded_health_returns_service_unavailable() -> None:
 
     assert response.status_code == 503
     assert response.json()["checks"]["context_model"] == {"ready": False}
+
+
+def test_invalid_interpretation_contract_returns_http_422() -> None:
+    service = BalanceChatService(InMemoryContextStore(), InvalidContractProcessor())
+    client = TestClient(create_app(service))
+    session_id = client.post("/api/v2/chat/sessions").json()["session"]["session_id"]
+
+    response = client.post(
+        "/api/v2/chat",
+        json={
+            "session_id": session_id,
+            "expected_revision": 0,
+            "message": "суммируй данные по областям",
+        },
+    )
+
+    assert response.status_code == 422
+    assert response.json()["detail"]["code"] == "interpretation_contract_invalid"
