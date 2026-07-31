@@ -29,7 +29,11 @@
 9. **API и UI V2 — завершён.** Revision-aware endpoints, визуализация
    операндов, активного scope и clarify confirmation; observability payload
    ограничен безопасным whitelist.
-10. **Shadow acceptance и cutover.** Parity, DB-backed multi-turn acceptance,
-    restart recovery, c=2/c=4 load, observability и явное переключение.
+10. **Staging acceptance — завершён; production cutover ожидает полного
+    regression.** Выполнены DB-backed multi-turn smoke, restart recovery,
+    optimistic revision, c=2/c=4 persistence load и bounded health. V2
+    запускается отдельной явной командой и не подменяет действующий `pipeline`.
+    Найденные legacy-degradation случаи не имеют скрытого fallback.
 
-Полный regression запускается только после завершения разработки этапов.
+Полный regression и решение о production cutover выполняются отдельным
+checkpoint после завершения разработки этапов.

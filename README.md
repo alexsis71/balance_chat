@@ -37,6 +37,25 @@ $env:PYTHONPATH = "src"
 C:\Users\alexs\miniforge3\envs\ai_env\python.exe -m pytest -q
 ```
 
+## Staging-запуск V2
+
+Перед запуском должны быть явно заданы настройки текущего vLLM endpoint. Ключи
+и DSN не хранятся в репозитории. Пример конфигурации использует PostgreSQL
+`chat_rag`, ready metadata bundle и pgvector result memory из соседнего
+`pipeline`:
+
+```powershell
+$env:PYTHONPATH = "src"
+$env:PIPELINE_VLLM_BASE_URL = "http://127.0.0.1:18000/v1"
+$env:PIPELINE_VLLM_API_KEY = "<vllm-api-key>"
+C:\Users\alexs\miniforge3\envs\ai_env\python.exe run_server.py `
+  --config config.example.json --host 127.0.0.1 --port 8790
+```
+
+UI доступен по `http://127.0.0.1:8790/`, bounded health diagnostics — по
+`/api/v2/health`. Ответ health не содержит DSN, API key, prompts, SQL или raw
+rows.
+
 Архитектура и границы миграции описаны в
 [`docs/architecture.md`](docs/architecture.md).
 
@@ -44,3 +63,6 @@ SQL этапа persistence: [`migrations/002_context_contract_v2.sql`](migration
 
 API factory: `balance_chat.api:create_app`. UI обслуживается этим же
 приложением по `/`, endpoints используют префикс `/api/v2`.
+
+Результаты staging-проверки и открытые ограничения описаны в
+[`docs/context_chat_v2_staging_acceptance.md`](docs/context_chat_v2_staging_acceptance.md).
