@@ -18,7 +18,9 @@ from .store import RevisionConflict
 
 
 class TurnProcessingError(RuntimeError):
-    pass
+    def __init__(self, message: str, *, code: str = "turn_processing_error") -> None:
+        super().__init__(message)
+        self.code = code
 
 
 class TurnProcessResult(ContractModel):
@@ -50,16 +52,18 @@ class BalanceChatService:
         store: Any,
         processor: TurnProcessor,
         *,
+        metadata=None,
         delete_result_memory: Callable[[str], int] | None = None,
     ) -> None:
         self.store = store
         self.processor = processor
+        self.metadata = metadata
         self.delete_result_memory = delete_result_memory
         self._locks: defaultdict[str, RLock] = defaultdict(RLock)
         self._locks_guard = RLock()
 
     def create_session(self) -> ContextContractV2:
-        return self.store.create(str(uuid4()))
+        return self.store.create(str(uuid4()), self.metadata)
 
     def get_session(self, session_id: str) -> ContextContractV2:
         return self.store.get(session_id)

@@ -76,6 +76,26 @@ class PipelineRuntime:
         registry_module = self._import_pipeline_module("metadata_bundle.registry")
         return registry_module.MetadataRegistry.load(self.config.metadata_manifest, strict=True)
 
+    def pipeline_runtime(self) -> Any:
+        return self._import_pipeline_module("pipeline_api")._runtime()
+
+    def execute_raw(
+        self,
+        query: str,
+        *,
+        execute_db: bool = False,
+        request_id: str | None = None,
+    ) -> dict[str, Any]:
+        pipeline_api = self._import_pipeline_module("pipeline_api")
+        return pipeline_api.execute_query(
+            query,
+            execute_db=execute_db,
+            request_id=request_id,
+            allow_multi_step=False,
+            apply_summary=False,
+            backend_override="unified_strict",
+        )
+
     def execute(
         self,
         query: str,

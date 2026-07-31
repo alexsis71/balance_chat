@@ -1,4 +1,15 @@
 {
   "pipeline_root": "../pipeline",
-  "metadata_manifest": "../pipeline/data/metadata/manifest.json"
+  "metadata_manifest": "../pipeline/data/metadata/manifest.json",
+  "context_store": {
+    "type": "postgresql",
+    "schema": "chat_rag",
+    "use_pipeline_database_dsn": true
+  },
+  "result_memory": {
+    "enabled": true,
+    "retrieval_limit": 5,
+    "max_chunk_chars": 4000,
+    "max_total_chars": 12000
+  }
 }

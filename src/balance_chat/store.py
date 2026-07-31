@@ -44,11 +44,11 @@ class InMemoryContextStore:
         self._states: dict[str, ContextContractV2] = {}
         self._lock = RLock()
 
-    def create(self, session_id: str) -> ContextContractV2:
+    def create(self, session_id: str, metadata=None) -> ContextContractV2:
         with self._lock:
             if session_id in self._states:
                 raise ValueError(f"session already exists: {session_id}")
-            state = ContextContractV2(session_id=session_id)
+            state = ContextContractV2(session_id=session_id, metadata=metadata)
             self._states[session_id] = state
             return state.model_copy(deep=True)
 
@@ -100,8 +100,8 @@ class SQLiteContextStore:
         self.path.parent.mkdir(parents=True, exist_ok=True)
         self._initialize()
 
-    def create(self, session_id: str) -> ContextContractV2:
-        state = ContextContractV2(session_id=session_id)
+    def create(self, session_id: str, metadata=None) -> ContextContractV2:
+        state = ContextContractV2(session_id=session_id, metadata=metadata)
         try:
             with self._transaction() as connection:
                 connection.execute(
@@ -285,9 +285,9 @@ class PostgresContextStore:
         if sessions is None or mutations is None:
             raise ContextStoreError("context contract V2 schema is not ready")
 
-    def create(self, session_id: str) -> ContextContractV2:
+    def create(self, session_id: str, metadata=None) -> ContextContractV2:
         session_id = _uuid_text(session_id, "session_id")
-        state = ContextContractV2(session_id=session_id)
+        state = ContextContractV2(session_id=session_id, metadata=metadata)
         try:
             from psycopg.types.json import Jsonb
 
@@ -304,9 +304,9 @@ class PostgresContextStore:
                         session_id,
                         state.contract_version,
                         state.revision,
-                        None,
-                        None,
-                        None,
+                        metadata.bundle_id if metadata else None,
+                        metadata.bundle_version if metadata else None,
+                        metadata.schema_version if metadata else None,
                         Jsonb(state.model_dump(mode="json")),
                         state.created_at,
                         state.updated_at,

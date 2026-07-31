@@ -68,7 +68,7 @@ def create_app(service: BalanceChatService) -> FastAPI:
         except SessionNotFound as exc:
             raise HTTPException(404, detail={"code": "session_not_found"}) from exc
         except TurnProcessingError as exc:
-            raise HTTPException(422, detail={"code": "turn_processing_error", "message": str(exc)}) from exc
+            raise HTTPException(422, detail={"code": exc.code, "message": str(exc)}) from exc
         except ContextStoreError as exc:
             raise HTTPException(503, detail={"code": "context_store_unavailable"}) from exc
 
