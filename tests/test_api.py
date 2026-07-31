@@ -142,6 +142,11 @@ def test_delete_session_is_idempotent_and_ui_is_served() -> None:
     ui = client.get("/")
     assert ui.status_code == 200
     assert "Активный контекст" in ui.text
+    assert "История" in ui.text
+    assert "Этапы выполнения" in ui.text
+    assert "Техническая панель" not in ui.text
+    assert client.get("/assets/app.js").status_code == 200
+    assert client.get("/assets/styles.css").status_code == 200
 
 
 def test_health_endpoint_exposes_only_bounded_checks() -> None:

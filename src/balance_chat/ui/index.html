@@ -3,27 +3,67 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width,initial-scale=1">
-  <title>AI Balances — Context V2</title>
+  <title>AI Балансы</title>
   <link rel="stylesheet" href="/assets/styles.css">
 </head>
 <body>
-  <main class="shell">
-    <header>
-      <div><span class="eyebrow">AI BALANCES</span><h1>Контекстный анализ</h1></div>
-      <div class="session"><span id="status">подключение…</span><button id="newChat">Новый чат</button></div>
-    </header>
-    <section class="context-panel">
-      <div class="context-head"><h2>Активный контекст</h2><span id="revision">revision —</span></div>
-      <div id="scope" class="scope empty">Контекст появится после первого запроса</div>
-    </section>
-    <section id="messages" class="messages" aria-live="polite"></section>
-    <section id="clarification" class="clarification" hidden></section>
-    <form id="chatForm">
-      <textarea id="message" rows="2" placeholder="Например: сравни поставки в Казань и Ярославль за лето 2025" required></textarea>
-      <label><input id="executeDb" type="checkbox"> Выполнить в БД</label>
-      <button type="submit">Отправить</button>
-    </form>
-  </main>
+  <div class="app-shell">
+    <aside class="sidebar" aria-label="История диалогов">
+      <div class="brand">
+        <div class="brand-mark">AB</div>
+        <div><strong>AI Балансы</strong><span>Context Chat V2</span></div>
+      </div>
+      <nav><button class="nav-item active" type="button">Чат</button></nav>
+      <section class="history-section">
+        <div class="history-head">
+          <span>История</span>
+          <button id="exportHistory" class="text-button" type="button">Экспорт</button>
+          <button id="clearHistory" class="text-button" type="button">Очистить</button>
+        </div>
+        <div id="historyList" class="history-list"></div>
+      </section>
+    </aside>
+
+    <main class="workspace">
+      <header class="topbar">
+        <div><h1>AI Балансы</h1><p>Диалоговый анализ балансов газа</p></div>
+        <div class="top-actions">
+          <span id="contextBadge" class="context-badge">Контекст не задан</span>
+          <button id="newChat" class="secondary-button" type="button">Новый чат</button>
+          <span id="statusPill" class="status-pill"><i></i><span id="status">подключение…</span></span>
+        </div>
+      </header>
+
+      <section id="stages" class="stage-panel" aria-label="Этапы выполнения">
+        <div class="stage" data-stage="0">Понимание</div>
+        <div class="stage" data-stage="1">Контекст</div>
+        <div class="stage" data-stage="2">Расчёт</div>
+        <div class="stage" data-stage="3">Таблица</div>
+        <div class="stage" data-stage="4">Ответ</div>
+      </section>
+
+      <section class="context-panel" aria-label="Активный контекст">
+        <div class="context-head">
+          <span>Активный контекст</span>
+          <span id="revision">revision —</span>
+        </div>
+        <div id="scope" class="scope empty">Появится после первого успешного запроса</div>
+      </section>
+
+      <section class="chat-panel" aria-label="Диалог">
+        <div id="messages" class="messages" aria-live="polite"></div>
+      </section>
+
+      <form id="chatForm" class="query-editor">
+        <label for="message">Запрос</label>
+        <div class="input-row">
+          <textarea id="message" rows="1" placeholder="Например: сравни поставки в Казань и Ярославль за лето 2025" required></textarea>
+          <label class="db-toggle" title="Выполнять расчёт в PostgreSQL"><input id="executeDb" type="checkbox" checked> DB</label>
+          <button id="submitButton" class="primary-button" type="submit">Отправить</button>
+        </div>
+      </form>
+    </main>
+  </div>
   <script src="/assets/app.js"></script>
 </body>
 </html>
