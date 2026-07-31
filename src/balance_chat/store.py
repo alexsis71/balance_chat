@@ -59,6 +59,10 @@ class InMemoryContextStore:
                 raise SessionNotFound(session_id)
             return state.model_copy(deep=True)
 
+    def delete(self, session_id: str) -> bool:
+        with self._lock:
+            return self._states.pop(session_id, None) is not None
+
     def commit(
         self,
         session_id: str,
@@ -128,6 +132,17 @@ class SQLiteContextStore:
         if row is None:
             raise SessionNotFound(session_id)
         return ContextContractV2.model_validate_json(row[0])
+
+    def delete(self, session_id: str) -> bool:
+        try:
+            with self._transaction() as connection:
+                cursor = connection.execute(
+                    "DELETE FROM context_sessions WHERE session_id = ?",
+                    (session_id,),
+                )
+                return cursor.rowcount == 1
+        except sqlite3.Error as exc:
+            raise ContextStoreError("could not delete context session") from exc
 
     def commit(
         self,
@@ -317,6 +332,21 @@ class PostgresContextStore:
         if row is None:
             raise SessionNotFound(session_id)
         return ContextContractV2.model_validate(row[0])
+
+    def delete(self, session_id: str) -> bool:
+        session_id = _uuid_text(session_id, "session_id")
+        try:
+            with self._connection() as connection, connection.cursor() as cursor:
+                cursor.execute(
+                    f"DELETE FROM {self.schema}.context_sessions_v2 "
+                    "WHERE session_id = %s::uuid",
+                    (session_id,),
+                )
+                deleted = cursor.rowcount == 1
+                connection.commit()
+                return deleted
+        except Exception as exc:
+            raise ContextStoreError("could not delete PostgreSQL context session") from exc
 
     def commit(
         self,

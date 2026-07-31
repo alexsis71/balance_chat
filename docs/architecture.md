@@ -137,3 +137,19 @@ Retrieval сначала ограничивается точным `session_id`,
 доступно только внутреннему interpretation input; health/API получают лишь
 число chunks и result references. Ошибка pgvector явная и не включает
 альтернативный скрытый backend.
+
+## API и UI V2
+
+FastAPI boundary предоставляет отдельные `/api/v2/chat` endpoints и не меняет
+существующий API `pipeline`. Stale revision возвращает HTTP 409 до
+interpretation/execution. Внутри процесса запросы одной сессии сериализованы;
+authoritative store повторно проверяет revision при commit.
+
+UI показывает активную operation, canonical periods и каждый operand отдельно.
+Clarification options отправляются как typed continuation с текущим revision.
+При конфликте UI перечитывает состояние и просит повторить запрос, не выполняя
+автоматический retry.
+
+API observability не принимает произвольный debug processor: наружу проходят
+только whitelisted counters и result references. RAG content, embeddings, SQL,
+raw rows и внутренние envelopes остаются внутри orchestration boundary.

@@ -9,7 +9,9 @@ description = "Context-first orchestration for AI Balances"
 readme = "README.md"
 requires-python = ">=3.11"
 dependencies = [
+  "fastapi>=0.115,<1",
   "pydantic>=2.12,<3",
+  "uvicorn>=0.34,<1",
 ]
 
 [tool.setuptools]
@@ -21,4 +23,3 @@ where = ["src"]
 [tool.pytest.ini_options]
 pythonpath = ["src"]
 testpaths = ["tests"]
-

@@ -1,0 +1,136 @@
+from __future__ import annotations
+
+from fastapi.testclient import TestClient
+
+from balance_chat.api import create_app
+from balance_chat.contracts import (
+    AnalysisIntent,
+    AnalysisOperand,
+    ContextMutation,
+    Operation,
+    PeriodRef,
+    TransitionOutcome,
+)
+from balance_chat.service import BalanceChatService, TurnProcessResult
+from balance_chat.store import InMemoryContextStore
+
+
+class FakeProcessor:
+    def __init__(self) -> None:
+        self.calls = 0
+
+    def process(self, state, *, message, clarification, **_):
+        self.calls += 1
+        if message == "уточни":
+            return TurnProcessResult(
+                mutation=ContextMutation(
+                    turn_id="turn-clarify",
+                    user_message=message,
+                    replace_intent=_intent(),
+                ),
+                outcome=TransitionOutcome.CLARIFICATION,
+                clarification_questions=[
+                    {
+                        "question": "Какой период?",
+                        "options": ["май 2025", "июнь 2025"],
+                    }
+                ],
+            )
+        return TurnProcessResult(
+            mutation=ContextMutation(
+                turn_id=f"turn-{self.calls}",
+                user_message=message,
+                normalized_message=message,
+                replace_intent=_intent(),
+            ),
+            outcome=TransitionOutcome.SUCCESS,
+            response={"title": "Готово", "rows": [{"value": 42}]},
+            diagnostics={
+                "result_memory": {
+                    "retrieved_chunks": 0,
+                    "content": "must not leave the service",
+                    "embedding": [0.1, 0.2],
+                }
+            },
+        )
+
+
+def _intent() -> AnalysisIntent:
+    return AnalysisIntent(
+        operation=Operation.SHOW,
+        operands=[AnalysisOperand(operand_id="supply", metric="distribution")],
+        periods=[PeriodRef(date_from="2025-05-01", date_to="2025-06-01")],
+    )
+
+
+def _client():
+    processor = FakeProcessor()
+    service = BalanceChatService(InMemoryContextStore(), processor)
+    return TestClient(create_app(service)), processor
+
+
+def test_revision_aware_session_and_turn_api() -> None:
+    client, processor = _client()
+    created = client.post("/api/v2/chat/sessions").json()
+    session_id = created["session"]["session_id"]
+
+    response = client.post(
+        "/api/v2/chat",
+        json={
+            "session_id": session_id,
+            "expected_revision": 0,
+            "message": "Покажи поставки за май 2025",
+        },
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["session"]["revision"] == 1
+    assert body["context"]["active"]["intent"]["operands"][0]["metric"] == "distribution"
+    assert body["diagnostics"]["result_memory"]["retrieved_chunks"] == 0
+    assert "content" not in body["diagnostics"]["result_memory"]
+    assert "embedding" not in body["diagnostics"]["result_memory"]
+    assert processor.calls == 1
+
+
+def test_stale_revision_is_rejected_before_processor() -> None:
+    client, processor = _client()
+    session_id = client.post("/api/v2/chat/sessions").json()["session"]["session_id"]
+    payload = {
+        "session_id": session_id,
+        "expected_revision": 0,
+        "message": "Покажи поставки",
+    }
+    assert client.post("/api/v2/chat", json=payload).status_code == 200
+    stale = client.post("/api/v2/chat", json=payload)
+
+    assert stale.status_code == 409
+    assert stale.json()["detail"]["code"] == "revision_conflict"
+    assert processor.calls == 1
+
+
+def test_clarification_contract_is_exposed_to_ui() -> None:
+    client, _ = _client()
+    session_id = client.post("/api/v2/chat/sessions").json()["session"]["session_id"]
+    response = client.post(
+        "/api/v2/chat",
+        json={
+            "session_id": session_id,
+            "expected_revision": 0,
+            "message": "уточни",
+        },
+    ).json()
+
+    assert response["status"] == "needs_clarification"
+    question = response["context"]["pending_clarification"]["questions"][0]
+    assert question["options"] == ["май 2025", "июнь 2025"]
+
+
+def test_delete_session_is_idempotent_and_ui_is_served() -> None:
+    client, _ = _client()
+    session_id = client.post("/api/v2/chat/sessions").json()["session"]["session_id"]
+    assert client.delete(f"/api/v2/chat/sessions/{session_id}").json()["deleted"]
+    assert not client.delete(f"/api/v2/chat/sessions/{session_id}").json()["deleted"]
+    ui = client.get("/")
+    assert ui.status_code == 200
+    assert "Активный контекст" in ui.text

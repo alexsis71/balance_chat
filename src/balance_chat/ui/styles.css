@@ -1,0 +1,12 @@
+:root{color-scheme:dark;--bg:#08110f;--panel:#101c19;--line:#28433c;--accent:#48d6bd;--text:#e8f5f1;--muted:#91aaa3}
+*{box-sizing:border-box}body{margin:0;background:radial-gradient(circle at 20% 0,#17332c 0,var(--bg) 36%);color:var(--text);font:15px/1.45 Inter,Segoe UI,sans-serif}
+.shell{width:min(1180px,calc(100% - 32px));margin:auto;min-height:100vh;display:grid;grid-template-rows:auto auto 1fr auto;gap:16px;padding:24px 0}
+header,.context-panel,form,.message{background:color-mix(in srgb,var(--panel) 92%,transparent);border:1px solid var(--line);border-radius:16px}
+header{display:flex;justify-content:space-between;align-items:center;padding:18px 22px}h1,h2{margin:0}.eyebrow{color:var(--accent);font-size:11px;letter-spacing:.18em}
+.session{display:flex;align-items:center;gap:12px;color:var(--muted)}button{border:0;border-radius:10px;padding:10px 15px;background:var(--accent);color:#06231d;font-weight:700;cursor:pointer}
+.context-panel{padding:16px 20px}.context-head{display:flex;justify-content:space-between}.context-head span,.empty{color:var(--muted)}
+.scope{display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:10px;margin-top:12px}.chip,.operand{padding:10px 12px;border:1px solid var(--line);border-radius:10px;background:#0c1714}.label{display:block;color:var(--muted);font-size:11px;text-transform:uppercase}
+.messages{overflow:auto;display:flex;flex-direction:column;gap:12px;padding:4px}.message{padding:14px 18px;max-width:82%}.message.user{align-self:flex-end;background:#153a32}.message.system{align-self:flex-start}.message pre{white-space:pre-wrap;margin:8px 0 0;color:var(--muted)}
+.clarification{padding:14px;border:1px solid #806c2b;background:#2a2412;border-radius:12px}.clarification button{margin:8px 8px 0 0}
+form{display:grid;grid-template-columns:1fr auto auto;gap:12px;align-items:center;padding:12px}textarea{resize:none;width:100%;border:1px solid var(--line);border-radius:10px;background:#07100e;color:var(--text);padding:12px}
+@media(max-width:700px){.shell{width:min(100% - 18px,1180px)}header{align-items:flex-start}.session{flex-direction:column}form{grid-template-columns:1fr}.message{max-width:95%}}

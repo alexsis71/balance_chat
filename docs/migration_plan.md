@@ -26,8 +26,9 @@
 8. **Result memory/RAG — завершён.** Переиспользование
    `chat_rag.result_artifacts/chunks`, bounded retrieval и ссылки на факты;
    embeddings не являются authoritative session state.
-9. **API и UI V2.** Revision-aware endpoints, визуализация операндов, активного
-   scope, источника наследования и clarify confirmation.
+9. **API и UI V2 — завершён.** Revision-aware endpoints, визуализация
+   операндов, активного scope и clarify confirmation; observability payload
+   ограничен безопасным whitelist.
 10. **Shadow acceptance и cutover.** Parity, DB-backed multi-turn acceptance,
     restart recovery, c=2/c=4 load, observability и явное переключение.
 

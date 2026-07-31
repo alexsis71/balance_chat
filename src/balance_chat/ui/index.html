@@ -1,0 +1,29 @@
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>AI Balances — Context V2</title>
+  <link rel="stylesheet" href="/assets/styles.css">
+</head>
+<body>
+  <main class="shell">
+    <header>
+      <div><span class="eyebrow">AI BALANCES</span><h1>Контекстный анализ</h1></div>
+      <div class="session"><span id="status">подключение…</span><button id="newChat">Новый чат</button></div>
+    </header>
+    <section class="context-panel">
+      <div class="context-head"><h2>Активный контекст</h2><span id="revision">revision —</span></div>
+      <div id="scope" class="scope empty">Контекст появится после первого запроса</div>
+    </section>
+    <section id="messages" class="messages" aria-live="polite"></section>
+    <section id="clarification" class="clarification" hidden></section>
+    <form id="chatForm">
+      <textarea id="message" rows="2" placeholder="Например: сравни поставки в Казань и Ярославль за лето 2025" required></textarea>
+      <label><input id="executeDb" type="checkbox"> Выполнить в БД</label>
+      <button type="submit">Отправить</button>
+    </form>
+  </main>
+  <script src="/assets/app.js"></script>
+</body>
+</html>

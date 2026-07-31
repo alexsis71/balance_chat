@@ -22,6 +22,8 @@
   компилирует их в валидный `ContextMutation`.
 - result memory переиспользует существующий pgvector store, сохраняя только
   успешные deterministic facts и выдавая interpretation bounded retrieval.
+- FastAPI/UI V2 показывают revision, active scope и отдельные operands;
+  clarification продолжает ту же сессию без скрытого retry.
 - compatibility adapter использует существующий `pipeline` и ready metadata
   manifest по явным путям. Неподдерживаемая legacy-форма не упрощается скрыто.
 
@@ -39,3 +41,6 @@ C:\Users\alexs\miniforge3\envs\ai_env\python.exe -m pytest -q
 [`docs/architecture.md`](docs/architecture.md).
 
 SQL этапа persistence: [`migrations/002_context_contract_v2.sql`](migrations/002_context_contract_v2.sql).
+
+API factory: `balance_chat.api:create_app`. UI обслуживается этим же
+приложением по `/`, endpoints используют префикс `/api/v2`.
