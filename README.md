@@ -53,8 +53,20 @@ C:\Users\alexs\miniforge3\envs\ai_env\python.exe run_server.py `
 ```
 
 UI доступен по `http://127.0.0.1:8790/`, bounded health diagnostics — по
-`/api/v2/health`. Ответ health не содержит DSN, API key, prompts, SQL или raw
-rows.
+`/api/v2/health`. Интерфейс хранит локальную историю V2-сессий, позволяет
+восстанавливать authoritative context/revision, продолжать clarification,
+копировать результат и выгружать таблицы в CSV. Техническая debug-панель в UI
+намеренно отсутствует.
+
+Структурированный операционный журнал пишется в JSONL-файл
+`logs/balance_chat.jsonl` с ротацией 10 МБ и пятью архивами (параметры меняются
+в секции `logging` конфигурации). Для каждого turn журналируются request/session
+ID, revision, исходный и нормализованный запросы, canonical operation, периоды и
+operands, bounded interpretation/execution diagnostics, длительность и stack
+trace ошибки. API key, DSN, prompts, SQL и raw DB rows не журналируются. Каталог
+`logs/` исключён из Git.
+
+Ответ health также не содержит DSN, API key, prompts, SQL или raw rows.
 
 Архитектура и границы миграции описаны в
 [`docs/architecture.md`](docs/architecture.md).

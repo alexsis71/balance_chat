@@ -80,6 +80,16 @@ regression, fault injection, end-to-end load, затем явное перекл
 point на `run_server.py`; старый backend остаётся отдельным rollback-процессом,
 без автоматического fallback.
 
+## UI и операционное логирование
+
+- V2 UI доведён до пользовательского контура предыдущего интерфейса: история
+  сессий, восстановление revision/context, индикатор этапов, clarification,
+  таблицы, copy/CSV и понятные сообщения об ошибках.
+- Техническая debug-панель не переносилась. Диагностика централизована в
+  ротируемом `logs/balance_chat.jsonl`.
+- Structured turn events содержат исходную и нормализованную формулировки,
+  canonical intent, timings и исключения. Секреты, DSN, SQL и raw rows исключены.
+
 ## Peer entity comparison hardening
 
 Дополнение от 2026-07-31:
