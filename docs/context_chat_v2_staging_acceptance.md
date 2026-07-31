@@ -78,3 +78,28 @@ Production cutover пока не выполнен. Следующий checkpoint
 regression, fault injection, end-to-end load, затем явное переключение entry
 point на `run_server.py`; старый backend остаётся отдельным rollback-процессом,
 без автоматического fallback.
+
+## Peer entity comparison hardening
+
+Дополнение от 2026-07-31:
+
+- Причина потери второго города найдена: первый standalone comparison обходил
+  V2 intent и legacy resolver деградировал `compare` до одного expression.
+- Для явной формы `в A и B` добавлен deterministic peer-entity path. Точные
+  статьи распределения имеют приоритет над GEO; поэтому Казань и Ярославль
+  представлены статьями вместе с их canonical balances. Области продолжают
+  разрешаться как GEO.
+- Общие metric, aggregate и canonical period извлекаются отдельным semantic
+  pass без DB. Деградировавшие legacy expressions не используются.
+- Каждый operand получает собственный scalar query, поэтому analyzer второго
+  task не наследует текст первого operand.
+- В `pipeline` canonical article override теперь очищает только analyzer-only
+  GEO, если явный destination GEO не передан.
+- Route `из A в B` peer-правилом не перехватывается; неоднозначные статьи не
+  выбираются автоматически.
+
+Focused `balance_chat` набор: 26 passed. Два focused pipeline-теста проходили
+до изменения metadata-файла. Финальный DB-backed повтор остановлен новым
+strict-ready нарушением: фактический SHA-256 `catalog/balances.jsonl` не
+совпадает с checksum в manifest. Bundle автоматически не пересобирался, чтобы
+не изменить metadata contract и пользовательские данные без явного решения.
