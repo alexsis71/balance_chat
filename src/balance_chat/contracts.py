@@ -287,6 +287,28 @@ class PeriodDirective(ContractModel):
         return self
 
 
+class StringListDirective(ContractModel):
+    action: Literal["keep", "set", "add", "remove", "clear", "reference"]
+    values: list[str] = Field(default_factory=list)
+    source_scope: Literal[
+        "active_dialog_scope",
+        "last_attempted_scope",
+        "last_successful_scope",
+    ] | None = None
+
+    @model_validator(mode="after")
+    def validate_payload(self) -> "StringListDirective":
+        if self.action in {"set", "add", "remove"} and not self.values:
+            raise ValueError(f"{self.action} list directive requires values")
+        if self.action not in {"set", "add", "remove"} and self.values:
+            raise ValueError(f"{self.action} list directive cannot carry values")
+        if self.action == "reference" and self.source_scope is None:
+            raise ValueError("reference list directive requires source_scope")
+        if self.action != "reference" and self.source_scope is not None:
+            raise ValueError("source_scope is valid only for reference")
+        return self
+
+
 class EntityDirective(ContractModel):
     action: Literal["keep", "set", "add", "remove", "clear"]
     mentions: list[EntityMention] = Field(default_factory=list)
@@ -324,7 +346,7 @@ class GroupingDirective(ContractModel):
 
 class InterpretationDraft(ContractModel):
     operation: ScalarDirective
-    metrics: ScalarDirective
+    metrics: StringListDirective
     aggregate_type: ScalarDirective
     periods: PeriodDirective
     entities: EntityDirective

@@ -92,3 +92,15 @@ exclusive-end периоды, но никогда runtime IDs. `metadata_bundle_
 проверяется безусловно. Следующий deterministic binder связывает mentions с
 ready MetadataRegistry и только после этого создаёт исполнимый
 `ContextMutation`.
+
+## Deterministic binding
+
+`InterpretationMutationCompiler` разрешает текстовые mentions через read-only
+`MetadataRegistry`. Не найденная или неоднозначная сущность останавливает
+binding явно. Для source/destination сначала проверяется GEO, затем curated
+GEO group и только затем единственная article candidate.
+
+Смена GEO сохраняет canonical период через scope reference. Обратное направление
+переставляет source/destination и удаляет direction-bound article до нового
+resolution. Несколько явно выбранных сущностей сохраняются отдельными
+операндами, поэтому их можно сравнить на следующем этапе.

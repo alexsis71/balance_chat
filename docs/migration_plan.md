@@ -12,8 +12,9 @@
 3. **Unified interpretation — завершён.** Один typed LLM contract возвращает
    нормализованный turn, mutation draft, `clarify` или настоящий `unsupported`.
    Canonical IDs принимает только deterministic binder следующего этапа.
-4. **Context memory policy.** Явные правила наследования/очистки GEO, периодов,
-   статей, grain и operation; result references без передачи полной истории.
+4. **Context memory policy — завершён.** Явные правила наследования/очистки
+   GEO, периодов, статей, grain и operation; deterministic metadata binding;
+   result references без передачи полной истории.
 5. **Native multi-operand planner.** Сравнения entity/entity, metric/metric и
    period/period с фиксированной baseline/target семантикой.
 6. **Native executor.** Выполнение операндов через существующий unified strict

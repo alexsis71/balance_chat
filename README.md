@@ -18,6 +18,8 @@
   мутаций в существующей схеме `chat_rag`.
 - unified interpretation contract совмещает нормализацию и контекстные
   directives, не позволяя модели назначать canonical IDs.
+- deterministic binder разрешает mentions через ready metadata registry и
+  компилирует их в валидный `ContextMutation`.
 - compatibility adapter использует существующий `pipeline` и ready metadata
   manifest по явным путям. Неподдерживаемая legacy-форма не упрощается скрыто.
 

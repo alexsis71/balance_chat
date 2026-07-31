@@ -44,7 +44,11 @@ def _decision(bundle_version: str = "2026.07.6") -> dict:
                 "value": "compare_periods",
                 "source_scope": None,
             },
-            "metrics": keep_scalar,
+            "metrics": {
+                "action": "keep",
+                "values": [],
+                "source_scope": None,
+            },
             "aggregate_type": keep_scalar,
             "periods": {
                 "action": "reference",

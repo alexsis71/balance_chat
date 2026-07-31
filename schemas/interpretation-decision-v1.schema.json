@@ -175,7 +175,7 @@
           "$ref": "#/$defs/ScalarDirective"
         },
         "metrics": {
-          "$ref": "#/$defs/ScalarDirective"
+          "$ref": "#/$defs/StringListDirective"
         },
         "aggregate_type": {
           "$ref": "#/$defs/ScalarDirective"
@@ -346,6 +346,52 @@
         "action"
       ],
       "title": "ScalarDirective",
+      "type": "object"
+    },
+    "StringListDirective": {
+      "additionalProperties": false,
+      "properties": {
+        "action": {
+          "enum": [
+            "keep",
+            "set",
+            "add",
+            "remove",
+            "clear",
+            "reference"
+          ],
+          "title": "Action",
+          "type": "string"
+        },
+        "values": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Values",
+          "type": "array"
+        },
+        "source_scope": {
+          "anyOf": [
+            {
+              "enum": [
+                "active_dialog_scope",
+                "last_attempted_scope",
+                "last_successful_scope"
+              ],
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Source Scope"
+        }
+      },
+      "required": [
+        "action"
+      ],
+      "title": "StringListDirective",
       "type": "object"
     }
   },
