@@ -14,6 +14,8 @@
   успешный scope.
 - optimistic store отклоняет конкурентное изменение revision; SQLite-реализация
   восстанавливает контракт после перезапуска.
+- PostgreSQL store сохраняет authoritative snapshot и append-only журнал
+  мутаций в существующей схеме `chat_rag`.
 - compatibility adapter использует существующий `pipeline` и ready metadata
   manifest по явным путям. Неподдерживаемая legacy-форма не упрощается скрыто.
 
@@ -29,3 +31,5 @@ C:\Users\alexs\miniforge3\envs\ai_env\python.exe -m pytest -q
 
 Архитектура и границы миграции описаны в
 [`docs/architecture.md`](docs/architecture.md).
+
+SQL этапа persistence: [`migrations/002_context_contract_v2.sql`](migrations/002_context_contract_v2.sql).

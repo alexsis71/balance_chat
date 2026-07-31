@@ -1,19 +1,31 @@
-# Поэтапный перенос
+# План миграции Context Chat V2
 
-1. **Контракт и reducer (текущий checkpoint).** Версионированное состояние,
-   deterministic mutation semantics, optimistic concurrency и strict adapter.
-2. **PostgreSQL store.** Замена уже работающего durable SQLite store реализацией
-   того же boundary в `chat_rag`, плюс журнал мутаций и embeddings результатов.
-3. **Unified interpretation.** Один LLM-контракт возвращает нормализованный turn,
-   typed mutations и clarify/unsupported; reducer остаётся детерминированным.
-4. **Native multi-operand execution.** Планирование сравнений сущность-сущность,
-   метрика-метрика и период-период без сведения к scalar legacy override.
-5. **Grouping execution.** Каноническое объединение GEO и других измерений с
-   provenance исходных строк.
-6. **UI V2.** Визуализация активного scope, операндов, источника наследования и
-   подтверждение неоднозначных мутаций.
-7. **Cutover.** Shadow parity, DB-backed acceptance, нагрузка и явное переключение
-   с сохранением strict rollback adapter.
+Разработка разбита на десять checkpoint’ов. После каждого коммита система
+остаётся запускаемой: новая capability включается явно, а действующий
+`pipeline` не изменяется.
 
-Каждый этап добавляет capability за отдельным feature flag и не изменяет
-действующий `pipeline`.
+1. **Versioned contract и reducer — завершён.** Несколько операндов,
+   exclusive-end периоды, явные мутации, три scope и optimistic revision.
+2. **Authoritative persistence — в разработке.** Durable SQLite для локального
+   режима; PostgreSQL `chat_rag.context_sessions_v2` и append-only журнал
+   `context_mutations_v2` для staging/production.
+3. **Unified interpretation.** Один typed LLM contract возвращает
+   нормализованный turn, `ContextMutation`, `clarify` или настоящий
+   `unsupported`. Canonical IDs принимает только deterministic binder.
+4. **Context memory policy.** Явные правила наследования/очистки GEO, периодов,
+   статей, grain и operation; result references без передачи полной истории.
+5. **Native multi-operand planner.** Сравнения entity/entity, metric/metric и
+   period/period с фиксированной baseline/target семантикой.
+6. **Native executor.** Выполнение операндов через существующий unified strict
+   runtime без повторных LLM-вызовов; композиция фактов после всех subresults.
+7. **Canonical grouping.** GEO groups и другие измерения, агрегация по
+   canonical/официальному имени и provenance исходных строк.
+8. **Result memory/RAG.** Переиспользование `chat_rag.result_artifacts/chunks`,
+   bounded retrieval и ссылки на факты; embeddings не являются authoritative
+   session state.
+9. **API и UI V2.** Revision-aware endpoints, визуализация операндов, активного
+   scope, источника наследования и clarify confirmation.
+10. **Shadow acceptance и cutover.** Parity, DB-backed multi-turn acceptance,
+    restart recovery, c=2/c=4 load, observability и явное переключение.
+
+Полный regression запускается только после завершения разработки этапов.

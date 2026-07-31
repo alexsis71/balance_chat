@@ -67,3 +67,15 @@ Reference принимает только путь вида
 
 Когда новая версия получит собственное исполнение multi-operand/grouping,
 compatibility adapter останется rollback/сравнительной границей.
+
+## Persistence
+
+Локальный режим использует SQLite WAL. Staging/production использует таблицу
+`chat_rag.context_sessions_v2` как authoritative snapshot и
+`chat_rag.context_mutations_v2` как append-only audit log. Snapshot и запись
+мутации фиксируются одной PostgreSQL-транзакцией после `SELECT ... FOR UPDATE`.
+Конкурентный revision отклоняется до вызова resolver, LLM или execution.
+
+Существующие `chat_rag.result_artifacts` и `result_chunks` остаются отдельной
+памятью результатов. Векторный поиск может помочь interpretation, но не меняет
+контракт сессии и не является источником canonical state.

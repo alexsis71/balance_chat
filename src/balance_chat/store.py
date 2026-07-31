@@ -1,10 +1,14 @@
 from __future__ import annotations
 
 from contextlib import closing, contextmanager
+import hashlib
+import json
 from pathlib import Path
+import re
 import sqlite3
 from threading import RLock
 from typing import Iterator
+from uuid import UUID
 
 from .contracts import (
     ContextContractV2,
@@ -224,3 +228,199 @@ class SQLiteContextStore:
                 )
         except sqlite3.Error as exc:
             raise ContextStoreError("could not initialize context store") from exc
+
+
+_SCHEMA_NAME = re.compile(r"^[a-z_][a-z0-9_]*$")
+
+
+class PostgresContextStore:
+    """Authoritative V2 session store with an append-only mutation journal."""
+
+    def __init__(
+        self,
+        dsn: str,
+        *,
+        schema: str = "chat_rag",
+        connect_timeout_s: int = 5,
+        connect=None,
+    ) -> None:
+        self.dsn = str(dsn).strip()
+        self.schema = str(schema).strip()
+        if not self.dsn:
+            raise ValueError("context store DSN is required")
+        if not _SCHEMA_NAME.fullmatch(self.schema):
+            raise ValueError("context store schema name is invalid")
+        self.connect_timeout_s = max(1, int(connect_timeout_s))
+        if connect is None:
+            import psycopg
+
+            connect = psycopg.connect
+        self._connect = connect
+
+    def validate(self) -> None:
+        with self._connection() as connection, connection.cursor() as cursor:
+            cursor.execute(
+                "SELECT to_regclass(%s), to_regclass(%s)",
+                (
+                    f"{self.schema}.context_sessions_v2",
+                    f"{self.schema}.context_mutations_v2",
+                ),
+            )
+            sessions, mutations = cursor.fetchone()
+        if sessions is None or mutations is None:
+            raise ContextStoreError("context contract V2 schema is not ready")
+
+    def create(self, session_id: str) -> ContextContractV2:
+        session_id = _uuid_text(session_id, "session_id")
+        state = ContextContractV2(session_id=session_id)
+        try:
+            from psycopg.types.json import Jsonb
+
+            with self._connection() as connection, connection.cursor() as cursor:
+                cursor.execute(
+                    f"""
+                    INSERT INTO {self.schema}.context_sessions_v2 (
+                        session_id, contract_version, revision,
+                        metadata_bundle_id, metadata_bundle_version,
+                        metadata_schema_version, payload, created_at, updated_at
+                    ) VALUES (%s::uuid, %s, %s, %s, %s, %s, %s, %s, %s)
+                    """,
+                    (
+                        session_id,
+                        state.contract_version,
+                        state.revision,
+                        None,
+                        None,
+                        None,
+                        Jsonb(state.model_dump(mode="json")),
+                        state.created_at,
+                        state.updated_at,
+                    ),
+                )
+                connection.commit()
+        except Exception as exc:
+            raise ContextStoreError("could not create PostgreSQL context session") from exc
+        return state
+
+    def get(self, session_id: str) -> ContextContractV2:
+        session_id = _uuid_text(session_id, "session_id")
+        try:
+            with self._connection() as connection, connection.cursor() as cursor:
+                cursor.execute(
+                    f"SELECT payload FROM {self.schema}.context_sessions_v2 "
+                    "WHERE session_id = %s::uuid",
+                    (session_id,),
+                )
+                row = cursor.fetchone()
+        except Exception as exc:
+            raise ContextStoreError("could not load PostgreSQL context session") from exc
+        if row is None:
+            raise SessionNotFound(session_id)
+        return ContextContractV2.model_validate(row[0])
+
+    def commit(
+        self,
+        session_id: str,
+        expected_revision: int,
+        mutation: ContextMutation,
+        outcome: TransitionOutcome,
+        *,
+        result: ResultReference | None = None,
+        clarification_questions: list[dict] | None = None,
+    ) -> ContextContractV2:
+        session_id = _uuid_text(session_id, "session_id")
+        _uuid_text(mutation.turn_id, "turn_id")
+        try:
+            from psycopg.types.json import Jsonb
+
+            with self._connection() as connection, connection.cursor() as cursor:
+                cursor.execute(
+                    f"SELECT revision, payload FROM {self.schema}.context_sessions_v2 "
+                    "WHERE session_id = %s::uuid FOR UPDATE",
+                    (session_id,),
+                )
+                row = cursor.fetchone()
+                if row is None:
+                    raise SessionNotFound(session_id)
+                actual_revision = int(row[0])
+                if actual_revision != expected_revision:
+                    raise RevisionConflict(session_id, expected_revision, actual_revision)
+                current = ContextContractV2.model_validate(row[1])
+                updated = apply_context_transition(
+                    current,
+                    mutation,
+                    outcome,
+                    result=result,
+                    clarification_questions=clarification_questions,
+                )
+                metadata = updated.metadata
+                cursor.execute(
+                    f"""
+                    UPDATE {self.schema}.context_sessions_v2
+                    SET revision = %s, metadata_bundle_id = %s,
+                        metadata_bundle_version = %s, metadata_schema_version = %s,
+                        payload = %s, updated_at = %s
+                    WHERE session_id = %s::uuid AND revision = %s
+                    """,
+                    (
+                        updated.revision,
+                        metadata.bundle_id if metadata else None,
+                        metadata.bundle_version if metadata else None,
+                        metadata.schema_version if metadata else None,
+                        Jsonb(updated.model_dump(mode="json")),
+                        updated.updated_at,
+                        session_id,
+                        expected_revision,
+                    ),
+                )
+                if cursor.rowcount != 1:
+                    raise RevisionConflict(session_id, expected_revision, actual_revision)
+                cursor.execute(
+                    f"""
+                    INSERT INTO {self.schema}.context_mutations_v2 (
+                        session_id, revision, turn_id, outcome, mutation,
+                        contract_sha256
+                    ) VALUES (%s::uuid, %s, %s::uuid, %s, %s, %s)
+                    """,
+                    (
+                        session_id,
+                        updated.revision,
+                        mutation.turn_id,
+                        outcome.value,
+                        Jsonb(mutation.model_dump(mode="json")),
+                        _contract_hash(updated),
+                    ),
+                )
+                connection.commit()
+                return updated
+        except (SessionNotFound, RevisionConflict):
+            raise
+        except Exception as exc:
+            raise ContextStoreError("could not commit PostgreSQL context transition") from exc
+
+    def diagnostics(self) -> dict[str, object]:
+        return {
+            "type": "postgresql",
+            "durable": True,
+            "schema": self.schema,
+        }
+
+    def _connection(self):
+        return self._connect(self.dsn, connect_timeout=self.connect_timeout_s)
+
+
+def _uuid_text(value: str, label: str) -> str:
+    try:
+        return str(UUID(str(value)))
+    except (TypeError, ValueError, AttributeError) as exc:
+        raise ValueError(f"{label} must be a UUID") from exc
+
+
+def _contract_hash(state: ContextContractV2) -> str:
+    canonical = json.dumps(
+        state.model_dump(mode="json"),
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+    ).encode("utf-8")
+    return "sha256:" + hashlib.sha256(canonical).hexdigest()
