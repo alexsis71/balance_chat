@@ -20,8 +20,9 @@
 6. **Native executor — завершён.** Выполнение операндов через существующий
    unified strict runtime без multi-step/summary LLM; композиция фактов после
    всех subresults.
-7. **Canonical grouping.** GEO groups и другие измерения, агрегация по
-   canonical/официальному имени и provenance исходных строк.
+7. **Canonical grouping — базовое ядро завершено.** GEO groups и другие
+   измерения, агрегация по canonical ID/официальному имени и provenance
+   исходных строк.
 8. **Result memory/RAG.** Переиспользование `chat_rag.result_artifacts/chunks`,
    bounded retrieval и ссылки на факты; embeddings не являются authoritative
    session state.

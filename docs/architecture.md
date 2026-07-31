@@ -116,3 +116,10 @@ canonical exclusive-end период. Baseline и target сохраняются 
 передаёт `allow_multi_step=false` и `apply_summary=false`. Сравнение выполняется
 только над явными deterministic facts; отсутствие факта, разные единицы и
 ошибка subtask возвращаются явно, без подстановки другого результата.
+
+## Canonical grouping
+
+Строки группируются только по canonical entity ID. Варианты label не создают
+отдельные группы; display name берётся из canonical metadata и форматируется
+для интерфейса. Суммирование разных единиц запрещено, а provenance всех
+объединённых исходных фактов сохраняется.
