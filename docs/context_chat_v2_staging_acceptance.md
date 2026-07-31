@@ -71,15 +71,7 @@ end-to-end benchmark Qwen/unified/PostgreSQL и не основание для c
 4. Значение единицы берётся из существующего ResultEnvelope. Проверка
    физического масштаба `млн м3`/`тыс. м3` остаётся ответственностью parity
    regression и не исправляется эвристикой в V2 translator.
-5. Невалидный structured interpretation сейчас может пройти мимо
-   `TurnProcessingError`: `mode=standalone` без mutation draft дал HTTP 500.
-   Перед cutover требуется единое контролируемое error mapping без retry.
-6. Deterministic peer-city detector слишком широк для смешанного сравнения
-   metric/entity. Запрос о поставках и собственных потребителях Казани был
-   ошибочно сведён к двум distribution operands. Такой результат нельзя считать
-   semantic success; детектор должен принимать только однородное entity/entity
-   сравнение, а смешанную форму передавать typed interpretation/planner.
-7. Canonical GEO `Ярославская` корректно исполняется, но active scope показывает
+5. Canonical GEO `Ярославская` корректно исполняется, но active scope показывает
    сокращённое имя вместо официального `Ярославская область`. Это отдельная
    metadata/presentation-задача и не должно исправляться в summary.
 
@@ -118,11 +110,29 @@ Focused `balance_chat` набор после rebuild: 25 passed. Strict registry
 | Казань за май → «сравни с июнем 2025» | success; май сохранён, июнь добавлен как вторая exclusive-end пара, два facts, 4.6 s на втором turn |
 | Казань за май → «а теперь в Ярославскую область?» | success; период сохранён, destination заменён, один fact, 3.6 s на втором turn |
 | Групповой запрос по областям за апрель 2025 | первый turn success; legacy projection содержит 100 operands и возвращает rows |
-| Затем «суммируй данные по областям» | failed; Qwen вернул невалидный standalone contract, API ответил HTTP 500 |
-| Поставки против собственных потребителей Казани | failed semantic acceptance; peer detector потерял второй metric и сравнил article Казань с GEO Казань как distribution |
+| Затем «суммируй данные по областям» | success после hardening; апрель унаследован, explicit normalized query выполнен как `deterministic_context_grouping`, 63 агрегированные строки |
+| Поставки против собственных потребителей Казани | success после hardening; отдельные статьи `Казань` и `Собственные потребители`, два DB-backed facts и comparison |
 | Полные имена ГП ТГ Нижнего Новгорода и Санкт-Петербурга | оба новых curated alias разрешены в точные balance IDs `2010000040110` и `2010000042550` |
 
 Каждая acceptance-сессия удалена через V2 API после проверки; вместе с ней
 удалялись связанные result-memory artifacts. Старый backend продолжал работать
 на порту 8787, V2 был поднят отдельно на 8790. Полный regression и production
 cutover не выполнялись.
+
+## Semantic hardening после повторного acceptance
+
+- Contextual grouping continuation использует только один сохранённый canonical
+  период и одну общую metric. Они материализуются в явный resolver-safe запрос;
+  Qwen, MCP и PostgreSQL не вызываются повторно сверх одного нового расчёта.
+- Смешанное сравнение поставок с собственными потребителями распознаётся как
+  отдельная typed форма. Каждый operand получает собственные exact balance и
+  article IDs; частичное совпадение `Казань` внутри длинного mention больше не
+  превращается во второй GEO operand.
+- Peer GEO fallback теперь требует exact normalized GEO label, поэтому не
+  поглощает длинные metric/entity clauses.
+- Ошибки schema validation interpretation и canonical binding преобразуются в
+  контролируемые HTTP 422 codes. Retry или legacy fallback не добавлялись.
+- После сетевого разрыва SSH tunnel был восстановлен, health снова подтвердил
+  PostgreSQL, bundle `2026.07.7` и structured Qwen. Повторные DB-backed сценарии
+  завершились успешно: grouping — 100 исходных и 63 агрегированные строки;
+  mixed comparison — два facts, `task_count=2`.
