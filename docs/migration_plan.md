@@ -15,8 +15,8 @@
 4. **Context memory policy — завершён.** Явные правила наследования/очистки
    GEO, периодов, статей, grain и operation; deterministic metadata binding;
    result references без передачи полной истории.
-5. **Native multi-operand planner.** Сравнения entity/entity, metric/metric и
-   period/period с фиксированной baseline/target семантикой.
+5. **Native multi-operand planner — завершён.** Сравнения entity/entity,
+   metric/metric и period/period с фиксированной baseline/target семантикой.
 6. **Native executor.** Выполнение операндов через существующий unified strict
    runtime без повторных LLM-вызовов; композиция фактов после всех subresults.
 7. **Canonical grouping.** GEO groups и другие измерения, агрегация по

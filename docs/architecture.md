@@ -104,3 +104,10 @@ GEO group и только затем единственная article candidate.
 переставляет source/destination и удаляет direction-bound article до нового
 resolution. Несколько явно выбранных сущностей сохраняются отдельными
 операндами, поэтому их можно сравнить на следующем этапе.
+
+## Native planning
+
+Bound intent детерминированно раскладывается на scalar tasks. Entity/metric
+comparison создаёт по задаче на операнд, period comparison — по задаче на
+canonical exclusive-end период. Baseline и target сохраняются явно; planner не
+вызывает LLM и не выполняет запросы.
