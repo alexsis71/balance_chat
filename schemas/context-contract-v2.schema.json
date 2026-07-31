@@ -1,0 +1,616 @@
+{
+  "$defs": {
+    "AnalysisIntent": {
+      "additionalProperties": false,
+      "properties": {
+        "intent_id": {
+          "title": "Intent Id",
+          "type": "string"
+        },
+        "operation": {
+          "$ref": "#/$defs/Operation"
+        },
+        "operands": {
+          "items": {
+            "$ref": "#/$defs/AnalysisOperand"
+          },
+          "minItems": 1,
+          "title": "Operands",
+          "type": "array"
+        },
+        "periods": {
+          "items": {
+            "$ref": "#/$defs/PeriodRef"
+          },
+          "title": "Periods",
+          "type": "array"
+        },
+        "grouping": {
+          "items": {
+            "$ref": "#/$defs/GroupingSpec"
+          },
+          "title": "Grouping",
+          "type": "array"
+        },
+        "grain": {
+          "anyOf": [
+            {
+              "enum": [
+                "day",
+                "month",
+                "quarter",
+                "year",
+                "total"
+              ],
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Grain"
+        },
+        "comparison": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ComparisonSpec"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        }
+      },
+      "required": [
+        "operation",
+        "operands"
+      ],
+      "title": "AnalysisIntent",
+      "type": "object"
+    },
+    "AnalysisOperand": {
+      "additionalProperties": false,
+      "properties": {
+        "operand_id": {
+          "pattern": "^[a-z][a-z0-9_]*$",
+          "title": "Operand Id",
+          "type": "string"
+        },
+        "metric": {
+          "title": "Metric",
+          "type": "string"
+        },
+        "aggregate_type": {
+          "default": "sum",
+          "title": "Aggregate Type",
+          "type": "string"
+        },
+        "entities": {
+          "items": {
+            "$ref": "#/$defs/OperandEntityRef"
+          },
+          "title": "Entities",
+          "type": "array"
+        },
+        "periods": {
+          "items": {
+            "$ref": "#/$defs/PeriodRef"
+          },
+          "title": "Periods",
+          "type": "array"
+        },
+        "unit": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Unit"
+        }
+      },
+      "required": [
+        "operand_id",
+        "metric"
+      ],
+      "title": "AnalysisOperand",
+      "type": "object"
+    },
+    "CanonicalEntityRef": {
+      "additionalProperties": false,
+      "properties": {
+        "entity_id": {
+          "title": "Entity Id",
+          "type": "string"
+        },
+        "entity_type": {
+          "enum": [
+            "balance",
+            "article",
+            "route",
+            "geo_object",
+            "geo_group",
+            "organization"
+          ],
+          "title": "Entity Type",
+          "type": "string"
+        },
+        "display_name": {
+          "title": "Display Name",
+          "type": "string"
+        }
+      },
+      "required": [
+        "entity_id",
+        "entity_type",
+        "display_name"
+      ],
+      "title": "CanonicalEntityRef",
+      "type": "object"
+    },
+    "ComparisonSpec": {
+      "additionalProperties": false,
+      "properties": {
+        "baseline_operand_id": {
+          "title": "Baseline Operand Id",
+          "type": "string"
+        },
+        "target_operand_id": {
+          "title": "Target Operand Id",
+          "type": "string"
+        },
+        "delta_direction": {
+          "const": "target_minus_baseline",
+          "default": "target_minus_baseline",
+          "title": "Delta Direction",
+          "type": "string"
+        },
+        "percent_base": {
+          "const": "baseline",
+          "default": "baseline",
+          "title": "Percent Base",
+          "type": "string"
+        }
+      },
+      "required": [
+        "baseline_operand_id",
+        "target_operand_id"
+      ],
+      "title": "ComparisonSpec",
+      "type": "object"
+    },
+    "ContextScope": {
+      "additionalProperties": false,
+      "properties": {
+        "intent": {
+          "$ref": "#/$defs/AnalysisIntent"
+        },
+        "turn_id": {
+          "title": "Turn Id",
+          "type": "string"
+        },
+        "updated_at": {
+          "format": "date-time",
+          "title": "Updated At",
+          "type": "string"
+        }
+      },
+      "required": [
+        "intent",
+        "turn_id"
+      ],
+      "title": "ContextScope",
+      "type": "object"
+    },
+    "EntityMemoryEntry": {
+      "additionalProperties": false,
+      "properties": {
+        "role": {
+          "title": "Role",
+          "type": "string"
+        },
+        "entity": {
+          "$ref": "#/$defs/CanonicalEntityRef"
+        },
+        "first_turn_id": {
+          "title": "First Turn Id",
+          "type": "string"
+        },
+        "last_turn_id": {
+          "title": "Last Turn Id",
+          "type": "string"
+        },
+        "mention_count": {
+          "default": 1,
+          "minimum": 1,
+          "title": "Mention Count",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "role",
+        "entity",
+        "first_turn_id",
+        "last_turn_id"
+      ],
+      "title": "EntityMemoryEntry",
+      "type": "object"
+    },
+    "GroupingSpec": {
+      "additionalProperties": false,
+      "properties": {
+        "dimension": {
+          "enum": [
+            "geo",
+            "geo_group",
+            "balance",
+            "article",
+            "source",
+            "destination",
+            "route",
+            "period"
+          ],
+          "title": "Dimension",
+          "type": "string"
+        },
+        "canonical_group_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Canonical Group Id"
+        },
+        "aggregate_type": {
+          "default": "sum",
+          "title": "Aggregate Type",
+          "type": "string"
+        }
+      },
+      "required": [
+        "dimension"
+      ],
+      "title": "GroupingSpec",
+      "type": "object"
+    },
+    "MetadataVersionRef": {
+      "additionalProperties": false,
+      "properties": {
+        "bundle_id": {
+          "pattern": "^sha256:[0-9a-f]{64}$",
+          "title": "Bundle Id",
+          "type": "string"
+        },
+        "bundle_version": {
+          "title": "Bundle Version",
+          "type": "string"
+        },
+        "schema_version": {
+          "title": "Schema Version",
+          "type": "string"
+        }
+      },
+      "required": [
+        "bundle_id",
+        "bundle_version",
+        "schema_version"
+      ],
+      "title": "MetadataVersionRef",
+      "type": "object"
+    },
+    "OperandEntityRef": {
+      "additionalProperties": false,
+      "properties": {
+        "role": {
+          "enum": [
+            "balance",
+            "source",
+            "destination",
+            "route",
+            "article",
+            "subject"
+          ],
+          "title": "Role",
+          "type": "string"
+        },
+        "entity": {
+          "$ref": "#/$defs/CanonicalEntityRef"
+        }
+      },
+      "required": [
+        "role",
+        "entity"
+      ],
+      "title": "OperandEntityRef",
+      "type": "object"
+    },
+    "Operation": {
+      "enum": [
+        "show",
+        "aggregate",
+        "compare",
+        "compare_periods",
+        "group",
+        "multi_step"
+      ],
+      "title": "Operation",
+      "type": "string"
+    },
+    "PendingClarification": {
+      "additionalProperties": false,
+      "properties": {
+        "turn_id": {
+          "title": "Turn Id",
+          "type": "string"
+        },
+        "questions": {
+          "items": {
+            "additionalProperties": true,
+            "type": "object"
+          },
+          "minItems": 1,
+          "title": "Questions",
+          "type": "array"
+        }
+      },
+      "required": [
+        "turn_id",
+        "questions"
+      ],
+      "title": "PendingClarification",
+      "type": "object"
+    },
+    "PeriodRef": {
+      "additionalProperties": false,
+      "properties": {
+        "date_from": {
+          "format": "date",
+          "title": "Date From",
+          "type": "string"
+        },
+        "date_to": {
+          "format": "date",
+          "title": "Date To",
+          "type": "string"
+        },
+        "label": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Label"
+        }
+      },
+      "required": [
+        "date_from",
+        "date_to"
+      ],
+      "title": "PeriodRef",
+      "type": "object"
+    },
+    "ResultReference": {
+      "additionalProperties": false,
+      "properties": {
+        "result_id": {
+          "title": "Result Id",
+          "type": "string"
+        },
+        "turn_id": {
+          "title": "Turn Id",
+          "type": "string"
+        },
+        "status": {
+          "$ref": "#/$defs/TransitionOutcome"
+        },
+        "resolved_plan_hash": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Resolved Plan Hash"
+        },
+        "row_count": {
+          "anyOf": [
+            {
+              "minimum": 0,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Row Count"
+        },
+        "facts": {
+          "items": {
+            "additionalProperties": true,
+            "type": "object"
+          },
+          "title": "Facts",
+          "type": "array"
+        }
+      },
+      "required": [
+        "turn_id",
+        "status"
+      ],
+      "title": "ResultReference",
+      "type": "object"
+    },
+    "TransitionOutcome": {
+      "enum": [
+        "success",
+        "no_data",
+        "error",
+        "clarification"
+      ],
+      "title": "TransitionOutcome",
+      "type": "string"
+    },
+    "TurnReference": {
+      "additionalProperties": false,
+      "properties": {
+        "turn_id": {
+          "title": "Turn Id",
+          "type": "string"
+        },
+        "user_message": {
+          "title": "User Message",
+          "type": "string"
+        },
+        "normalized_message": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Normalized Message"
+        },
+        "outcome": {
+          "$ref": "#/$defs/TransitionOutcome"
+        }
+      },
+      "required": [
+        "turn_id",
+        "user_message",
+        "outcome"
+      ],
+      "title": "TurnReference",
+      "type": "object"
+    }
+  },
+  "additionalProperties": false,
+  "properties": {
+    "contract_version": {
+      "const": "2.0",
+      "default": "2.0",
+      "title": "Contract Version",
+      "type": "string"
+    },
+    "session_id": {
+      "title": "Session Id",
+      "type": "string"
+    },
+    "revision": {
+      "default": 0,
+      "minimum": 0,
+      "title": "Revision",
+      "type": "integer"
+    },
+    "metadata": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/MetadataVersionRef"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null
+    },
+    "active_dialog_scope": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/ContextScope"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null
+    },
+    "last_attempted_scope": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/ContextScope"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null
+    },
+    "last_successful_scope": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/ContextScope"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null
+    },
+    "entity_memory": {
+      "items": {
+        "$ref": "#/$defs/EntityMemoryEntry"
+      },
+      "title": "Entity Memory",
+      "type": "array"
+    },
+    "result_references": {
+      "items": {
+        "$ref": "#/$defs/ResultReference"
+      },
+      "title": "Result References",
+      "type": "array"
+    },
+    "recent_turns": {
+      "items": {
+        "$ref": "#/$defs/TurnReference"
+      },
+      "title": "Recent Turns",
+      "type": "array"
+    },
+    "pending_clarification": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/PendingClarification"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null
+    },
+    "created_at": {
+      "format": "date-time",
+      "title": "Created At",
+      "type": "string"
+    },
+    "updated_at": {
+      "format": "date-time",
+      "title": "Updated At",
+      "type": "string"
+    }
+  },
+  "required": [
+    "session_id"
+  ],
+  "title": "ContextContractV2",
+  "type": "object"
+}
