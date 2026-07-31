@@ -1,11 +1,16 @@
 from __future__ import annotations
 
 import json
+import logging
 from pathlib import Path
 import re
 from typing import Any, Mapping, Protocol, Sequence
 
 from .contracts import ContextContractV2, InterpretationDecision
+from .observability import log_event
+
+
+LOGGER = logging.getLogger("balance_chat.interpretation")
 
 
 class InterpretationError(RuntimeError):
@@ -68,12 +73,22 @@ class UnifiedInterpreter:
             ],
             "request_id": request_id,
         }
+        raw: Mapping[str, Any] | str | None = None
         try:
             raw = self.backend.invoke(payload)
             if isinstance(raw, str):
                 raw = json.loads(raw)
             decision = InterpretationDecision.model_validate(raw)
         except Exception as exc:
+            log_event(
+                LOGGER,
+                logging.ERROR,
+                "interpretation_contract_invalid",
+                request_id=request_id,
+                error_type=type(exc).__name__,
+                model_payload=raw,
+                exc_info=True,
+            )
             raise InterpretationError("interpretation contract validation failed") from exc
         if decision.metadata_bundle_version != metadata_bundle_version:
             raise InterpretationError("interpreter changed metadata bundle version")

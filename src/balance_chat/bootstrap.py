@@ -10,6 +10,7 @@ from .compat import PipelineInterpretationBackend, PipelineRuntime, RuntimeConfi
 from .compat.envelope_translation import PipelineEnvelopeTranslator
 from .execution import NativeExecutor, PipelineScalarTaskRunner
 from .interpretation import UnifiedInterpreter
+from .observability import configure_logging
 from .processor import PipelineV2TurnProcessor, metadata_ref
 from .result_memory import PipelineResultMemoryAdapter
 from .service import BalanceChatService
@@ -19,6 +20,7 @@ from .store import PostgresContextStore, SQLiteContextStore
 def build_application(config_path: str | Path):
     path = Path(config_path).resolve()
     config = json.loads(path.read_text(encoding="utf-8"))
+    configure_logging(path, config.get("logging"))
     runtime_config = RuntimeConfig.from_json(path)
     runtime = PipelineRuntime(runtime_config)
     registry = runtime.load_metadata_registry()
