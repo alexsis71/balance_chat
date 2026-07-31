@@ -1,6 +1,10 @@
 from __future__ import annotations
 
+from contextlib import closing, contextmanager
+from pathlib import Path
+import sqlite3
 from threading import RLock
+from typing import Iterator
 
 from .contracts import (
     ContextContractV2,
@@ -22,6 +26,10 @@ class RevisionConflict(RuntimeError):
 
 
 class SessionNotFound(KeyError):
+    pass
+
+
+class ContextStoreError(RuntimeError):
     pass
 
 
@@ -73,3 +81,146 @@ class InMemoryContextStore:
             self._states[session_id] = updated
             return updated.model_copy(deep=True)
 
+
+class SQLiteContextStore:
+    """Durable V2 store adapted from pipeline's optimistic SQLite store."""
+
+    def __init__(self, path: str | Path, *, busy_timeout_ms: int = 5000) -> None:
+        self.path = Path(path).expanduser().resolve()
+        self.busy_timeout_ms = max(100, int(busy_timeout_ms))
+        self._lock = RLock()
+        self.path.parent.mkdir(parents=True, exist_ok=True)
+        self._initialize()
+
+    def create(self, session_id: str) -> ContextContractV2:
+        state = ContextContractV2(session_id=session_id)
+        try:
+            with self._transaction() as connection:
+                connection.execute(
+                    "INSERT INTO context_sessions "
+                    "(session_id, revision, updated_at, payload_json) VALUES (?, ?, ?, ?)",
+                    (
+                        state.session_id,
+                        state.revision,
+                        state.updated_at.isoformat(),
+                        state.model_dump_json(),
+                    ),
+                )
+        except sqlite3.IntegrityError as exc:
+            raise ValueError(f"session already exists: {session_id}") from exc
+        except sqlite3.Error as exc:
+            raise ContextStoreError("could not create context session") from exc
+        return state
+
+    def get(self, session_id: str) -> ContextContractV2:
+        try:
+            with closing(self._connect()) as connection:
+                row = connection.execute(
+                    "SELECT payload_json FROM context_sessions WHERE session_id = ?",
+                    (session_id,),
+                ).fetchone()
+        except sqlite3.Error as exc:
+            raise ContextStoreError("could not load context session") from exc
+        if row is None:
+            raise SessionNotFound(session_id)
+        return ContextContractV2.model_validate_json(row[0])
+
+    def commit(
+        self,
+        session_id: str,
+        expected_revision: int,
+        mutation: ContextMutation,
+        outcome: TransitionOutcome,
+        *,
+        result: ResultReference | None = None,
+        clarification_questions: list[dict] | None = None,
+    ) -> ContextContractV2:
+        try:
+            with self._lock, self._transaction() as connection:
+                row = connection.execute(
+                    "SELECT revision, payload_json FROM context_sessions WHERE session_id = ?",
+                    (session_id,),
+                ).fetchone()
+                if row is None:
+                    raise SessionNotFound(session_id)
+                actual_revision = int(row[0])
+                if actual_revision != expected_revision:
+                    raise RevisionConflict(session_id, expected_revision, actual_revision)
+                current = ContextContractV2.model_validate_json(row[1])
+                updated = apply_context_transition(
+                    current,
+                    mutation,
+                    outcome,
+                    result=result,
+                    clarification_questions=clarification_questions,
+                )
+                cursor = connection.execute(
+                    "UPDATE context_sessions "
+                    "SET revision = ?, updated_at = ?, payload_json = ? "
+                    "WHERE session_id = ? AND revision = ?",
+                    (
+                        updated.revision,
+                        updated.updated_at.isoformat(),
+                        updated.model_dump_json(),
+                        session_id,
+                        expected_revision,
+                    ),
+                )
+                if cursor.rowcount != 1:
+                    raise RevisionConflict(session_id, expected_revision, actual_revision)
+                return updated
+        except (SessionNotFound, RevisionConflict):
+            raise
+        except sqlite3.Error as exc:
+            raise ContextStoreError("could not commit context transition") from exc
+
+    def diagnostics(self) -> dict[str, object]:
+        try:
+            with closing(self._connect()) as connection:
+                count = int(
+                    connection.execute("SELECT COUNT(*) FROM context_sessions").fetchone()[0]
+                )
+        except sqlite3.Error as exc:
+            raise ContextStoreError("could not inspect context store") from exc
+        return {
+            "type": "sqlite",
+            "durable": True,
+            "path": str(self.path),
+            "active_sessions": count,
+        }
+
+    def _connect(self) -> sqlite3.Connection:
+        connection = sqlite3.connect(
+            str(self.path),
+            timeout=self.busy_timeout_ms / 1000.0,
+        )
+        connection.execute(f"PRAGMA busy_timeout = {self.busy_timeout_ms}")
+        connection.execute("PRAGMA journal_mode = WAL")
+        return connection
+
+    @contextmanager
+    def _transaction(self) -> Iterator[sqlite3.Connection]:
+        connection = self._connect()
+        try:
+            connection.execute("BEGIN IMMEDIATE")
+            yield connection
+            connection.commit()
+        except Exception:
+            connection.rollback()
+            raise
+        finally:
+            connection.close()
+
+    def _initialize(self) -> None:
+        try:
+            with self._transaction() as connection:
+                connection.execute(
+                    "CREATE TABLE IF NOT EXISTS context_sessions ("
+                    "session_id TEXT PRIMARY KEY, "
+                    "revision INTEGER NOT NULL, "
+                    "updated_at TEXT NOT NULL, "
+                    "payload_json TEXT NOT NULL"
+                    ")"
+                )
+        except sqlite3.Error as exc:
+            raise ContextStoreError("could not initialize context store") from exc

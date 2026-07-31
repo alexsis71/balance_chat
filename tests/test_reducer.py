@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import pytest
+import tempfile
+from pathlib import Path
 
 from balance_chat.contracts import (
     AnalysisIntent,
@@ -17,7 +19,7 @@ from balance_chat.contracts import (
     TransitionOutcome,
 )
 from balance_chat.reducer import ContextReductionError, apply_context_transition
-from balance_chat.store import InMemoryContextStore, RevisionConflict
+from balance_chat.store import InMemoryContextStore, RevisionConflict, SQLiteContextStore
 
 
 def _entity(entity_id: str, name: str) -> OperandEntityRef:
@@ -152,3 +154,23 @@ def test_store_rejects_stale_revision() -> None:
             TransitionOutcome.SUCCESS,
         )
 
+
+def test_sqlite_store_recovers_context_after_reopen() -> None:
+    with tempfile.TemporaryDirectory() as temporary_directory:
+        path = Path(temporary_directory) / "context.sqlite3"
+        writer = SQLiteContextStore(path)
+        writer.create("session-1")
+        writer.commit(
+            "session-1",
+            0,
+            _initial_mutation(),
+            TransitionOutcome.SUCCESS,
+        )
+
+        recovered = SQLiteContextStore(path).get("session-1")
+
+    assert recovered.revision == 1
+    assert (
+        recovered.last_successful_scope.intent.operands[0].entities[0].entity.display_name
+        == "Казань"
+    )

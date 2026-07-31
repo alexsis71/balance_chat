@@ -1,0 +1,4 @@
+{
+  "pipeline_root": "../pipeline",
+  "metadata_manifest": "../pipeline/data/metadata/manifest.json"
+}

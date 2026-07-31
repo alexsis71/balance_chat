@@ -1,0 +1,91 @@
+from __future__ import annotations
+
+from pathlib import Path
+from types import SimpleNamespace
+
+import pytest
+
+from balance_chat.compat import (
+    PipelineRuntime,
+    RuntimeConfig,
+    UnsupportedLegacyShape,
+    project_legacy_context_override,
+)
+from balance_chat.contracts import (
+    AnalysisIntent,
+    AnalysisOperand,
+    GroupingSpec,
+    Operation,
+    PeriodRef,
+)
+
+
+def _intent() -> AnalysisIntent:
+    return AnalysisIntent(
+        operation=Operation.SHOW,
+        operands=[AnalysisOperand(operand_id="supply", metric="distribution")],
+        periods=[PeriodRef(date_from="2025-05-01", date_to="2025-06-01")],
+    )
+
+
+def test_scalar_intent_projects_to_legacy_override() -> None:
+    payload = project_legacy_context_override(_intent())
+    assert payload["operation"] == "show"
+    assert payload["periods"] == [
+        {"date_from": "2025-05-01", "date_to": "2025-06-01"}
+    ]
+    assert payload["metric"] == "distribution"
+
+
+def test_grouping_is_not_silently_discarded() -> None:
+    intent = _intent().model_copy(
+        update={"grouping": [GroupingSpec(dimension="geo_group")]}
+    )
+    with pytest.raises(UnsupportedLegacyShape, match="grouping"):
+        project_legacy_context_override(intent)
+
+
+def test_multi_operand_is_not_silently_reduced() -> None:
+    intent = AnalysisIntent(
+        operation=Operation.COMPARE,
+        operands=[
+            AnalysisOperand(operand_id="supply", metric="distribution"),
+            AnalysisOperand(operand_id="needs", metric="own_needs"),
+        ],
+    )
+    with pytest.raises(UnsupportedLegacyShape, match="operation|operand"):
+        project_legacy_context_override(intent)
+
+
+def test_runtime_loads_existing_strict_metadata_bundle() -> None:
+    repo_root = Path(__file__).resolve().parents[2]
+    pipeline_root = repo_root / "pipeline"
+    config = RuntimeConfig(
+        pipeline_root=pipeline_root,
+        metadata_manifest=pipeline_root / "data" / "metadata" / "manifest.json",
+    )
+    registry = PipelineRuntime(config).load_metadata_registry()
+    assert registry.manifest.state == "ready"
+
+
+def test_runtime_calls_unified_strict_without_fallback() -> None:
+    repo_root = Path(__file__).resolve().parents[2]
+    pipeline_root = repo_root / "pipeline"
+    runtime = PipelineRuntime(
+        RuntimeConfig(
+            pipeline_root=pipeline_root,
+            metadata_manifest=pipeline_root / "data" / "metadata" / "manifest.json",
+        )
+    )
+    captured: dict = {}
+
+    def execute_query(query: str, **kwargs: object) -> dict:
+        captured.update(query=query, **kwargs)
+        return {"status": "ok"}
+
+    runtime._import_pipeline_module = lambda _: SimpleNamespace(execute_query=execute_query)
+    result = runtime.execute("Покажи поставки", _intent(), execute_db=False)
+
+    assert result == {"status": "ok"}
+    assert captured["backend_override"] == "unified_strict"
+    assert captured["context_override"]["periods"][0]["date_to"] == "2025-06-01"
