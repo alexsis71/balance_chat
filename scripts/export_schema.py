@@ -3,7 +3,11 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from balance_chat.contracts import ContextContractV2, ContextMutation
+from balance_chat.contracts import (
+    ContextContractV2,
+    ContextMutation,
+    InterpretationDecision,
+)
 
 
 def main() -> None:
@@ -12,6 +16,7 @@ def main() -> None:
     for name, model in (
         ("context-contract-v2.schema.json", ContextContractV2),
         ("context-mutation-v2.schema.json", ContextMutation),
+        ("interpretation-decision-v1.schema.json", InterpretationDecision),
     ):
         (destination / name).write_text(
             json.dumps(model.model_json_schema(), ensure_ascii=False, indent=2) + "\n",
@@ -21,4 +26,3 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
-

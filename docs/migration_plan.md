@@ -6,12 +6,12 @@
 
 1. **Versioned contract и reducer — завершён.** Несколько операндов,
    exclusive-end периоды, явные мутации, три scope и optimistic revision.
-2. **Authoritative persistence — в разработке.** Durable SQLite для локального
+2. **Authoritative persistence — завершён.** Durable SQLite для локального
    режима; PostgreSQL `chat_rag.context_sessions_v2` и append-only журнал
    `context_mutations_v2` для staging/production.
-3. **Unified interpretation.** Один typed LLM contract возвращает
-   нормализованный turn, `ContextMutation`, `clarify` или настоящий
-   `unsupported`. Canonical IDs принимает только deterministic binder.
+3. **Unified interpretation — завершён.** Один typed LLM contract возвращает
+   нормализованный turn, mutation draft, `clarify` или настоящий `unsupported`.
+   Canonical IDs принимает только deterministic binder следующего этапа.
 4. **Context memory policy.** Явные правила наследования/очистки GEO, периодов,
    статей, grain и operation; result references без передачи полной истории.
 5. **Native multi-operand planner.** Сравнения entity/entity, metric/metric и

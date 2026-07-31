@@ -1,0 +1,428 @@
+{
+  "$defs": {
+    "ClarificationContract": {
+      "additionalProperties": false,
+      "properties": {
+        "question": {
+          "minLength": 1,
+          "title": "Question",
+          "type": "string"
+        },
+        "options": {
+          "items": {
+            "type": "string"
+          },
+          "maxItems": 4,
+          "minItems": 2,
+          "title": "Options",
+          "type": "array"
+        }
+      },
+      "required": [
+        "question",
+        "options"
+      ],
+      "title": "ClarificationContract",
+      "type": "object"
+    },
+    "EntityDirective": {
+      "additionalProperties": false,
+      "properties": {
+        "action": {
+          "enum": [
+            "keep",
+            "set",
+            "add",
+            "remove",
+            "clear"
+          ],
+          "title": "Action",
+          "type": "string"
+        },
+        "mentions": {
+          "items": {
+            "$ref": "#/$defs/EntityMention"
+          },
+          "title": "Mentions",
+          "type": "array"
+        }
+      },
+      "required": [
+        "action"
+      ],
+      "title": "EntityDirective",
+      "type": "object"
+    },
+    "EntityMention": {
+      "additionalProperties": false,
+      "properties": {
+        "text": {
+          "minLength": 1,
+          "title": "Text",
+          "type": "string"
+        },
+        "role": {
+          "enum": [
+            "balance",
+            "source",
+            "destination",
+            "route",
+            "article",
+            "subject"
+          ],
+          "title": "Role",
+          "type": "string"
+        }
+      },
+      "required": [
+        "text",
+        "role"
+      ],
+      "title": "EntityMention",
+      "type": "object"
+    },
+    "GroupingDirective": {
+      "additionalProperties": false,
+      "properties": {
+        "action": {
+          "enum": [
+            "keep",
+            "set",
+            "add",
+            "remove",
+            "clear",
+            "reference"
+          ],
+          "title": "Action",
+          "type": "string"
+        },
+        "values": {
+          "items": {
+            "$ref": "#/$defs/GroupingSpec"
+          },
+          "title": "Values",
+          "type": "array"
+        },
+        "source_scope": {
+          "anyOf": [
+            {
+              "enum": [
+                "active_dialog_scope",
+                "last_attempted_scope",
+                "last_successful_scope"
+              ],
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Source Scope"
+        }
+      },
+      "required": [
+        "action"
+      ],
+      "title": "GroupingDirective",
+      "type": "object"
+    },
+    "GroupingSpec": {
+      "additionalProperties": false,
+      "properties": {
+        "dimension": {
+          "enum": [
+            "geo",
+            "geo_group",
+            "balance",
+            "article",
+            "source",
+            "destination",
+            "route",
+            "period"
+          ],
+          "title": "Dimension",
+          "type": "string"
+        },
+        "canonical_group_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Canonical Group Id"
+        },
+        "aggregate_type": {
+          "default": "sum",
+          "title": "Aggregate Type",
+          "type": "string"
+        }
+      },
+      "required": [
+        "dimension"
+      ],
+      "title": "GroupingSpec",
+      "type": "object"
+    },
+    "InterpretationDraft": {
+      "additionalProperties": false,
+      "properties": {
+        "operation": {
+          "$ref": "#/$defs/ScalarDirective"
+        },
+        "metrics": {
+          "$ref": "#/$defs/ScalarDirective"
+        },
+        "aggregate_type": {
+          "$ref": "#/$defs/ScalarDirective"
+        },
+        "periods": {
+          "$ref": "#/$defs/PeriodDirective"
+        },
+        "entities": {
+          "$ref": "#/$defs/EntityDirective"
+        },
+        "grouping": {
+          "$ref": "#/$defs/GroupingDirective"
+        },
+        "grain": {
+          "$ref": "#/$defs/ScalarDirective"
+        },
+        "reverse_direction": {
+          "default": false,
+          "title": "Reverse Direction",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "operation",
+        "metrics",
+        "aggregate_type",
+        "periods",
+        "entities",
+        "grouping",
+        "grain"
+      ],
+      "title": "InterpretationDraft",
+      "type": "object"
+    },
+    "InterpretationMode": {
+      "enum": [
+        "standalone",
+        "mutation",
+        "clarify",
+        "unsupported"
+      ],
+      "title": "InterpretationMode",
+      "type": "string"
+    },
+    "PeriodDirective": {
+      "additionalProperties": false,
+      "properties": {
+        "action": {
+          "enum": [
+            "keep",
+            "set",
+            "add",
+            "remove",
+            "clear",
+            "reference"
+          ],
+          "title": "Action",
+          "type": "string"
+        },
+        "values": {
+          "items": {
+            "$ref": "#/$defs/PeriodRef"
+          },
+          "title": "Values",
+          "type": "array"
+        },
+        "source_scope": {
+          "anyOf": [
+            {
+              "enum": [
+                "active_dialog_scope",
+                "last_attempted_scope",
+                "last_successful_scope"
+              ],
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Source Scope"
+        }
+      },
+      "required": [
+        "action"
+      ],
+      "title": "PeriodDirective",
+      "type": "object"
+    },
+    "PeriodRef": {
+      "additionalProperties": false,
+      "properties": {
+        "date_from": {
+          "format": "date",
+          "title": "Date From",
+          "type": "string"
+        },
+        "date_to": {
+          "format": "date",
+          "title": "Date To",
+          "type": "string"
+        },
+        "label": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Label"
+        }
+      },
+      "required": [
+        "date_from",
+        "date_to"
+      ],
+      "title": "PeriodRef",
+      "type": "object"
+    },
+    "ScalarDirective": {
+      "additionalProperties": false,
+      "properties": {
+        "action": {
+          "enum": [
+            "keep",
+            "set",
+            "clear",
+            "reference"
+          ],
+          "title": "Action",
+          "type": "string"
+        },
+        "value": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Value"
+        },
+        "source_scope": {
+          "anyOf": [
+            {
+              "enum": [
+                "active_dialog_scope",
+                "last_attempted_scope",
+                "last_successful_scope"
+              ],
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Source Scope"
+        }
+      },
+      "required": [
+        "action"
+      ],
+      "title": "ScalarDirective",
+      "type": "object"
+    }
+  },
+  "additionalProperties": false,
+  "properties": {
+    "contract_version": {
+      "const": "1.0",
+      "default": "1.0",
+      "title": "Contract Version",
+      "type": "string"
+    },
+    "mode": {
+      "$ref": "#/$defs/InterpretationMode"
+    },
+    "normalized_message": {
+      "minLength": 1,
+      "title": "Normalized Message",
+      "type": "string"
+    },
+    "confidence": {
+      "maximum": 1,
+      "minimum": 0,
+      "title": "Confidence",
+      "type": "number"
+    },
+    "draft": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/InterpretationDraft"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null
+    },
+    "clarification": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/ClarificationContract"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null
+    },
+    "unsupported_capability": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Unsupported Capability"
+    },
+    "assumptions": {
+      "items": {
+        "type": "string"
+      },
+      "title": "Assumptions",
+      "type": "array"
+    },
+    "metadata_bundle_version": {
+      "title": "Metadata Bundle Version",
+      "type": "string"
+    }
+  },
+  "required": [
+    "mode",
+    "normalized_message",
+    "confidence",
+    "metadata_bundle_version"
+  ],
+  "title": "InterpretationDecision",
+  "type": "object"
+}

@@ -230,3 +230,140 @@ class ContextContractV2(ContractModel):
     created_at: datetime = Field(default_factory=utc_now)
     updated_at: datetime = Field(default_factory=utc_now)
 
+
+class InterpretationMode(StrEnum):
+    STANDALONE = "standalone"
+    MUTATION = "mutation"
+    CLARIFY = "clarify"
+    UNSUPPORTED = "unsupported"
+
+
+class EntityMention(ContractModel):
+    text: str = Field(min_length=1)
+    role: Literal["balance", "source", "destination", "route", "article", "subject"]
+
+
+class ScalarDirective(ContractModel):
+    action: Literal["keep", "set", "clear", "reference"]
+    value: str | None = None
+    source_scope: Literal[
+        "active_dialog_scope",
+        "last_attempted_scope",
+        "last_successful_scope",
+    ] | None = None
+
+    @model_validator(mode="after")
+    def validate_payload(self) -> "ScalarDirective":
+        if self.action == "set" and not self.value:
+            raise ValueError("set directive requires value")
+        if self.action == "reference" and self.source_scope is None:
+            raise ValueError("reference directive requires source_scope")
+        if self.action != "set" and self.value is not None:
+            raise ValueError(f"{self.action} directive cannot carry value")
+        if self.action != "reference" and self.source_scope is not None:
+            raise ValueError("source_scope is valid only for reference")
+        return self
+
+
+class PeriodDirective(ContractModel):
+    action: Literal["keep", "set", "add", "remove", "clear", "reference"]
+    values: list[PeriodRef] = Field(default_factory=list)
+    source_scope: Literal[
+        "active_dialog_scope",
+        "last_attempted_scope",
+        "last_successful_scope",
+    ] | None = None
+
+    @model_validator(mode="after")
+    def validate_payload(self) -> "PeriodDirective":
+        if self.action in {"set", "add", "remove"} and not self.values:
+            raise ValueError(f"{self.action} period directive requires values")
+        if self.action not in {"set", "add", "remove"} and self.values:
+            raise ValueError(f"{self.action} period directive cannot carry values")
+        if self.action == "reference" and self.source_scope is None:
+            raise ValueError("reference period directive requires source_scope")
+        if self.action != "reference" and self.source_scope is not None:
+            raise ValueError("source_scope is valid only for reference")
+        return self
+
+
+class EntityDirective(ContractModel):
+    action: Literal["keep", "set", "add", "remove", "clear"]
+    mentions: list[EntityMention] = Field(default_factory=list)
+
+    @model_validator(mode="after")
+    def validate_payload(self) -> "EntityDirective":
+        if self.action in {"set", "add", "remove"} and not self.mentions:
+            raise ValueError(f"{self.action} entity directive requires mentions")
+        if self.action in {"keep", "clear"} and self.mentions:
+            raise ValueError(f"{self.action} entity directive cannot carry mentions")
+        return self
+
+
+class GroupingDirective(ContractModel):
+    action: Literal["keep", "set", "add", "remove", "clear", "reference"]
+    values: list[GroupingSpec] = Field(default_factory=list)
+    source_scope: Literal[
+        "active_dialog_scope",
+        "last_attempted_scope",
+        "last_successful_scope",
+    ] | None = None
+
+    @model_validator(mode="after")
+    def validate_payload(self) -> "GroupingDirective":
+        if self.action in {"set", "add", "remove"} and not self.values:
+            raise ValueError(f"{self.action} grouping directive requires values")
+        if self.action not in {"set", "add", "remove"} and self.values:
+            raise ValueError(f"{self.action} grouping directive cannot carry values")
+        if self.action == "reference" and self.source_scope is None:
+            raise ValueError("reference grouping directive requires source_scope")
+        if self.action != "reference" and self.source_scope is not None:
+            raise ValueError("source_scope is valid only for reference")
+        return self
+
+
+class InterpretationDraft(ContractModel):
+    operation: ScalarDirective
+    metrics: ScalarDirective
+    aggregate_type: ScalarDirective
+    periods: PeriodDirective
+    entities: EntityDirective
+    grouping: GroupingDirective
+    grain: ScalarDirective
+    reverse_direction: bool = False
+
+
+class ClarificationContract(ContractModel):
+    question: str = Field(min_length=1)
+    options: list[str] = Field(min_length=2, max_length=4)
+
+
+class InterpretationDecision(ContractModel):
+    contract_version: Literal["1.0"] = "1.0"
+    mode: InterpretationMode
+    normalized_message: str = Field(min_length=1)
+    confidence: float = Field(ge=0, le=1)
+    draft: InterpretationDraft | None = None
+    clarification: ClarificationContract | None = None
+    unsupported_capability: str | None = None
+    assumptions: list[str] = Field(default_factory=list)
+    metadata_bundle_version: str
+
+    @model_validator(mode="after")
+    def validate_mode_payload(self) -> "InterpretationDecision":
+        if self.mode in {InterpretationMode.STANDALONE, InterpretationMode.MUTATION}:
+            if self.draft is None:
+                raise ValueError(f"{self.mode.value} requires a mutation draft")
+        elif self.draft is not None:
+            raise ValueError(f"{self.mode.value} cannot carry a mutation draft")
+        if self.mode == InterpretationMode.CLARIFY:
+            if self.clarification is None:
+                raise ValueError("clarify requires clarification contract")
+        elif self.clarification is not None:
+            raise ValueError("clarification payload is valid only for clarify")
+        if self.mode == InterpretationMode.UNSUPPORTED:
+            if not self.unsupported_capability:
+                raise ValueError("unsupported requires capability name")
+        elif self.unsupported_capability is not None:
+            raise ValueError("supported interpretation cannot declare unsupported capability")
+        return self

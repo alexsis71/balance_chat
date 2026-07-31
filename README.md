@@ -16,6 +16,8 @@
   восстанавливает контракт после перезапуска.
 - PostgreSQL store сохраняет authoritative snapshot и append-only журнал
   мутаций в существующей схеме `chat_rag`.
+- unified interpretation contract совмещает нормализацию и контекстные
+  directives, не позволяя модели назначать canonical IDs.
 - compatibility adapter использует существующий `pipeline` и ready metadata
   manifest по явным путям. Неподдерживаемая legacy-форма не упрощается скрыто.
 

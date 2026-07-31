@@ -79,3 +79,16 @@ compatibility adapter останется rollback/сравнительной г�
 Существующие `chat_rag.result_artifacts` и `result_chunks` остаются отдельной
 памятью результатов. Векторный поиск может помочь interpretation, но не меняет
 контракт сессии и не является источником canonical state.
+
+## Unified interpretation
+
+`UnifiedInterpreter` объединяет исправление формулировки и определение
+контекстной мутации в одном structured-output вызове. Hybrid policy вызывает
+модель только для контекстных ссылок, clarify answer и вероятной опечатки;
+самодостаточный запрос может идти прямо в deterministic resolver.
+
+Ответ модели содержит текстовые entity mentions, directives и canonical
+exclusive-end периоды, но никогда runtime IDs. `metadata_bundle_version`
+проверяется безусловно. Следующий deterministic binder связывает mentions с
+ready MetadataRegistry и только после этого создаёт исполнимый
+`ContextMutation`.
