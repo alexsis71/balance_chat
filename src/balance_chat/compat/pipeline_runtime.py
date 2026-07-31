@@ -91,6 +91,7 @@ class PipelineRuntime:
             query,
             execute_db=execute_db,
             request_id=request_id,
+            allow_multi_step=False,
             apply_summary=apply_summary,
             backend_override="unified_strict",
             context_override=context_override,

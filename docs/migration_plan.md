@@ -17,8 +17,9 @@
    result references без передачи полной истории.
 5. **Native multi-operand planner — завершён.** Сравнения entity/entity,
    metric/metric и period/period с фиксированной baseline/target семантикой.
-6. **Native executor.** Выполнение операндов через существующий unified strict
-   runtime без повторных LLM-вызовов; композиция фактов после всех subresults.
+6. **Native executor — завершён.** Выполнение операндов через существующий
+   unified strict runtime без multi-step/summary LLM; композиция фактов после
+   всех subresults.
 7. **Canonical grouping.** GEO groups и другие измерения, агрегация по
    canonical/официальному имени и provenance исходных строк.
 8. **Result memory/RAG.** Переиспользование `chat_rag.result_artifacts/chunks`,

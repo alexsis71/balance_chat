@@ -111,3 +111,8 @@ Bound intent детерминированно раскладывается на 
 comparison создаёт по задаче на операнд, period comparison — по задаче на
 canonical exclusive-end период. Baseline и target сохраняются явно; planner не
 вызывает LLM и не выполняет запросы.
+
+`NativeExecutor` исполняет каждую scalar task один раз. Compatibility runner
+передаёт `allow_multi_step=false` и `apply_summary=false`. Сравнение выполняется
+только над явными deterministic facts; отсутствие факта, разные единицы и
+ошибка subtask возвращаются явно, без подстановки другого результата.

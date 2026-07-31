@@ -88,4 +88,5 @@ def test_runtime_calls_unified_strict_without_fallback() -> None:
 
     assert result == {"status": "ok"}
     assert captured["backend_override"] == "unified_strict"
+    assert captured["allow_multi_step"] is False
     assert captured["context_override"]["periods"][0]["date_to"] == "2025-06-01"
