@@ -29,11 +29,14 @@
 9. **API и UI V2 — завершён.** Revision-aware endpoints, визуализация
    операндов, активного scope и clarify confirmation; observability payload
    ограничен безопасным whitelist.
-10. **Staging acceptance — завершён; production cutover ожидает полного
-    regression.** Выполнены DB-backed multi-turn smoke, restart recovery,
+10. **Staging acceptance — повторён на metadata bundle 2026.07.7; production
+    cutover заблокирован semantic hardening.** Выполнены DB-backed multi-turn smoke, restart recovery,
     optimistic revision, c=2/c=4 persistence load и bounded health. V2
     запускается отдельной явной командой и не подменяет действующий `pipeline`.
-    Найденные legacy-degradation случаи не имеют скрытого fallback.
+    Peer comparison двух городов исправлен. До regression требуется сузить
+    deterministic peer detector для смешанных metric/entity запросов и
+    преобразовать invalid interpretation contract в контролируемую ошибку API.
+    Найденные degradation cases не имеют скрытого fallback.
 
 Полный regression и решение о production cutover выполняются отдельным
 checkpoint после завершения разработки этапов.

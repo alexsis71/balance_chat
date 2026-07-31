@@ -1,7 +1,8 @@
 # Context Chat V2: staging acceptance
 
-Дата проверки: 2026-07-31. Проверка выполнена на `balance_chat` с PostgreSQL
-`chat_rag`, ready metadata bundle `2026.07.6`, реальным staging PostgreSQL и
+Дата проверки: 2026-07-31; повтор после metadata rebuild выполнен в тот же день.
+Проверка выполнена на `balance_chat` с PostgreSQL `chat_rag`, ready metadata
+bundle `2026.07.7` (`sha256:14eb8ca1cf8ac8ee5e74257a14a7fa58923864fcfec3a2fd0f6aafb32a86308b`), реальным staging PostgreSQL и
 Qwen через текущий unified strict runtime. Действующий backend `pipeline` не
 переключался.
 
@@ -25,7 +26,7 @@ Qwen через текущий unified strict runtime. Действующий ba
 | Казань, май 2025 → «сравни с июнем 2025» | `compare_periods`, две canonical exclusive-end пары, два факта, comparison сформирован |
 | Казань, май 2025 → «а теперь в Ярославскую область?» | период `2025-05-01—2025-06-01` унаследован; GEO заменён на каноническую Ярославскую область; один итоговый факт |
 | Волгоградская и Воронежская области, апрель 2025 | текущий multi-region resolved plan разложен на четыре V2 operands и выполнен |
-| Казань и Ярославль, май 2025 | legacy resolver деградировал compare до одного Казанского operand; V2 остановил запрос кодом `resolved_comparison_degraded` |
+| Казань и Ярославль, май 2025 | `deterministic_peer_entity`, два canonical article/balance operand, два DB-backed факта, comparison сформирован |
 
 Для Ярославской области unified runtime вернул две аддитивные строки статьи
 «Ярославская обл.» из суточных балансов Нижнего Новгорода и Ухты. V2 суммирует
@@ -55,24 +56,32 @@ end-to-end benchmark Qwen/unified/PostgreSQL и не основание для c
 
 ## Риски и условия cutover
 
-1. Случай сравнения двух городов всё ещё может терять второй operand внутри
-   текущего legacy resolver. V2 выявляет потерю, но собственный resolver этой
-   формы ещё не реализован.
-2. Сериализация turn одной сессии выполняется in-process lock плюс
+1. Сериализация turn одной сессии выполняется in-process lock плюс
    PostgreSQL optimistic revision. Для нескольких application workers два
    дорогих вычисления могут стартовать параллельно; второй commit будет
    отклонён. Перед production cutover нужен distributed turn reservation или
    раннее атомарное резервирование revision.
-3. Таймауты vLLM/unified остаются настройками текущего `pipeline`. V2 не делает
+2. Таймауты vLLM/unified остаются настройками текущего `pipeline`. V2 не делает
    скрытый retry/fallback; processing error отображается как HTTP 422, store
    outage как HTTP 503, revision conflict как HTTP 409. Нужна отдельная
    fault-injection проверка реальных timeout сценариев.
-4. В acceptance первый standalone resolver занял около 20.9 s; контекстный GEO
+3. В acceptance первый standalone resolver занял около 20.9 s; контекстный GEO
    turn — около 4.6 s до завершения resolver/gate и DB. Нужны end-to-end c=2/c=4
    и percentile latency перед production traffic.
-5. Значение единицы берётся из существующего ResultEnvelope. Проверка
+4. Значение единицы берётся из существующего ResultEnvelope. Проверка
    физического масштаба `млн м3`/`тыс. м3` остаётся ответственностью parity
    regression и не исправляется эвристикой в V2 translator.
+5. Невалидный structured interpretation сейчас может пройти мимо
+   `TurnProcessingError`: `mode=standalone` без mutation draft дал HTTP 500.
+   Перед cutover требуется единое контролируемое error mapping без retry.
+6. Deterministic peer-city detector слишком широк для смешанного сравнения
+   metric/entity. Запрос о поставках и собственных потребителях Казани был
+   ошибочно сведён к двум distribution operands. Такой результат нельзя считать
+   semantic success; детектор должен принимать только однородное entity/entity
+   сравнение, а смешанную форму передавать typed interpretation/planner.
+7. Canonical GEO `Ярославская` корректно исполняется, но active scope показывает
+   сокращённое имя вместо официального `Ярославская область`. Это отдельная
+   metadata/presentation-задача и не должно исправляться в summary.
 
 Production cutover пока не выполнен. Следующий checkpoint: полный parity и
 regression, fault injection, end-to-end load, затем явное переключение entry
@@ -98,8 +107,22 @@ point на `run_server.py`; старый backend остаётся отдельн
 - Route `из A в B` peer-правилом не перехватывается; неоднозначные статьи не
   выбираются автоматически.
 
-Focused `balance_chat` набор: 26 passed. Два focused pipeline-теста проходили
-до изменения metadata-файла. Финальный DB-backed повтор остановлен новым
-strict-ready нарушением: фактический SHA-256 `catalog/balances.jsonl` не
-совпадает с checksum в manifest. Bundle автоматически не пересобирался, чтобы
-не изменить metadata contract и пользовательские данные без явного решения.
+Focused `balance_chat` набор после rebuild: 25 passed. Strict registry и health
+успешно приняли bundle `2026.07.7`; metadata checksum blocker закрыт.
+
+## Повторный DB-backed acceptance на 2026.07.7
+
+| Проверка | Фактический результат |
+|---|---|
+| Казань и Ярославль за май 2025 | success; два operands, два facts, `task_count=2`, 33.1 s |
+| Казань за май → «сравни с июнем 2025» | success; май сохранён, июнь добавлен как вторая exclusive-end пара, два facts, 4.6 s на втором turn |
+| Казань за май → «а теперь в Ярославскую область?» | success; период сохранён, destination заменён, один fact, 3.6 s на втором turn |
+| Групповой запрос по областям за апрель 2025 | первый turn success; legacy projection содержит 100 operands и возвращает rows |
+| Затем «суммируй данные по областям» | failed; Qwen вернул невалидный standalone contract, API ответил HTTP 500 |
+| Поставки против собственных потребителей Казани | failed semantic acceptance; peer detector потерял второй metric и сравнил article Казань с GEO Казань как distribution |
+| Полные имена ГП ТГ Нижнего Новгорода и Санкт-Петербурга | оба новых curated alias разрешены в точные balance IDs `2010000040110` и `2010000042550` |
+
+Каждая acceptance-сессия удалена через V2 API после проверки; вместе с ней
+удалялись связанные result-memory artifacts. Старый backend продолжал работать
+на порту 8787, V2 был поднят отдельно на 8790. Полный regression и production
+cutover не выполнялись.
