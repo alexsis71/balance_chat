@@ -20,6 +20,8 @@
   directives, не позволяя модели назначать canonical IDs.
 - deterministic binder разрешает mentions через ready metadata registry и
   компилирует их в валидный `ContextMutation`.
+- result memory переиспользует существующий pgvector store, сохраняя только
+  успешные deterministic facts и выдавая interpretation bounded retrieval.
 - compatibility adapter использует существующий `pipeline` и ready metadata
   manifest по явным путям. Неподдерживаемая legacy-форма не упрощается скрыто.
 

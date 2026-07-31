@@ -2,6 +2,7 @@
 
 from .contracts import ContextContractV2, ContextMutation
 from .reducer import apply_context_transition
+from .result_memory import PipelineResultMemoryAdapter
 from .store import (
     InMemoryContextStore,
     PostgresContextStore,
@@ -14,6 +15,7 @@ __all__ = [
     "ContextMutation",
     "InMemoryContextStore",
     "PostgresContextStore",
+    "PipelineResultMemoryAdapter",
     "RevisionConflict",
     "SQLiteContextStore",
     "apply_context_transition",

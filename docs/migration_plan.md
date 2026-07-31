@@ -23,9 +23,9 @@
 7. **Canonical grouping — базовое ядро завершено.** GEO groups и другие
    измерения, агрегация по canonical ID/официальному имени и provenance
    исходных строк.
-8. **Result memory/RAG.** Переиспользование `chat_rag.result_artifacts/chunks`,
-   bounded retrieval и ссылки на факты; embeddings не являются authoritative
-   session state.
+8. **Result memory/RAG — завершён.** Переиспользование
+   `chat_rag.result_artifacts/chunks`, bounded retrieval и ссылки на факты;
+   embeddings не являются authoritative session state.
 9. **API и UI V2.** Revision-aware endpoints, визуализация операндов, активного
    scope, источника наследования и clarify confirmation.
 10. **Shadow acceptance и cutover.** Parity, DB-backed multi-turn acceptance,

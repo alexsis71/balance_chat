@@ -123,3 +123,17 @@ canonical exclusive-end период. Baseline и target сохраняются 
 отдельные группы; display name берётся из canonical metadata и форматируется
 для интерфейса. Суммирование разных единиц запрещено, а provenance всех
 объединённых исходных фактов сохраняется.
+
+## Result memory
+
+`PipelineResultMemoryAdapter` переводит только успешные deterministic facts V2
+в контракт существующего `PgVectorSessionRagStore`. `no_data`, error и
+clarification не сохраняются как фактическая память. Для каждого artifact
+фиксируется hash bound intent, фактов и metadata bundle.
+
+Retrieval сначала ограничивается точным `session_id`, metadata bundle version,
+единственной текущей метрикой и canonical exclusive-end периодами, после чего
+применяются лимиты chunks, символов на chunk и общего payload. Содержимое
+доступно только внутреннему interpretation input; health/API получают лишь
+число chunks и result references. Ошибка pgvector явная и не включает
+альтернативный скрытый backend.
