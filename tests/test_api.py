@@ -134,3 +134,34 @@ def test_delete_session_is_idempotent_and_ui_is_served() -> None:
     ui = client.get("/")
     assert ui.status_code == 200
     assert "Активный контекст" in ui.text
+
+
+def test_health_endpoint_exposes_only_bounded_checks() -> None:
+    client, _ = _client()
+
+    response = client.get("/api/v2/health")
+
+    assert response.status_code == 200
+    assert response.json() == {
+        "status": "ok",
+        "checks": {"api": {"ready": True}},
+    }
+
+
+def test_degraded_health_returns_service_unavailable() -> None:
+    processor = FakeProcessor()
+    service = BalanceChatService(InMemoryContextStore(), processor)
+    client = TestClient(
+        create_app(
+            service,
+            health_check=lambda: {
+                "status": "degraded",
+                "checks": {"context_model": {"ready": False}},
+            },
+        )
+    )
+
+    response = client.get("/api/v2/health")
+
+    assert response.status_code == 503
+    assert response.json()["checks"]["context_model"] == {"ready": False}

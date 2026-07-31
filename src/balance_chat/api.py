@@ -1,10 +1,10 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 from fastapi import FastAPI, HTTPException
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -25,8 +25,23 @@ class ChatTurnRequest(ApiModel):
     request_id: str | None = None
 
 
-def create_app(service: BalanceChatService) -> FastAPI:
+def create_app(
+    service: BalanceChatService,
+    *,
+    health_check: Callable[[], dict[str, Any]] | None = None,
+) -> FastAPI:
     app = FastAPI(title="AI Balances Context Chat V2", version="0.1.0")
+
+    @app.get("/api/v2/health")
+    def health() -> JSONResponse:
+        payload = health_check() if health_check is not None else {
+            "status": "ok",
+            "checks": {"api": {"ready": True}},
+        }
+        return JSONResponse(
+            payload,
+            status_code=200 if payload.get("status") == "ok" else 503,
+        )
 
     @app.post("/api/v2/chat/sessions", status_code=201)
     def create_session() -> dict[str, Any]:

@@ -47,7 +47,41 @@ def build_application(config_path: str | Path):
             else None
         ),
     )
-    return create_app(service)
+    return create_app(
+        service,
+        health_check=lambda: _health(runtime, registry, store),
+    )
+
+
+def _health(runtime: PipelineRuntime, registry: Any, store: Any) -> dict[str, Any]:
+    checks: dict[str, dict[str, Any]] = {}
+    try:
+        validate = getattr(store, "validate", None)
+        if callable(validate):
+            validate()
+        checks["context_store"] = {"ready": True}
+    except Exception:
+        checks["context_store"] = {"ready": False}
+    manifest = registry.manifest
+    checks["metadata"] = {
+        "ready": str(getattr(manifest, "state", "")) == "ready",
+        "bundle_version": manifest.bundle_version,
+        "schema_version": manifest.schema_version,
+    }
+    try:
+        inference = runtime.pipeline_runtime().inference_client.health("context")
+        checks["context_model"] = {
+            "ready": bool(inference.get("reachable")),
+            "model": inference.get("model"),
+            "structured_outputs": bool(inference.get("structured_outputs")),
+            "latency_ms": int(inference.get("latency_ms") or 0),
+        }
+    except Exception:
+        checks["context_model"] = {"ready": False}
+    return {
+        "status": "ok" if all(item["ready"] for item in checks.values()) else "degraded",
+        "checks": checks,
+    }
 
 
 def _context_store(config: dict[str, Any], path: Path, runtime: PipelineRuntime):
