@@ -112,6 +112,7 @@ function renderContext(payload) {
 }
 
 function appendMessage(kind, payload) {
+  byId("messages").querySelector(".welcome")?.remove();
   const item = {id:requestId(), kind, at:new Date().toISOString(), ...payload};
   const history = touchHistory();
   history.messages = [...(history.messages || []), item].slice(-100);
@@ -169,9 +170,17 @@ function comparisonHtml(comparison) {
   </section>`;
 }
 function rowsFor(result) {
-  if (Array.isArray(result.rows) && result.rows.length) return result.rows;
+  if (Array.isArray(result.rows) && result.rows.length && !isTechnicalPlan(result.rows)) return result.rows;
   if (Array.isArray(result.facts) && result.facts.length) return result.facts.map((fact) => ({Показатель:fact.label, Значение:fact.value, Единица:fact.unit}));
   return [];
+}
+function isTechnicalPlan(rows) {
+  const fields = rows.map((row) => String(row?.field || "").toLowerCase());
+  return fields.length > 0 && fields.every((field) => ["function", "params", "sql"].includes(field));
+}
+function sanitizeResult(result) {
+  if (!result || !Array.isArray(result.rows) || !isTechnicalPlan(result.rows)) return result;
+  return {...result, rows:[]};
 }
 function hasRows(result) { return rowsFor(result).length > 0; }
 function tableHtml(result) {
@@ -227,7 +236,7 @@ async function send(message, clarification = null) {
   try {
     const body = await api("/api/v2/chat", {method:"POST", body:JSON.stringify({session_id:state.sessionId, expected_revision:state.revision, message, execute_db:byId("executeDb").checked, clarification, request_id:traceId})});
     clearInterval(timer); renderContext(body); setStages(4);
-    appendMessage("assistant", {status:body.status, result:body.result, context:body.context, requestId:body.request_id});
+    appendMessage("assistant", {status:body.status, result:sanitizeResult(body.result), context:body.context, requestId:body.request_id});
     setTimeout(() => setStages(5), 250); setStatus(body.status === "needs_clarification" ? "нужно уточнение" : body.status, body.status === "ok" ? "ready" : "warning");
   } catch (error) {
     clearInterval(timer); setStages(Math.max(stage, 1), true);
