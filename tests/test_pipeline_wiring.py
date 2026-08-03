@@ -127,6 +127,27 @@ def test_multi_source_geo_period_comparison_becomes_one_canonical_operand() -> N
     ]
 
 
+def test_multi_source_show_becomes_one_canonical_geo_operand() -> None:
+    envelope = _envelope()
+    plan = envelope["debug"]["resolved_plan"]
+    base = plan["expressions"][0]
+    base["geo"] = [{"label": "Самарская область"}]
+    plan["expressions"] = [
+        {**base, "balance": {"id": "BAL:1", "label": "Баланс 1"}},
+        {**base, "balance": {"id": "BAL:2", "label": "Баланс 2"}},
+    ]
+    geo = SimpleNamespace(
+        geo_id="GEO:samara-region",
+        canonical_name="Самарская область",
+    )
+
+    intent = PipelineEnvelopeTranslator().intent(envelope, canonical_geos=[geo])
+
+    assert intent.operation == Operation.SHOW
+    assert len(intent.operands) == 1
+    assert intent.operands[0].entities[0].entity.entity_id == "GEO:samara-region"
+
+
 def test_peer_geo_adapter_uses_shared_semantics_not_degraded_expressions() -> None:
     envelope = _envelope()
     envelope["debug"]["resolved_plan"]["_intent"]["intent"] = "compare"

@@ -82,6 +82,15 @@ class UnifiedInterpreter:
             raw = self.backend.invoke(payload)
             if isinstance(raw, str):
                 raw = json.loads(raw)
+            raw, canonicalized = _canonicalize_directives(raw)
+            if canonicalized:
+                log_event(
+                    LOGGER,
+                    logging.INFO,
+                    "interpretation_directives_canonicalized",
+                    request_id=request_id,
+                    fields=canonicalized,
+                )
             decision = InterpretationDecision.model_validate(raw)
         except Exception as exc:
             log_event(
@@ -163,6 +172,36 @@ def _reject_runtime_ids(decision: InterpretationDecision) -> None:
     for mention in decision.draft.entities.mentions:
         if re.search(r"\b(?:entity_id|balance_id|article_id|route_id)\b", mention.text, re.I):
             raise InterpretationError("interpreter returned a runtime identifier")
+
+
+def _canonicalize_directives(
+    raw: Mapping[str, Any] | Any,
+) -> tuple[Mapping[str, Any] | Any, list[str]]:
+    if not isinstance(raw, Mapping) or not isinstance(raw.get("draft"), Mapping):
+        return raw, []
+    payload = json.loads(json.dumps(raw, ensure_ascii=False, default=str))
+    draft = payload["draft"]
+    changed: list[str] = []
+    for field in ("operation", "aggregate_type", "grain"):
+        directive = draft.get(field)
+        if isinstance(directive, dict) and directive.get("action") == "set" and directive.get("value") is None:
+            directive.update(action="clear", value=None)
+            changed.append(field)
+    for field, values_key in (
+        ("metrics", "values"),
+        ("periods", "values"),
+        ("grouping", "values"),
+        ("entities", "mentions"),
+    ):
+        directive = draft.get(field)
+        if (
+            isinstance(directive, dict)
+            and directive.get("action") in {"set", "add", "remove"}
+            and not directive.get(values_key)
+        ):
+            directive["action"] = "clear"
+            changed.append(field)
+    return payload, changed
 
 
 def _default_prompt_path() -> Path:

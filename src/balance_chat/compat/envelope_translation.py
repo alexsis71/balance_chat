@@ -87,16 +87,22 @@ class PipelineEnvelopeTranslator:
         canonical_geos: list[Any],
     ) -> AnalysisOperand | None:
         """Collapse physical balance rows only for one registry-backed GEO target."""
-        if operation != Operation.COMPARE_PERIODS or len(expressions) < 2:
+        if len(expressions) < 2 or operation not in {
+            Operation.SHOW,
+            Operation.AGGREGATE,
+            Operation.COMPARE_PERIODS,
+        }:
             return None
         geo_text = str(raw_intent.get("geo") or "").strip()
         geo = canonical_geos[0] if len(canonical_geos) == 1 else None
         if geo is None and self.registry is not None and geo_text:
             geo = self.registry.geo(geo_text)
         if geo is None:
-            raise EnvelopeTranslationError(
-                "multi-source period comparison lacks one canonical GEO target"
-            )
+            if operation == Operation.COMPARE_PERIODS:
+                raise EnvelopeTranslationError(
+                    "multi-source period comparison lacks one canonical GEO target"
+                )
+            return None
         metrics = {
             str(item.get("canonical_metric") or item.get("metric") or "").strip()
             for item in expressions
@@ -107,7 +113,7 @@ class PipelineEnvelopeTranslator:
         }
         if "" in metrics or len(metrics) != 1 or len(aggregates) != 1:
             raise EnvelopeTranslationError(
-                "multi-source period comparison has inconsistent scalar semantics"
+                "multi-source GEO result has inconsistent scalar semantics"
             )
         return AnalysisOperand(
             operand_id="operand_1",

@@ -17,6 +17,7 @@ from balance_chat.interpretation import (
     HybridInterpretationPolicy,
     InterpretationError,
     UnifiedInterpreter,
+    _canonicalize_directives,
 )
 from balance_chat.reducer import apply_context_transition
 
@@ -156,6 +157,18 @@ def test_interpreter_receives_pending_clarification_and_typed_answer() -> None:
     model_input = json.loads(backend.payload["messages"][1]["content"])
     assert model_input["clarification_answer"] == answer
     assert model_input["context"]["pending_clarification"]["turn_id"] == "turn-1"
+
+
+def test_empty_set_directives_are_canonicalized_to_explicit_clear() -> None:
+    raw = _decision()
+    raw["draft"]["grouping"] = {"action": "set", "values": []}
+    raw["draft"]["grain"] = {"action": "set", "value": None}
+
+    normalized, fields = _canonicalize_directives(raw)
+
+    assert normalized["draft"]["grouping"]["action"] == "clear"
+    assert normalized["draft"]["grain"]["action"] == "clear"
+    assert fields == ["grain", "grouping"]
 
 
 def test_hybrid_policy_skips_unambiguous_standalone_turn() -> None:
