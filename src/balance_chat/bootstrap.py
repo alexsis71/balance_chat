@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 from pathlib import Path
 from typing import Any
 
@@ -58,11 +59,12 @@ def build_application(config_path: str | Path):
     )
     return create_app(
         service,
-        health_check=lambda: _health(runtime, registry, store),
+        health_check=lambda: _health(runtime, registry, store, memory),
+        api_key=_api_key(config),
     )
 
 
-def _health(runtime: PipelineRuntime, registry: Any, store: Any) -> dict[str, Any]:
+def _health(runtime: PipelineRuntime, registry: Any, store: Any, memory: Any = None) -> dict[str, Any]:
     checks: dict[str, dict[str, Any]] = {}
     try:
         validate = getattr(store, "validate", None)
@@ -87,10 +89,43 @@ def _health(runtime: PipelineRuntime, registry: Any, store: Any) -> dict[str, An
         }
     except Exception:
         checks["context_model"] = {"ready": False}
+    if memory is not None:
+        try:
+            diagnostics = memory.store.diagnostics()
+            checks["result_memory"] = {
+                "ready": bool(diagnostics.get("enabled", True)),
+                "type": diagnostics.get("type"),
+            }
+        except Exception:
+            checks["result_memory"] = {"ready": False}
+    try:
+        pipeline = runtime.pipeline_runtime()
+        dsn = pipeline.database_dsn
+        if not dsn:
+            raise RuntimeError("database DSN is missing")
+        import psycopg
+        with psycopg.connect(dsn, connect_timeout=2) as connection:
+            with connection.cursor() as cursor:
+                cursor.execute("SELECT 1")
+                cursor.fetchone()
+        checks["data_backend"] = {"ready": True, "mode": "postgresql"}
+    except Exception:
+        checks["data_backend"] = {"ready": False, "mode": "postgresql"}
     return {
         "status": "ok" if all(item["ready"] for item in checks.values()) else "degraded",
         "checks": checks,
     }
+
+
+def _api_key(config: dict[str, Any]) -> str | None:
+    section = config.get("api") or {}
+    env_name = str(section.get("api_key_env") or "").strip()
+    if not env_name:
+        return None
+    value = str(os.getenv(env_name) or "").strip()
+    if not value:
+        raise ValueError(f"API key environment variable is empty: {env_name}")
+    return value
 
 
 def _context_store(config: dict[str, Any], path: Path, runtime: PipelineRuntime):

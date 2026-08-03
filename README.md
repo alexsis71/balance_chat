@@ -14,6 +14,8 @@
   успешный scope.
 - optimistic store отклоняет конкурентное изменение revision; SQLite-реализация
   восстанавливает контракт после перезапуска.
+- distributed reservation не допускает два одновременных turn одной сессии;
+  повтор одного `request_id` возвращает сохранённый ответ без повторного LLM/DB.
 - PostgreSQL store сохраняет authoritative snapshot и append-only журнал
   мутаций в существующей схеме `chat_rag`.
 - unified interpretation contract совмещает нормализацию и контекстные
@@ -21,7 +23,8 @@
 - deterministic binder разрешает mentions через ready metadata registry и
   компилирует их в валидный `ContextMutation`.
 - result memory переиспользует существующий pgvector store, сохраняя только
-  успешные deterministic facts и выдавая interpretation bounded retrieval.
+  успешные deterministic facts после authoritative commit; durable outbox
+  повторяет незавершённую запись после рестарта.
 - FastAPI/UI V2 показывают revision, active scope и отдельные operands;
   clarification продолжает ту же сессию без скрытого retry.
 - compatibility adapter использует существующий `pipeline` и ready metadata
@@ -61,7 +64,7 @@ UI доступен по `http://127.0.0.1:8790/`, bounded health diagnostics �
 Структурированный операционный журнал пишется в JSONL-файл
 `logs/balance_chat.jsonl` с ротацией 10 МБ и пятью архивами (параметры меняются
 в секции `logging` конфигурации). Для каждого turn журналируются request/session
-ID, revision, исходный и нормализованный запросы, canonical operation, периоды и
+ID, revision, hash/длина исходного и нормализованный запрос, canonical operation, периоды и
 operands, bounded interpretation/execution diagnostics, длительность и stack
 trace ошибки. API key, DSN, prompts, SQL и raw DB rows не журналируются. Каталог
 `logs/` исключён из Git.
@@ -71,7 +74,16 @@ trace ошибки. API key, DSN, prompts, SQL и raw DB rows не журнал�
 Архитектура и границы миграции описаны в
 [`docs/architecture.md`](docs/architecture.md).
 
-SQL этапа persistence: [`migrations/002_context_contract_v2.sql`](migrations/002_context_contract_v2.sql).
+SQL persistence выполняется последовательно: базовый контракт
+[`002_context_contract_v2.sql`](migrations/002_context_contract_v2.sql),
+reservation/idempotency/outbox
+[`003_context_runtime_hardening.sql`](migrations/003_context_runtime_hardening.sql)
+и soft-delete audit
+[`004_soft_delete_audit.sql`](migrations/004_soft_delete_audit.sql).
+
+Опциональная защита API включается через `api.api_key_env`; `/api/v2/health`
+остаётся доступным для readiness probe. Health проверяет context store,
+metadata, Qwen, pgvector и соединение с расчётным PostgreSQL.
 
 API factory: `balance_chat.api:create_app`. UI обслуживается этим же
 приложением по `/`, endpoints используют префикс `/api/v2`.

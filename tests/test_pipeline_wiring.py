@@ -196,6 +196,30 @@ def test_additive_scalar_rows_are_summed_with_provenance() -> None:
     assert fact.source_row_count == 2
 
 
+def test_public_native_fact_does_not_expose_provenance() -> None:
+    from balance_chat.execution import NativeExecutionResult, TaskExecutionResult, ScalarFact
+    from balance_chat.processor import _public_native_result
+
+    native = NativeExecutionResult(
+        operation=Operation.AGGREGATE,
+        status="ok",
+        task_results=[TaskExecutionResult(
+            task_id="task_1",
+            status="ok",
+            fact=ScalarFact(
+                task_id="task_1",
+                value=Decimal("1"),
+                unit="тыс. м3",
+                label="Поставки",
+                provenance=[{"raw": "secret"}],
+            ),
+            envelope={"status": "ok"},
+        )],
+    )
+
+    assert "provenance" not in _public_native_result(native)["facts"][0]
+
+
 def test_extremum_fact_preserves_winning_date() -> None:
     translator = PipelineEnvelopeTranslator()
     envelope = _envelope()

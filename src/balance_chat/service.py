@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from collections import defaultdict
+import hashlib
 import logging
 from threading import RLock
 from time import perf_counter
@@ -150,8 +151,15 @@ class BalanceChatService:
             session_id=session_id,
             expected_revision=expected_revision,
             execute_db=execute_db,
-            user_message=message,
-            clarification=(clarification.model_dump(mode="json") if clarification else None),
+            user_message_sha256=hashlib.sha256(message.encode("utf-8")).hexdigest(),
+            user_message_length=len(message),
+            clarification=(
+                {
+                    "source_turn_id": clarification.source_turn_id,
+                    "clarification_id": clarification.clarification_id,
+                }
+                if clarification else None
+            ),
         )
         try:
             reserve = getattr(self.store, "reserve", None)

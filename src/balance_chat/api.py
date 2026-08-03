@@ -2,8 +2,9 @@ from __future__ import annotations
 
 from pathlib import Path
 from typing import Any, Callable
+import hmac
 
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, ConfigDict, Field
@@ -24,20 +25,35 @@ class ApiModel(BaseModel):
 
 
 class ChatTurnRequest(ApiModel):
-    session_id: str
+    session_id: str = Field(min_length=1, max_length=64)
     expected_revision: int = Field(ge=0)
-    message: str = Field(min_length=1)
+    message: str = Field(min_length=1, max_length=4000)
     execute_db: bool = False
     clarification: ClarificationAnswer | None = None
-    request_id: str | None = None
+    request_id: str | None = Field(default=None, max_length=128)
 
 
 def create_app(
     service: BalanceChatService,
     *,
     health_check: Callable[[], dict[str, Any]] | None = None,
+    api_key: str | None = None,
 ) -> FastAPI:
     app = FastAPI(title="AI Balances Context Chat V2", version="0.1.0")
+
+    @app.middleware("http")
+    async def api_auth(request: Request, call_next):
+        if (
+            api_key
+            and request.url.path.startswith("/api/v2/")
+            and request.url.path != "/api/v2/health"
+            and not hmac.compare_digest(request.headers.get("x-api-key", ""), api_key)
+        ):
+            return JSONResponse(
+                {"detail": {"code": "unauthorized"}},
+                status_code=401,
+            )
+        return await call_next(request)
 
     @app.get("/api/v2/health")
     def health() -> JSONResponse:

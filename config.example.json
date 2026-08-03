@@ -7,6 +7,9 @@
     "max_bytes": 10485760,
     "backup_count": 5
   },
+  "api": {
+    "api_key_env": ""
+  },
   "context_store": {
     "type": "postgresql",
     "schema": "chat_rag",

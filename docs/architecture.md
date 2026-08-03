@@ -74,7 +74,9 @@ compatibility adapter останется rollback/сравнительной г�
 `chat_rag.context_sessions_v2` как authoritative snapshot и
 `chat_rag.context_mutations_v2` как append-only audit log. Snapshot и запись
 мутации фиксируются одной PostgreSQL-транзакцией после `SELECT ... FOR UPDATE`.
-Конкурентный revision отклоняется до вызова resolver, LLM или execution.
+Конкурентный revision и уже выполняющийся turn отклоняются до вызова resolver,
+LLM или execution. Reservation хранится в PostgreSQL с TTL, а `request_id`
+обеспечивает идемпотентный replay завершённого ответа.
 
 Существующие `chat_rag.result_artifacts` и `result_chunks` остаются отдельной
 памятью результатов. Векторный поиск может помочь interpretation, но не меняет
@@ -153,3 +155,10 @@ Clarification options отправляются как typed continuation с те
 API observability не принимает произвольный debug processor: наружу проходят
 только whitelisted counters и result references. RAG content, embeddings, SQL,
 raw rows и внутренние envelopes остаются внутри orchestration boundary.
+
+Result-memory write создаётся как outbox-запись в той же транзакции, что snapshot
+и mutation journal. Pgvector вызывается только после commit; недоставленная
+запись повторяется при следующем старте приложения.
+
+Удаление пользовательской сессии является soft-delete. Роль приложения не
+имеет DELETE/UPDATE прав на mutation journal, поэтому audit сохраняется.

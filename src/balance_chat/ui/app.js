@@ -179,8 +179,10 @@ function isTechnicalPlan(rows) {
   return fields.length > 0 && fields.every((field) => ["function", "params", "sql"].includes(field));
 }
 function sanitizeResult(result) {
-  if (!result || !Array.isArray(result.rows) || !isTechnicalPlan(result.rows)) return result;
-  return {...result, rows:[]};
+  if (!result) return result;
+  const clean = JSON.parse(JSON.stringify(result, (key, value) => key === "provenance" ? undefined : value));
+  if (Array.isArray(clean.rows) && isTechnicalPlan(clean.rows)) clean.rows=[];
+  return clean;
 }
 function hasRows(result) { return rowsFor(result).length > 0; }
 function tableHtml(result) {

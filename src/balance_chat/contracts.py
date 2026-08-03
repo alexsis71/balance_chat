@@ -189,14 +189,14 @@ class TurnReference(ContractModel):
 
 class ClarificationContract(ContractModel):
     clarification_id: str = Field(default_factory=lambda: str(uuid4()))
-    question: str = Field(min_length=1)
+    question: str = Field(min_length=1, max_length=1000)
     options: list[str] = Field(min_length=2, max_length=4)
 
 
 class ClarificationAnswer(ContractModel):
     source_turn_id: str
     clarification_id: str
-    selected_option: str = Field(min_length=1)
+    selected_option: str = Field(min_length=1, max_length=1000)
 
 
 class PendingClarification(ContractModel):

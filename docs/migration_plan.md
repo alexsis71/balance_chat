@@ -20,7 +20,7 @@
 6. **Native executor — завершён.** Выполнение операндов через существующий
    unified strict runtime без multi-step/summary LLM; композиция фактов после
    всех subresults.
-7. **Canonical grouping — базовое ядро завершено.** GEO groups и другие
+7. **Canonical grouping — завершено.** GEO groups и другие
    измерения, агрегация по canonical ID/официальному имени и provenance
    исходных строк.
 8. **Result memory/RAG — завершён.** Переиспользование
@@ -29,15 +29,19 @@
 9. **API и UI V2 — завершён.** Revision-aware endpoints, визуализация
    операндов, активного scope и clarify confirmation; observability payload
    ограничен безопасным whitelist.
-10. **Staging acceptance и найденный semantic hardening — завершены на metadata
-    bundle 2026.07.7; production cutover ожидает operational checkpoint.** Выполнены DB-backed multi-turn smoke, restart recovery,
+10. **Operational hardening — реализован на metadata bundle 2026.07.7.**
+    Выполнены executable-shape invariants, operand-aware inheritance, typed
+    clarification, extremum dimensions, native canonical grouping, единый
+    ResultReference/RAG path, post-commit outbox, distributed reservation,
+    idempotency, metadata compatibility, soft-delete audit, bounded API и
+    безопасный health/logging. Выполнены DB-backed multi-turn smoke, restart recovery,
     optimistic revision, c=2/c=4 persistence load и bounded health. V2
     запускается отдельной явной командой и не подменяет действующий `pipeline`.
     Peer comparison двух городов, mixed distribution/own-consumers comparison и
     contextual grouping проверены с реальной БД. Invalid interpretation contract
     отображается как HTTP 422. Найденные degradation cases не имеют скрытого
-    fallback. До cutover остаются distributed turn reservation, fault injection,
-    end-to-end load и полный regression.
+    fallback. Перед cutover остаются повторный DB-backed acceptance и решение
+    владельца системы о переключении entry point.
 
 Полный regression и решение о production cutover выполняются отдельным
 checkpoint после завершения разработки этапов.

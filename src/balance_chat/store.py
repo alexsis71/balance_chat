@@ -374,14 +374,18 @@ class PostgresContextStore:
     def validate(self) -> None:
         with self._connection() as connection, connection.cursor() as cursor:
             cursor.execute(
-                "SELECT to_regclass(%s), to_regclass(%s)",
+                "SELECT to_regclass(%s), to_regclass(%s), to_regclass(%s), "
+                "to_regclass(%s), to_regclass(%s)",
                 (
                     f"{self.schema}.context_sessions_v2",
                     f"{self.schema}.context_mutations_v2",
+                    f"{self.schema}.context_turn_reservations_v2",
+                    f"{self.schema}.context_request_results_v2",
+                    f"{self.schema}.result_memory_outbox_v2",
                 ),
             )
-            sessions, mutations = cursor.fetchone()
-        if sessions is None or mutations is None:
+            tables = cursor.fetchone()
+        if any(item is None for item in tables):
             raise ContextStoreError("context contract V2 schema is not ready")
 
     def create(self, session_id: str, metadata=None) -> ContextContractV2:
@@ -427,7 +431,7 @@ class PostgresContextStore:
                 )
                 cursor.execute(
                     f"SELECT revision FROM {self.schema}.context_sessions_v2 "
-                    "WHERE session_id = %s::uuid",
+                    "WHERE session_id = %s::uuid AND deleted_at IS NULL",
                     (session_id,),
                 )
                 row = cursor.fetchone()
@@ -525,7 +529,7 @@ class PostgresContextStore:
             with self._connection() as connection, connection.cursor() as cursor:
                 cursor.execute(
                     f"SELECT payload FROM {self.schema}.context_sessions_v2 "
-                    "WHERE session_id = %s::uuid",
+                    "WHERE session_id = %s::uuid AND deleted_at IS NULL",
                     (session_id,),
                 )
                 row = cursor.fetchone()
@@ -540,8 +544,9 @@ class PostgresContextStore:
         try:
             with self._connection() as connection, connection.cursor() as cursor:
                 cursor.execute(
-                    f"DELETE FROM {self.schema}.context_sessions_v2 "
-                    "WHERE session_id = %s::uuid",
+                    f"UPDATE {self.schema}.context_sessions_v2 "
+                    "SET deleted_at = now(), updated_at = now() "
+                    "WHERE session_id = %s::uuid AND deleted_at IS NULL",
                     (session_id,),
                 )
                 deleted = cursor.rowcount == 1
@@ -569,7 +574,7 @@ class PostgresContextStore:
             with self._connection() as connection, connection.cursor() as cursor:
                 cursor.execute(
                     f"SELECT revision, payload FROM {self.schema}.context_sessions_v2 "
-                    "WHERE session_id = %s::uuid FOR UPDATE",
+                    "WHERE session_id = %s::uuid AND deleted_at IS NULL FOR UPDATE",
                     (session_id,),
                 )
                 row = cursor.fetchone()

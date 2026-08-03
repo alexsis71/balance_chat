@@ -172,6 +172,33 @@ def test_store_reserves_one_inflight_turn_per_session() -> None:
     store.reserve(state.session_id, 0, "request-2")
 
 
+def test_no_data_keeps_active_successful_scope_and_records_attempt() -> None:
+    state = apply_context_transition(
+        ContextContractV2(session_id="session"),
+        _initial_mutation(),
+        TransitionOutcome.SUCCESS,
+    )
+    attempted = AnalysisIntent(
+        operation=Operation.SHOW,
+        operands=[AnalysisOperand(operand_id="missing", metric="stock")],
+        periods=[PeriodRef(date_from="2025-06-01", date_to="2025-07-01")],
+    )
+
+    updated = apply_context_transition(
+        state,
+        ContextMutation(
+            turn_id="turn-no-data",
+            user_message="покажи отсутствующие данные",
+            replace_intent=attempted,
+        ),
+        TransitionOutcome.NO_DATA,
+    )
+
+    assert updated.active_dialog_scope.intent == state.active_dialog_scope.intent
+    assert updated.last_attempted_scope.intent == attempted
+    assert updated.last_successful_scope.intent == state.last_successful_scope.intent
+
+
 def test_sqlite_store_recovers_context_after_reopen() -> None:
     with tempfile.TemporaryDirectory() as temporary_directory:
         path = Path(temporary_directory) / "context.sqlite3"

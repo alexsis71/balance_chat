@@ -285,7 +285,7 @@ class PipelineV2TurnProcessor:
                     "canonical grouping result is invalid",
                     code="native_grouping_failed",
                 ) from exc
-        facts = [item.model_dump(mode="json") for item in grouped]
+        facts = [_safe_mapping(item.model_dump(mode="json")) for item in grouped]
         result_ref = (
             _grouped_result_reference(mutation.turn_id, intent, facts)
             if outcome == TransitionOutcome.SUCCESS else None
@@ -733,7 +733,7 @@ def _outcome(status: str) -> TransitionOutcome:
 
 def _result_reference(turn_id, native, intent) -> ResultReference:
     facts = [
-        item.fact.model_dump(mode="json")
+        _safe_mapping(item.fact.model_dump(mode="json"))
         for item in native.task_results
         if item.fact is not None
     ]
@@ -798,7 +798,11 @@ def _native_memory_summary(native) -> dict[str, Any]:
 
 
 def _standalone_facts(envelope: dict[str, Any]) -> list[dict[str, Any]]:
-    rows = [dict(item) for item in (envelope.get("rows") or []) if isinstance(item, dict)]
+    rows = [
+        _safe_mapping(item)
+        for item in (envelope.get("rows") or [])
+        if isinstance(item, dict)
+    ]
     if rows:
         return rows
     return [{"status": str(envelope.get("status") or "ok")}]
@@ -809,7 +813,7 @@ def _public_native_result(native) -> dict[str, Any]:
         "operation": native.operation.value,
         "status": native.status,
         "facts": [
-            item.fact.model_dump(mode="json")
+            _safe_mapping(item.fact.model_dump(mode="json"))
             for item in native.task_results
             if item.fact is not None
         ],
@@ -822,9 +826,26 @@ def _public_native_result(native) -> dict[str, Any]:
 def _public_pipeline_result(envelope: dict[str, Any]) -> dict[str, Any]:
     return {
         "status": envelope.get("status"),
-        "rows": envelope.get("rows") or [],
+        "rows": [
+            _safe_mapping(item)
+            for item in (envelope.get("rows") or [])
+            if isinstance(item, dict)
+        ],
         "summary": envelope.get("summary") if isinstance(envelope.get("summary"), dict) else None,
         "warnings": envelope.get("warnings") or [],
+    }
+
+
+_PRIVATE_RESULT_FIELDS = {
+    "provenance", "raw_rows", "raw", "sql", "rendered_sql", "params", "debug"
+}
+
+
+def _safe_mapping(value: dict[str, Any]) -> dict[str, Any]:
+    return {
+        str(key): item
+        for key, item in dict(value).items()
+        if str(key).casefold() not in _PRIVATE_RESULT_FIELDS
     }
 
 

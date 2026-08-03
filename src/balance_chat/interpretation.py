@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import hashlib
 import logging
 from pathlib import Path
 import re
@@ -88,7 +89,12 @@ class UnifiedInterpreter:
                 "interpretation_contract_invalid",
                 request_id=request_id,
                 error_type=type(exc).__name__,
-                model_payload=raw,
+                model_payload_sha256=(
+                    hashlib.sha256(
+                        json.dumps(raw, ensure_ascii=False, default=str, sort_keys=True).encode("utf-8")
+                    ).hexdigest()
+                    if raw is not None else None
+                ),
                 exc_info=True,
             )
             raise InterpretationError("interpretation contract validation failed") from exc

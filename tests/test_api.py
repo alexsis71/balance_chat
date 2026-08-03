@@ -312,6 +312,30 @@ def test_degraded_health_returns_service_unavailable() -> None:
     assert response.json()["checks"]["context_model"] == {"ready": False}
 
 
+def test_optional_api_key_protects_chat_but_not_health() -> None:
+    processor = FakeProcessor()
+    service = BalanceChatService(InMemoryContextStore(), processor)
+    client = TestClient(create_app(service, api_key="secret"))
+
+    assert client.get("/api/v2/health").status_code == 200
+    assert client.post("/api/v2/chat/sessions").status_code == 401
+    assert client.post(
+        "/api/v2/chat/sessions",
+        headers={"x-api-key": "secret"},
+    ).status_code == 201
+
+
+def test_chat_message_has_bounded_length() -> None:
+    client, _ = _client()
+    session_id = client.post("/api/v2/chat/sessions").json()["session"]["session_id"]
+    response = client.post("/api/v2/chat", json={
+        "session_id": session_id,
+        "expected_revision": 0,
+        "message": "x" * 4001,
+    })
+    assert response.status_code == 422
+
+
 def test_invalid_interpretation_contract_returns_http_422() -> None:
     service = BalanceChatService(InMemoryContextStore(), InvalidContractProcessor())
     client = TestClient(create_app(service))

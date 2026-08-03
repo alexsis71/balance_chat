@@ -123,6 +123,8 @@ def _update_entity_memory(
             if existing:
                 existing.last_turn_id = turn_id
                 existing.mention_count += 1
+                memory.remove(existing)
+                memory.append(existing)
             else:
                 entry = EntityMemoryEntry(
                     role=reference.role,
@@ -132,7 +134,7 @@ def _update_entity_memory(
                 )
                 memory.append(entry)
                 index[key] = entry
-    return memory
+    return memory[-100:]
 
 
 def apply_context_transition(
@@ -151,11 +153,13 @@ def apply_context_transition(
     updated = state.model_copy(deep=True)
     updated.revision += 1
     updated.updated_at = now
-    updated.active_dialog_scope = scope
     updated.last_attempted_scope = scope.model_copy(deep=True)
     if outcome == TransitionOutcome.SUCCESS:
+        updated.active_dialog_scope = scope
         updated.last_successful_scope = scope.model_copy(deep=True)
-    updated.entity_memory = _update_entity_memory(updated, intent, mutation.turn_id)
+        updated.entity_memory = _update_entity_memory(updated, intent, mutation.turn_id)
+    elif outcome == TransitionOutcome.CLARIFICATION and updated.active_dialog_scope is None:
+        updated.active_dialog_scope = scope
     updated.recent_turns.append(
         TurnReference(
             turn_id=mutation.turn_id,

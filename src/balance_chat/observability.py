@@ -50,7 +50,13 @@ def configure_logging(config_path: Path, section: Mapping[str, Any] | None) -> P
     file_handler.setFormatter(formatter)
 
     logger = logging.getLogger("balance_chat")
+    old_handlers = list(logger.handlers)
     logger.handlers.clear()
+    for handler in old_handlers:
+        try:
+            handler.close()
+        except Exception:
+            pass
     logger.addHandler(file_handler)
     logger.setLevel(level)
     logger.propagate = False
