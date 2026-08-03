@@ -51,7 +51,7 @@ class PipelineV2TurnProcessor:
         self.result_memory = result_memory
         self.planner = planner or NativeMultiOperandPlanner()
         self.policy = policy or HybridInterpretationPolicy()
-        self.translator = PipelineEnvelopeTranslator()
+        self.translator = PipelineEnvelopeTranslator(registry)
         try:
             self._normalize_lemmas = runtime._import_pipeline_module(
                 "pipeline_v2.nlp_ru"

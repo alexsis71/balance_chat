@@ -82,6 +82,53 @@ def test_degraded_comparison_is_rejected_explicitly() -> None:
         PipelineEnvelopeTranslator().intent(envelope)
 
 
+def test_multi_source_geo_period_comparison_becomes_one_canonical_operand() -> None:
+    envelope = _envelope()
+    plan = envelope["debug"]["resolved_plan"]
+    plan["_intent"].update(
+        {
+            "intent": "compare",
+            "geo": "самарская область",
+            "periods": [
+                {"date_from": "2025-12-01", "date_to": "2026-03-01"},
+                {"date_from": "2025-06-01", "date_to": "2025-09-01"},
+            ],
+        }
+    )
+    plan["operation"] = "compare_periods"
+    plan["periods"] = [
+        ["2025-12-01", "2026-03-01"],
+        ["2025-06-01", "2025-09-01"],
+    ]
+    base = plan["expressions"][0]
+    base["geo"] = [{"label": "самарская область"}]
+    plan["expressions"] = [
+        {**base, "balance": {"id": "BAL:1", "label": "Баланс 1"}},
+        {**base, "balance": {"id": "BAL:2", "label": "Баланс 2"}},
+        {**base, "balance": {"id": "BAL:3", "label": "Баланс 3"}},
+    ]
+    registry = SimpleNamespace(
+        geo=lambda value: SimpleNamespace(
+            geo_id="GEO:samara-region",
+            canonical_name="Самарская область",
+        ) if value == "самарская область" else None
+    )
+
+    intent = PipelineEnvelopeTranslator(registry).intent(envelope)
+
+    assert intent.operation == Operation.COMPARE_PERIODS
+    assert len(intent.operands) == 1
+    assert intent.operands[0].entities[0].role == "destination"
+    assert intent.operands[0].entities[0].entity.entity_id == "GEO:samara-region"
+    assert [
+        (period.date_from.isoformat(), period.date_to.isoformat())
+        for period in intent.periods
+    ] == [
+        ("2025-12-01", "2026-03-01"),
+        ("2025-06-01", "2025-09-01"),
+    ]
+
+
 def test_peer_geo_adapter_uses_shared_semantics_not_degraded_expressions() -> None:
     envelope = _envelope()
     envelope["debug"]["resolved_plan"]["_intent"]["intent"] = "compare"

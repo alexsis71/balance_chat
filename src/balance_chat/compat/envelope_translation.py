@@ -23,12 +23,18 @@ class EnvelopeTranslationError(ValueError):
 class PipelineEnvelopeTranslator:
     """Translate current unified resolved plans without changing their semantics."""
 
+    def __init__(self, registry: Any | None = None) -> None:
+        self.registry = registry
+
     def intent(self, envelope: Mapping[str, Any]) -> AnalysisIntent:
         plan = _resolved_plan(envelope)
         raw_intent = plan.get("_intent") if isinstance(plan.get("_intent"), Mapping) else {}
         requested_operation = _operation(raw_intent.get("intent") or plan.get("operation"))
         operation = _operation(plan.get("operation") or raw_intent.get("intent"))
-        if requested_operation == Operation.COMPARE and operation != Operation.COMPARE:
+        if requested_operation == Operation.COMPARE and operation not in {
+            Operation.COMPARE,
+            Operation.COMPARE_PERIODS,
+        }:
             raise EnvelopeTranslationError("resolved_comparison_degraded")
         periods = _periods(plan, raw_intent)
         expressions = [
@@ -42,7 +48,16 @@ class PipelineEnvelopeTranslator:
                     expanded.append({**expression, "geo": [geo]})
             else:
                 expanded.append(expression)
-        operands = [self._operand(item, index) for index, item in enumerate(expanded)]
+        logical_period_operand = self._logical_period_operand(
+            operation,
+            raw_intent,
+            expanded,
+        )
+        operands = (
+            [logical_period_operand]
+            if logical_period_operand is not None
+            else [self._operand(item, index) for index, item in enumerate(expanded)]
+        )
         if not operands:
             metric = str(raw_intent.get("metric") or "").strip()
             if not metric:
@@ -55,6 +70,49 @@ class PipelineEnvelopeTranslator:
             operands=operands,
             periods=periods,
             grain=raw_intent.get("period_grain") or None,
+        )
+
+    def _logical_period_operand(
+        self,
+        operation: Operation,
+        raw_intent: Mapping[str, Any],
+        expressions: list[Mapping[str, Any]],
+    ) -> AnalysisOperand | None:
+        """Collapse physical balance rows only for one registry-backed GEO target."""
+        if operation != Operation.COMPARE_PERIODS or len(expressions) < 2:
+            return None
+        geo_text = str(raw_intent.get("geo") or "").strip()
+        geo = self.registry.geo(geo_text) if self.registry is not None and geo_text else None
+        if geo is None:
+            raise EnvelopeTranslationError(
+                "multi-source period comparison lacks one canonical GEO target"
+            )
+        metrics = {
+            str(item.get("canonical_metric") or item.get("metric") or "").strip()
+            for item in expressions
+        }
+        aggregates = {
+            str(item.get("aggregate_type") or "sum").strip()
+            for item in expressions
+        }
+        if "" in metrics or len(metrics) != 1 or len(aggregates) != 1:
+            raise EnvelopeTranslationError(
+                "multi-source period comparison has inconsistent scalar semantics"
+            )
+        return AnalysisOperand(
+            operand_id="operand_1",
+            metric=next(iter(metrics)),
+            aggregate_type=next(iter(aggregates)),
+            entities=[
+                OperandEntityRef(
+                    role="destination",
+                    entity=CanonicalEntityRef(
+                        entity_id=str(geo.geo_id),
+                        entity_type="geo_object",
+                        display_name=str(geo.canonical_name),
+                    ),
+                )
+            ],
         )
 
     def peer_entity_intent(
