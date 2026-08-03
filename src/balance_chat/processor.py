@@ -11,18 +11,23 @@ from uuid import uuid4
 from .binding import ContextBindingError, InterpretationMutationCompiler
 from .compat.envelope_translation import PipelineEnvelopeTranslator
 from .contracts import (
+    AnalysisIntent,
+    AnalysisOperand,
     CanonicalEntityRef,
     ClarificationAnswer,
     ContextContractV2,
     ContextMutation,
+    GroupingSpec,
     InterpretationMode,
     MetadataVersionRef,
     OperandEntityRef,
     Operation,
     ResultReference,
+    ResultMemoryWrite,
     TransitionOutcome,
 )
 from .execution import NativeExecutor
+from .grouping import CanonicalGroupAggregator, GroupingError, member_facts_from_rows
 from .interpretation import HybridInterpretationPolicy, InterpretationError, UnifiedInterpreter
 from .planning import NativeMultiOperandPlanner, PlanningError
 from .result_memory import PipelineResultMemoryAdapter
@@ -100,13 +105,27 @@ class PipelineV2TurnProcessor:
             )
         grouping_query = _deterministic_grouping_query(state, message)
         if grouping_query is not None:
-            return self._standalone(
-                state,
-                message=grouping_query,
+            scope = state.active_dialog_scope
+            mutation = ContextMutation(
+                turn_id=turn_id,
                 user_message=message,
+                normalized_message=grouping_query,
+                replace_intent=AnalysisIntent(
+                    operation=Operation.GROUP,
+                    operands=[AnalysisOperand(
+                        operand_id="grouped",
+                        metric=scope.intent.operands[0].metric,
+                    )],
+                    periods=list(scope.intent.periods),
+                    grouping=[GroupingSpec(dimension="geo_group")],
+                ),
+            )
+            return self._execute_grouping_mutation(
+                state,
+                mutation,
+                normalized_message=grouping_query,
                 execute_db=execute_db,
                 request_id=request_id,
-                turn_id=turn_id,
                 started=started,
                 interpretation_mode="deterministic_context_grouping",
             )
@@ -204,6 +223,17 @@ class PipelineV2TurnProcessor:
                 "interpretation could not be bound to canonical metadata",
                 code="interpretation_binding_failed",
             ) from exc
+        if mutation.replace_intent.grouping or mutation.replace_intent.operation == Operation.GROUP:
+            return self._execute_grouping_mutation(
+                state,
+                mutation,
+                normalized_message=decision.normalized_message,
+                execute_db=execute_db,
+                request_id=request_id,
+                started=started,
+                interpretation_mode=decision.mode.value,
+                decision=decision,
+            )
         return self._execute_mutation(
             state,
             mutation,
@@ -214,6 +244,85 @@ class PipelineV2TurnProcessor:
             interpretation_mode=decision.mode.value,
             memory_chunks=memory_chunks,
             decision=decision,
+        )
+
+    def _execute_grouping_mutation(
+        self,
+        state,
+        mutation,
+        *,
+        normalized_message,
+        execute_db,
+        request_id,
+        started,
+        interpretation_mode,
+        decision=None,
+    ):
+        intent = mutation.replace_intent
+        if len(intent.operands) != 1 or len(intent.grouping) != 1:
+            raise TurnProcessingError(
+                "grouping requires one operand and one canonical dimension",
+                code="native_grouping_failed",
+            )
+        envelope = self.runtime.execute_raw(
+            normalized_message,
+            execute_db=execute_db,
+            request_id=request_id,
+        )
+        status = str(envelope.get("status") or "error")
+        outcome = _outcome(status)
+        grouped = []
+        if outcome == TransitionOutcome.SUCCESS:
+            try:
+                members = member_facts_from_rows(
+                    envelope.get("rows") or [],
+                    dimension=intent.grouping[0].dimension,
+                    default_unit=envelope.get("unit"),
+                )
+                grouped = CanonicalGroupAggregator().aggregate(members)
+            except (GroupingError, ValueError) as exc:
+                raise TurnProcessingError(
+                    "canonical grouping result is invalid",
+                    code="native_grouping_failed",
+                ) from exc
+        facts = [item.model_dump(mode="json") for item in grouped]
+        result_ref = (
+            _grouped_result_reference(mutation.turn_id, intent, facts)
+            if outcome == TransitionOutcome.SUCCESS else None
+        )
+        return TurnProcessResult(
+            mutation=mutation,
+            outcome=outcome,
+            response={
+                "operation": Operation.GROUP.value,
+                "status": status,
+                "facts": facts,
+                "warnings": envelope.get("warnings") or [],
+            },
+            result_reference=result_ref,
+            memory_write=(
+                _memory_write(
+                    mutation.turn_id,
+                    normalized_message,
+                    intent,
+                    result_ref,
+                    facts,
+                    {"title": "Сгруппированный результат"},
+                )
+                if result_ref is not None and execute_db and state.metadata else None
+            ),
+            diagnostics={
+                "interpretation": {
+                    "mode": interpretation_mode,
+                    "source": "qwen" if decision is not None else "deterministic",
+                    "confidence": decision.confidence if decision is not None else 1.0,
+                },
+                "execution": {
+                    "task_count": 1,
+                    "group_count": len(grouped),
+                    "elapsed_ms": int((perf_counter() - started) * 1000),
+                },
+            },
         )
 
     def _deterministic_geo_mutation(self, state, message: str, turn_id: str):
@@ -452,21 +561,18 @@ class PipelineV2TurnProcessor:
         memory_diag: dict[str, Any] = self.result_memory.safe_diagnostics(memory_chunks) if self.result_memory else {}
         if outcome == TransitionOutcome.SUCCESS:
             result_ref = _result_reference(mutation.turn_id, native, intent)
-            if self.result_memory and execute_db and state.metadata:
-                persisted = self.result_memory.persist(
-                    session_id=state.session_id,
-                    revision=state.revision + 1,
-                    turn_id=mutation.turn_id,
-                    query=normalized_message,
-                    intent=intent,
-                    result=native,
-                    metadata=state.metadata,
-                    result_id=result_ref.result_id,
-                )
-                memory_diag.update(
-                    persisted=bool(persisted.get("persisted")),
-                    stored_chunks=int(persisted.get("chunks") or 0),
-                )
+        memory_write = (
+            _memory_write(
+                mutation.turn_id,
+                normalized_message,
+                intent,
+                result_ref,
+                result_ref.facts,
+                _native_memory_summary(native),
+            )
+            if result_ref is not None and self.result_memory and execute_db and state.metadata
+            else None
+        )
         diagnostics = (
             _diagnostics(decision, memory_chunks, len(plan.tasks), started)
             if decision is not None
@@ -488,6 +594,7 @@ class PipelineV2TurnProcessor:
             outcome=outcome,
             response=_public_native_result(native),
             result_reference=result_ref,
+            memory_write=memory_write,
             diagnostics=diagnostics,
         )
 
@@ -529,10 +636,31 @@ class PipelineV2TurnProcessor:
             normalized_message=message,
             replace_intent=intent,
         )
+        outcome = _outcome(status)
+        result_ref = None
+        memory_write = None
+        if outcome == TransitionOutcome.SUCCESS:
+            facts = _standalone_facts(envelope)
+            result_ref = _grouped_result_reference(turn_id, intent, facts)
+            if self.result_memory and execute_db and state.metadata:
+                summary = (
+                    envelope.get("summary")
+                    if isinstance(envelope.get("summary"), dict) else {}
+                )
+                memory_write = _memory_write(
+                    turn_id,
+                    message,
+                    intent,
+                    result_ref,
+                    facts,
+                    summary,
+                )
         return TurnProcessResult(
             mutation=mutation,
-            outcome=_outcome(status),
+            outcome=outcome,
             response=_public_pipeline_result(envelope),
+            result_reference=result_ref,
+            memory_write=memory_write,
             diagnostics={
                 "interpretation": {
                     "mode": interpretation_mode,
@@ -624,6 +752,56 @@ def _result_reference(turn_id, native, intent) -> ResultReference:
         row_count=len(facts),
         facts=facts,
     )
+
+
+def _grouped_result_reference(turn_id, intent, facts) -> ResultReference:
+    digest = hashlib.sha256(
+        json.dumps(
+            {"intent": intent.model_dump(mode="json"), "facts": facts},
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+        ).encode("utf-8")
+    ).hexdigest()
+    return ResultReference(
+        turn_id=turn_id,
+        status=TransitionOutcome.SUCCESS,
+        resolved_plan_hash=f"sha256:{digest}",
+        row_count=len(facts),
+        facts=facts,
+    )
+
+
+def _memory_write(turn_id, query, intent, result_ref, facts, summary):
+    return ResultMemoryWrite(
+        turn_id=turn_id,
+        query=query,
+        intent=intent,
+        result_id=result_ref.result_id,
+        facts=facts,
+        summary=summary or {},
+    )
+
+
+def _native_memory_summary(native) -> dict[str, Any]:
+    if native.comparison is not None:
+        comparison = native.comparison
+        return {
+            "title": "Сохранённое сравнение",
+            "text": (
+                f"baseline={comparison.baseline_value} {comparison.unit}; "
+                f"target={comparison.target_value} {comparison.unit}; "
+                f"delta={comparison.delta} {comparison.unit}"
+            ),
+        }
+    return {"title": "Сохранённый deterministic результат"}
+
+
+def _standalone_facts(envelope: dict[str, Any]) -> list[dict[str, Any]]:
+    rows = [dict(item) for item in (envelope.get("rows") or []) if isinstance(item, dict)]
+    if rows:
+        return rows
+    return [{"status": str(envelope.get("status") or "ok")}]
 
 
 def _public_native_result(native) -> dict[str, Any]:

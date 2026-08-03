@@ -330,6 +330,58 @@ def test_context_grouping_query_inherits_metric_and_period() -> None:
         TransitionOutcome.SUCCESS,
     )
 
+
+def test_context_grouping_executes_canonical_group_contract() -> None:
+    state = apply_context_transition(
+        ContextContractV2(session_id="session"),
+        ContextMutation(
+            turn_id="turn-1",
+            user_message="поставки по областям",
+            replace_intent=AnalysisIntent(
+                operation=Operation.SHOW,
+                operands=[AnalysisOperand(operand_id="regions", metric="distribution")],
+                periods=[PeriodRef(date_from="2025-04-01", date_to="2025-05-01")],
+            ),
+        ),
+        TransitionOutcome.SUCCESS,
+    )
+
+    class GroupedRuntime(RawRuntime):
+        def _import_pipeline_module(self, _name):
+            raise ImportError
+
+        def execute_raw(self, *_args, **_kwargs):
+            return {
+                "status": "ok",
+                "unit": "тыс. м3",
+                "rows": [
+                    {"geo_id": "GEO:ul", "geo": "Ульяновская область", "fact_value": 10},
+                    {"geo_id": "GEO:ul", "geo": "ульяновская обл", "fact_value": 5},
+                ],
+            }
+
+    registry = SimpleNamespace(geo_objects=(), geo_groups=(), routes=())
+    processor = PipelineV2TurnProcessor(
+        runtime=GroupedRuntime(),
+        registry=registry,
+        interpreter=object(),
+        compiler=object(),
+        executor=object(),
+        policy=NeverCalled(),
+    )
+
+    processed = processor.process(
+        state,
+        message="суммируй данные по областям",
+        execute_db=True,
+        clarification=None,
+        request_id="request",
+    )
+
+    assert processed.mutation.replace_intent.operation == Operation.GROUP
+    assert processed.response["facts"][0]["entity_id"] == "GEO:ul"
+    assert processed.response["facts"][0]["value"] == "15"
+
     assert _deterministic_grouping_query(
         state, "суммируй данные по областям"
     ) == (
