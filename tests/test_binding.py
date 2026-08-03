@@ -214,3 +214,77 @@ def test_peer_geo_comparison_copies_shared_balance_to_each_operand() -> None:
     assert [
         operand.entities[-1].entity.display_name for operand in intent.operands
     ] == ["Казань", "Ярославль"]
+
+
+def test_multi_operand_keep_preserves_each_operand_entities() -> None:
+    state = ContextContractV2(session_id="session")
+    intent = AnalysisIntent(
+        operation=Operation.COMPARE,
+        operands=[
+            AnalysisOperand(
+                operand_id="kazan",
+                metric="distribution",
+                entities=[OperandEntityRef(
+                    role="destination",
+                    entity=CanonicalEntityRef(
+                        entity_id="geo:kazan",
+                        entity_type="geo_object",
+                        display_name="Казань",
+                    ),
+                )],
+            ),
+            AnalysisOperand(
+                operand_id="yaroslavl",
+                metric="distribution",
+                entities=[OperandEntityRef(
+                    role="destination",
+                    entity=CanonicalEntityRef(
+                        entity_id="geo:yaroslavl",
+                        entity_type="geo_object",
+                        display_name="Ярославль",
+                    ),
+                )],
+            ),
+        ],
+        periods=[PeriodRef(date_from="2025-05-01", date_to="2025-06-01")],
+    )
+    state = apply_context_transition(
+        state,
+        ContextMutation(
+            turn_id="turn-1",
+            user_message="сравни Казань и Ярославль",
+            replace_intent=intent,
+        ),
+        TransitionOutcome.SUCCESS,
+    )
+    keep = {"action": "keep", "value": None, "source_scope": None}
+    decision = InterpretationDecision.model_validate({
+        "mode": "mutation",
+        "normalized_message": "а за июнь 2025",
+        "confidence": 0.99,
+        "draft": {
+            "operation": keep,
+            "metrics": {"action": "keep", "values": [], "source_scope": None},
+            "aggregate_type": keep,
+            "periods": {"action": "set", "values": [
+                {"date_from": "2025-06-01", "date_to": "2025-07-01"}
+            ]},
+            "entities": {"action": "keep", "mentions": []},
+            "grouping": {"action": "keep", "values": [], "source_scope": None},
+            "grain": keep,
+            "reverse_direction": False,
+        },
+        "metadata_bundle_version": "2026.07.6",
+    })
+
+    mutation = InterpretationMutationCompiler(RegistryEntityBinder(_registry())).compile(
+        decision,
+        state,
+        turn_id="turn-2",
+        user_message="а за июнь 2025",
+    )
+
+    assert [
+        operand.entities[0].entity.display_name
+        for operand in mutation.replace_intent.operands
+    ] == ["Казань", "Ярославль"]

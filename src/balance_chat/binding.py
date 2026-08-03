@@ -276,6 +276,22 @@ class InterpretationMutationCompiler:
                     )
                     for index, entity in enumerate(by_role[varying_role])
                 ]
+        if entity_action == "keep" and existing:
+            if len(metrics) != len(existing):
+                raise ContextBindingError(
+                    "keeping entities requires preserving operand topology"
+                )
+            return [
+                AnalysisOperand(
+                    operand_id=template.operand_id,
+                    metric=metrics[index],
+                    aggregate_type=template.aggregate_type,
+                    entities=deepcopy(template.entities),
+                    periods=deepcopy(template.periods),
+                    unit=template.unit,
+                )
+                for index, template in enumerate(existing)
+            ]
         output: list[AnalysisOperand] = []
         for index, metric in enumerate(metrics):
             template = existing[min(index, len(existing) - 1)] if existing else None
