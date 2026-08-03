@@ -316,6 +316,38 @@ def test_explicit_compare_with_month_preserves_canonical_baseline() -> None:
     ]
 
 
+def test_two_named_seasons_inherit_operand_and_context_year() -> None:
+    state = apply_context_transition(
+        ContextContractV2(session_id="session"),
+        ContextMutation(
+            turn_id="turn-1",
+            user_message="Самара зимой и летом 2025",
+            replace_intent=AnalysisIntent(
+                operation=Operation.COMPARE_PERIODS,
+                operands=[AnalysisOperand(operand_id="samara", metric="distribution")],
+                periods=[
+                    PeriodRef(date_from="2025-12-01", date_to="2026-03-01"),
+                    PeriodRef(date_from="2025-06-01", date_to="2025-09-01"),
+                ],
+            ),
+        ),
+        TransitionOutcome.SUCCESS,
+    )
+
+    mutation = _deterministic_period_mutation(
+        state, "сравни лето и осень", "turn-2"
+    )
+
+    assert mutation.replace_intent.operands[0].operand_id == "samara"
+    assert [
+        (item.date_from.isoformat(), item.date_to.isoformat())
+        for item in mutation.replace_intent.periods
+    ] == [
+        ("2025-06-01", "2025-09-01"),
+        ("2025-09-01", "2025-12-01"),
+    ]
+
+
 def test_peer_entity_detection_does_not_turn_route_into_entity_comparison() -> None:
     assert _peer_destination_mentions(
         "Сравни поставки в Казань и Ярославль за май 2025"

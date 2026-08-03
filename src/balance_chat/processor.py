@@ -22,6 +22,7 @@ from .contracts import (
     MetadataVersionRef,
     OperandEntityRef,
     Operation,
+    PeriodRef,
     ResultReference,
     ResultMemoryWrite,
     TransitionOutcome,
@@ -875,12 +876,37 @@ _MONTHS = (
     (r"\bноябр\w*", 11), (r"\bдекабр\w*", 12),
 )
 
+_SEASONS = (
+    (r"\bвесн\w*", 3, 6, "весна"),
+    (r"\bлет\w*", 6, 9, "лето"),
+    (r"\bосен\w*", 9, 12, "осень"),
+    (r"\bзим\w*", 12, 3, "зима"),
+)
+
 
 def _deterministic_period_mutation(state, message: str, turn_id: str):
     scope = state.active_dialog_scope
     if scope is None or len(scope.intent.operands) != 1:
         return None
     text = str(message).strip().lower().replace("ё", "е")
+    if re.search(r"\bсравн\w*", text):
+        named = _named_comparison_periods(scope.intent, text)
+        if len(named) == 2:
+            intent = scope.intent.model_copy(
+                update={
+                    "operation": Operation.COMPARE_PERIODS,
+                    "periods": named,
+                    "comparison": None,
+                    "grouping": [],
+                },
+                deep=True,
+            )
+            return ContextMutation(
+                turn_id=turn_id,
+                user_message=message,
+                normalized_message=message,
+                replace_intent=intent,
+            )
     if not re.search(r"\bсравн\w*\s+с\b", text):
         return None
     month = next((number for pattern, number in _MONTHS if re.search(pattern, text)), None)
@@ -895,8 +921,6 @@ def _deterministic_period_mutation(state, message: str, turn_id: str):
         return None
     date_from = date(year, month, 1)
     date_to = date(year + 1, 1, 1) if month == 12 else date(year, month + 1, 1)
-    from .contracts import Operation, PeriodRef
-
     target = PeriodRef(date_from=date_from, date_to=date_to)
     baseline = scope.intent.periods[-1] if scope.intent.periods else None
     if baseline is None or baseline == target:
@@ -916,6 +940,46 @@ def _deterministic_period_mutation(state, message: str, turn_id: str):
         normalized_message=message,
         replace_intent=intent,
     )
+
+
+def _named_comparison_periods(intent: AnalysisIntent, text: str) -> list[Any]:
+    years = [int(item) for item in re.findall(r"\b(20\d{2})\b", text)]
+    if years:
+        year = years[0]
+    else:
+        candidates = [period.date_from.year for period in intent.periods]
+        year = min(candidates) if candidates else date.today().year
+    matches: list[tuple[int, Any]] = []
+    for pattern, start_month, end_month, label in _SEASONS:
+        for match in re.finditer(pattern, text):
+            end_year = year + 1 if end_month <= start_month else year
+            matches.append((
+                match.start(),
+                PeriodRef(
+                    date_from=date(year, start_month, 1),
+                    date_to=date(end_year, end_month, 1),
+                    label=label,
+                ),
+            ))
+    if len(matches) < 2:
+        for pattern, month in _MONTHS:
+            for match in re.finditer(pattern, text):
+                next_month = month % 12 + 1
+                next_year = year + 1 if month == 12 else year
+                matches.append((
+                    match.start(),
+                    PeriodRef(
+                        date_from=date(year, month, 1),
+                        date_to=date(next_year, next_month, 1),
+                    ),
+                ))
+    ordered = [period for _position, period in sorted(matches, key=lambda item: item[0])]
+    unique = []
+    for period in ordered:
+        key = (period.date_from, period.date_to)
+        if key not in {(item.date_from, item.date_to) for item in unique}:
+            unique.append(period)
+    return unique[:2]
 
 
 def _official_name(value: str) -> str:

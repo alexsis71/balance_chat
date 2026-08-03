@@ -145,6 +145,10 @@ class AnalysisIntent(ContractModel):
                 raise ValueError("compare_periods requires exactly two global periods")
         if self.operation != Operation.COMPARE and self.comparison is not None:
             raise ValueError("comparison semantics are valid only for compare")
+        if self.operation == Operation.GROUP and not self.grouping:
+            raise ValueError("group requires a canonical grouping specification")
+        if self.operation != Operation.GROUP and self.grouping:
+            raise ValueError("grouping specification is valid only for group")
         return self
 
 
