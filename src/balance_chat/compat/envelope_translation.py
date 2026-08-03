@@ -118,7 +118,7 @@ class PipelineEnvelopeTranslator:
                     entity=CanonicalEntityRef(
                         entity_id=str(geo.geo_id),
                         entity_type="geo_object",
-                        display_name=str(geo.canonical_name),
+                        display_name=_display_name(geo.canonical_name),
                     ),
                 )
             ],
@@ -254,6 +254,11 @@ def _entity(role: str, entity_type: str, value: Mapping[str, Any]) -> OperandEnt
             display_name=str(value.get("label") or value.get("name") or value["id"]),
         ),
     )
+
+
+def _display_name(value: Any) -> str:
+    text = str(value).strip()
+    return text[:1].upper() + text[1:] if text else text
 
 
 def _operation(value: Any) -> Operation:
