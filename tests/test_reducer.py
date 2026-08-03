@@ -19,7 +19,12 @@ from balance_chat.contracts import (
     TransitionOutcome,
 )
 from balance_chat.reducer import ContextReductionError, apply_context_transition
-from balance_chat.store import InMemoryContextStore, RevisionConflict, SQLiteContextStore
+from balance_chat.store import (
+    InMemoryContextStore,
+    RevisionConflict,
+    SQLiteContextStore,
+    TurnInProgress,
+)
 
 
 def _entity(entity_id: str, name: str) -> OperandEntityRef:
@@ -153,6 +158,18 @@ def test_store_rejects_stale_revision() -> None:
             ),
             TransitionOutcome.SUCCESS,
         )
+
+
+def test_store_reserves_one_inflight_turn_per_session() -> None:
+    store = InMemoryContextStore()
+    state = store.create("session")
+    store.reserve(state.session_id, 0, "request-1")
+
+    with pytest.raises(TurnInProgress):
+        store.reserve(state.session_id, 0, "request-2")
+
+    store.release(state.session_id, "request-1")
+    store.reserve(state.session_id, 0, "request-2")
 
 
 def test_sqlite_store_recovers_context_after_reopen() -> None:

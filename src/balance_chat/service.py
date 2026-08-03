@@ -31,6 +31,12 @@ class TurnProcessingError(RuntimeError):
         self.code = code
 
 
+class MetadataSessionMismatch(RuntimeError):
+    def __init__(self, session_id: str) -> None:
+        super().__init__(f"session {session_id} belongs to another metadata bundle")
+        self.session_id = session_id
+
+
 class TurnProcessResult(ContractModel):
     mutation: ContextMutation
     outcome: TransitionOutcome
@@ -129,7 +135,13 @@ class BalanceChatService:
         request_id: str | None = None,
     ) -> dict[str, Any]:
         trace_id = request_id or str(uuid4())
+        get_cached = getattr(self.store, "get_request_result", None)
+        if request_id is not None and callable(get_cached):
+            cached = get_cached(session_id, trace_id)
+            if cached is not None:
+                return cached
         started = perf_counter()
+        reserved = False
         log_event(
             LOGGER,
             logging.INFO,
@@ -142,8 +154,13 @@ class BalanceChatService:
             clarification=(clarification.model_dump(mode="json") if clarification else None),
         )
         try:
+            reserve = getattr(self.store, "reserve", None)
+            if callable(reserve):
+                reserve(session_id, expected_revision, trace_id)
+                reserved = True
             with self._session_lock(session_id):
                 state = self.store.get(session_id)
+                self._validate_metadata(state)
                 if state.revision != expected_revision:
                     raise RevisionConflict(session_id, expected_revision, state.revision)
                 processed = self.processor.process(
@@ -160,6 +177,7 @@ class BalanceChatService:
                     processed.outcome,
                     result=processed.result_reference,
                     clarification_questions=processed.clarification_questions,
+                    memory_write=processed.memory_write,
                 )
                 memory_status: dict[str, Any] = {}
                 if (
@@ -174,6 +192,12 @@ class BalanceChatService:
                             metadata=committed.metadata,
                             write=processed.memory_write,
                         )
+                        if memory_status.get("persisted"):
+                            complete_memory = getattr(
+                                self.store, "complete_memory_write", None
+                            )
+                            if callable(complete_memory):
+                                complete_memory(session_id, committed.revision)
                     except Exception as memory_exc:
                         memory_status = {
                             "persisted": False,
@@ -201,6 +225,9 @@ class BalanceChatService:
                     "diagnostics": _safe_diagnostics(processed.diagnostics),
                     "request_id": trace_id,
                 }
+                save_cached = getattr(self.store, "save_request_result", None)
+                if callable(save_cached):
+                    save_cached(session_id, trace_id, response)
             intent = (
                 committed.active_dialog_scope.intent
                 if committed.active_dialog_scope is not None
@@ -271,10 +298,30 @@ class BalanceChatService:
                 exc_info=True,
             )
             raise
+        finally:
+            if reserved:
+                release = getattr(self.store, "release", None)
+                if callable(release):
+                    try:
+                        release(session_id, trace_id)
+                    except Exception:
+                        log_event(
+                            LOGGER,
+                            logging.ERROR,
+                            "turn_reservation_release_failed",
+                            request_id=trace_id,
+                            session_id=session_id,
+                        )
 
     def _session_lock(self, session_id: str) -> RLock:
         with self._locks_guard:
             return self._locks[session_id]
+
+    def _validate_metadata(self, state: ContextContractV2) -> None:
+        if self.metadata is None:
+            return
+        if state.metadata is None or state.metadata != self.metadata:
+            raise MetadataSessionMismatch(state.session_id)
 
 
 def _public_status(outcome: TransitionOutcome) -> str:

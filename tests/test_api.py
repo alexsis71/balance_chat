@@ -121,6 +121,24 @@ def test_stale_revision_is_rejected_before_processor() -> None:
     assert processor.calls == 1
 
 
+def test_request_id_replay_is_idempotent() -> None:
+    client, processor = _client()
+    session_id = client.post("/api/v2/chat/sessions").json()["session"]["session_id"]
+    payload = {
+        "session_id": session_id,
+        "expected_revision": 0,
+        "message": "Покажи поставки",
+        "request_id": "request-1",
+    }
+
+    first = client.post("/api/v2/chat", json=payload)
+    replay = client.post("/api/v2/chat", json=payload)
+
+    assert first.status_code == replay.status_code == 200
+    assert first.json() == replay.json()
+    assert processor.calls == 1
+
+
 def test_clarification_contract_is_exposed_to_ui() -> None:
     client, _ = _client()
     session_id = client.post("/api/v2/chat/sessions").json()["session"]["session_id"]
@@ -216,6 +234,36 @@ def test_result_memory_is_persisted_only_after_context_commit() -> None:
 
     assert observed["committed_revision"] == 1
     assert response["diagnostics"]["result_memory"]["persisted"] is True
+
+
+def test_session_from_another_metadata_bundle_is_rejected() -> None:
+    store = InMemoryContextStore()
+    processor = FakeProcessor()
+    old_metadata = MetadataVersionRef(
+        bundle_id="sha256:" + "a" * 64,
+        bundle_version="2026.07.6",
+        schema_version="1.1",
+    )
+    current_metadata = old_metadata.model_copy(update={
+        "bundle_id": "sha256:" + "b" * 64,
+        "bundle_version": "2026.07.7",
+    })
+    old_state = store.create("00000000-0000-0000-0000-000000000001", old_metadata)
+    client = TestClient(create_app(BalanceChatService(
+        store,
+        processor,
+        metadata=current_metadata,
+    )))
+
+    response = client.post("/api/v2/chat", json={
+        "session_id": old_state.session_id,
+        "expected_revision": 0,
+        "message": "Покажи поставки",
+    })
+
+    assert response.status_code == 409
+    assert response.json()["detail"]["code"] == "metadata_session_incompatible"
+    assert processor.calls == 0
 
 
 def test_delete_session_is_idempotent_and_ui_is_served() -> None:

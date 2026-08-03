@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import logging
 from pathlib import Path
 from typing import Any
 
@@ -15,6 +16,10 @@ from .processor import PipelineV2TurnProcessor, metadata_ref
 from .result_memory import PipelineResultMemoryAdapter
 from .service import BalanceChatService
 from .store import PostgresContextStore, SQLiteContextStore
+from .contracts import MetadataVersionRef, ResultMemoryWrite
+
+
+LOGGER = logging.getLogger("balance_chat.bootstrap")
 
 
 def build_application(config_path: str | Path):
@@ -26,6 +31,7 @@ def build_application(config_path: str | Path):
     registry = runtime.load_metadata_registry()
     store = _context_store(config, path, runtime)
     memory = _result_memory(config, runtime)
+    _drain_memory_outbox(store, memory)
     translator = PipelineEnvelopeTranslator()
     executor = NativeExecutor(
         PipelineScalarTaskRunner(runtime),
@@ -123,4 +129,28 @@ def _result_memory(config: dict[str, Any], runtime: PipelineRuntime):
         max_chunks=int(section.get("retrieval_limit") or 5),
         max_chunk_chars=int(section.get("max_chunk_chars") or 4000),
         max_total_chars=int(section.get("max_total_chars") or 12000),
+        ttl_s=int(section.get("ttl_s") or 86400),
     )
+
+
+def _drain_memory_outbox(store: Any, memory: PipelineResultMemoryAdapter | None) -> None:
+    pending = getattr(store, "pending_memory_writes", None)
+    complete = getattr(store, "complete_memory_write", None)
+    if memory is None or not callable(pending) or not callable(complete):
+        return
+    for item in pending(100):
+        try:
+            metadata = MetadataVersionRef.model_validate(item["metadata"])
+            write = ResultMemoryWrite.model_validate(item["write"])
+            result = memory.persist_write(
+                session_id=item["session_id"],
+                revision=item["revision"],
+                metadata=metadata,
+                write=write,
+            )
+            if result.get("persisted"):
+                complete(item["session_id"], item["revision"])
+        except Exception as exc:
+            logging.getLogger("balance_chat.bootstrap").warning(
+                "result memory outbox replay failed: %s", type(exc).__name__
+            )

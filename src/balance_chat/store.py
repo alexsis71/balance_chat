@@ -13,6 +13,7 @@ from uuid import UUID
 from .contracts import (
     ContextContractV2,
     ContextMutation,
+    ResultMemoryWrite,
     ResultReference,
     TransitionOutcome,
 )
@@ -37,12 +38,45 @@ class ContextStoreError(RuntimeError):
     pass
 
 
+class TurnInProgress(RuntimeError):
+    def __init__(self, session_id: str) -> None:
+        super().__init__(f"another turn is already processing for {session_id}")
+        self.session_id = session_id
+
+
 class InMemoryContextStore:
     """Reference store with optimistic concurrency; production stores use this boundary."""
 
     def __init__(self) -> None:
         self._states: dict[str, ContextContractV2] = {}
+        self._reservations: dict[str, str] = {}
+        self._request_results: dict[tuple[str, str], dict] = {}
         self._lock = RLock()
+
+    def reserve(self, session_id: str, expected_revision: int, request_id: str) -> None:
+        with self._lock:
+            current = self._states.get(session_id)
+            if current is None:
+                raise SessionNotFound(session_id)
+            if current.revision != expected_revision:
+                raise RevisionConflict(session_id, expected_revision, current.revision)
+            if session_id in self._reservations:
+                raise TurnInProgress(session_id)
+            self._reservations[session_id] = request_id
+
+    def release(self, session_id: str, request_id: str) -> None:
+        with self._lock:
+            if self._reservations.get(session_id) == request_id:
+                self._reservations.pop(session_id, None)
+
+    def get_request_result(self, session_id: str, request_id: str):
+        with self._lock:
+            value = self._request_results.get((session_id, request_id))
+            return json.loads(json.dumps(value)) if value is not None else None
+
+    def save_request_result(self, session_id: str, request_id: str, response: dict) -> None:
+        with self._lock:
+            self._request_results[(session_id, request_id)] = json.loads(json.dumps(response))
 
     def create(self, session_id: str, metadata=None) -> ContextContractV2:
         with self._lock:
@@ -72,6 +106,7 @@ class InMemoryContextStore:
         *,
         result: ResultReference | None = None,
         clarification_questions: list[dict] | None = None,
+        memory_write: ResultMemoryWrite | None = None,
     ) -> ContextContractV2:
         with self._lock:
             current = self._states.get(session_id)
@@ -120,6 +155,58 @@ class SQLiteContextStore:
             raise ContextStoreError("could not create context session") from exc
         return state
 
+    def reserve(self, session_id: str, expected_revision: int, request_id: str) -> None:
+        try:
+            with self._transaction() as connection:
+                row = connection.execute(
+                    "SELECT revision FROM context_sessions WHERE session_id = ?",
+                    (session_id,),
+                ).fetchone()
+                if row is None:
+                    raise SessionNotFound(session_id)
+                if int(row[0]) != expected_revision:
+                    raise RevisionConflict(session_id, expected_revision, int(row[0]))
+                try:
+                    connection.execute(
+                        "INSERT INTO context_turn_reservations "
+                        "(session_id, request_id) VALUES (?, ?)",
+                        (session_id, request_id),
+                    )
+                except sqlite3.IntegrityError as exc:
+                    raise TurnInProgress(session_id) from exc
+        except (SessionNotFound, RevisionConflict, TurnInProgress):
+            raise
+        except sqlite3.Error as exc:
+            raise ContextStoreError("could not reserve context turn") from exc
+
+    def release(self, session_id: str, request_id: str) -> None:
+        try:
+            with self._transaction() as connection:
+                connection.execute(
+                    "DELETE FROM context_turn_reservations "
+                    "WHERE session_id = ? AND request_id = ?",
+                    (session_id, request_id),
+                )
+        except sqlite3.Error as exc:
+            raise ContextStoreError("could not release context turn") from exc
+
+    def get_request_result(self, session_id: str, request_id: str):
+        with closing(self._connect()) as connection:
+            row = connection.execute(
+                "SELECT response_json FROM context_request_results "
+                "WHERE session_id = ? AND request_id = ?",
+                (session_id, request_id),
+            ).fetchone()
+        return json.loads(row[0]) if row else None
+
+    def save_request_result(self, session_id: str, request_id: str, response: dict) -> None:
+        with self._transaction() as connection:
+            connection.execute(
+                "INSERT OR IGNORE INTO context_request_results "
+                "(session_id, request_id, response_json) VALUES (?, ?, ?)",
+                (session_id, request_id, json.dumps(response, ensure_ascii=False)),
+            )
+
     def get(self, session_id: str) -> ContextContractV2:
         try:
             with closing(self._connect()) as connection:
@@ -153,6 +240,7 @@ class SQLiteContextStore:
         *,
         result: ResultReference | None = None,
         clarification_questions: list[dict] | None = None,
+        memory_write: ResultMemoryWrite | None = None,
     ) -> ContextContractV2:
         try:
             with self._lock, self._transaction() as connection:
@@ -241,6 +329,17 @@ class SQLiteContextStore:
                     "payload_json TEXT NOT NULL"
                     ")"
                 )
+                connection.execute(
+                    "CREATE TABLE IF NOT EXISTS context_turn_reservations ("
+                    "session_id TEXT PRIMARY KEY, request_id TEXT UNIQUE NOT NULL, "
+                    "FOREIGN KEY(session_id) REFERENCES context_sessions(session_id) ON DELETE CASCADE)"
+                )
+                connection.execute(
+                    "CREATE TABLE IF NOT EXISTS context_request_results ("
+                    "session_id TEXT NOT NULL, request_id TEXT NOT NULL, response_json TEXT NOT NULL, "
+                    "PRIMARY KEY(session_id, request_id), "
+                    "FOREIGN KEY(session_id) REFERENCES context_sessions(session_id) ON DELETE CASCADE)"
+                )
         except sqlite3.Error as exc:
             raise ContextStoreError("could not initialize context store") from exc
 
@@ -317,6 +416,109 @@ class PostgresContextStore:
             raise ContextStoreError("could not create PostgreSQL context session") from exc
         return state
 
+    def reserve(self, session_id: str, expected_revision: int, request_id: str) -> None:
+        session_id = _uuid_text(session_id, "session_id")
+        try:
+            with self._connection() as connection, connection.cursor() as cursor:
+                cursor.execute(
+                    f"DELETE FROM {self.schema}.context_turn_reservations_v2 "
+                    "WHERE session_id = %s::uuid AND expires_at <= now()",
+                    (session_id,),
+                )
+                cursor.execute(
+                    f"SELECT revision FROM {self.schema}.context_sessions_v2 "
+                    "WHERE session_id = %s::uuid",
+                    (session_id,),
+                )
+                row = cursor.fetchone()
+                if row is None:
+                    raise SessionNotFound(session_id)
+                actual = int(row[0])
+                if actual != expected_revision:
+                    raise RevisionConflict(session_id, expected_revision, actual)
+                try:
+                    cursor.execute(
+                        f"INSERT INTO {self.schema}.context_turn_reservations_v2 "
+                        "(session_id, request_id, expected_revision) "
+                        "VALUES (%s::uuid, %s, %s)",
+                        (session_id, request_id, expected_revision),
+                    )
+                except Exception as exc:
+                    if getattr(exc, "sqlstate", None) == "23505":
+                        raise TurnInProgress(session_id) from exc
+                    raise
+                connection.commit()
+        except (SessionNotFound, RevisionConflict, TurnInProgress):
+            raise
+        except Exception as exc:
+            raise ContextStoreError("could not reserve PostgreSQL context turn") from exc
+
+    def release(self, session_id: str, request_id: str) -> None:
+        session_id = _uuid_text(session_id, "session_id")
+        try:
+            with self._connection() as connection, connection.cursor() as cursor:
+                cursor.execute(
+                    f"DELETE FROM {self.schema}.context_turn_reservations_v2 "
+                    "WHERE session_id = %s::uuid AND request_id = %s",
+                    (session_id, request_id),
+                )
+                connection.commit()
+        except Exception as exc:
+            raise ContextStoreError("could not release PostgreSQL context turn") from exc
+
+    def get_request_result(self, session_id: str, request_id: str):
+        session_id = _uuid_text(session_id, "session_id")
+        try:
+            with self._connection() as connection, connection.cursor() as cursor:
+                cursor.execute(
+                    f"SELECT response FROM {self.schema}.context_request_results_v2 "
+                    "WHERE session_id = %s::uuid AND request_id = %s",
+                    (session_id, request_id),
+                )
+                row = cursor.fetchone()
+                return dict(row[0]) if row else None
+        except Exception as exc:
+            raise ContextStoreError("could not load idempotent request result") from exc
+
+    def save_request_result(self, session_id: str, request_id: str, response: dict) -> None:
+        session_id = _uuid_text(session_id, "session_id")
+        try:
+            from psycopg.types.json import Jsonb
+            with self._connection() as connection, connection.cursor() as cursor:
+                cursor.execute(
+                    f"INSERT INTO {self.schema}.context_request_results_v2 "
+                    "(session_id, request_id, response) VALUES (%s::uuid, %s, %s) "
+                    "ON CONFLICT (session_id, request_id) DO NOTHING",
+                    (session_id, request_id, Jsonb(response)),
+                )
+                connection.commit()
+        except Exception as exc:
+            raise ContextStoreError("could not save idempotent request result") from exc
+
+    def complete_memory_write(self, session_id: str, revision: int) -> None:
+        session_id = _uuid_text(session_id, "session_id")
+        with self._connection() as connection, connection.cursor() as cursor:
+            cursor.execute(
+                f"UPDATE {self.schema}.result_memory_outbox_v2 "
+                "SET delivered_at = now() WHERE session_id = %s::uuid "
+                "AND revision = %s AND delivered_at IS NULL",
+                (session_id, revision),
+            )
+            connection.commit()
+
+    def pending_memory_writes(self, limit: int = 100) -> list[dict]:
+        with self._connection() as connection, connection.cursor() as cursor:
+            cursor.execute(
+                f"SELECT session_id::text, revision, payload "
+                f"FROM {self.schema}.result_memory_outbox_v2 "
+                "WHERE delivered_at IS NULL ORDER BY created_at LIMIT %s",
+                (max(1, min(int(limit), 1000)),),
+            )
+            return [
+                {"session_id": row[0], "revision": int(row[1]), **dict(row[2])}
+                for row in cursor.fetchall()
+            ]
+
     def get(self, session_id: str) -> ContextContractV2:
         session_id = _uuid_text(session_id, "session_id")
         try:
@@ -357,6 +559,7 @@ class PostgresContextStore:
         *,
         result: ResultReference | None = None,
         clarification_questions: list[dict] | None = None,
+        memory_write: ResultMemoryWrite | None = None,
     ) -> ContextContractV2:
         session_id = _uuid_text(session_id, "session_id")
         _uuid_text(mutation.turn_id, "turn_id")
@@ -421,6 +624,20 @@ class PostgresContextStore:
                         _contract_hash(updated),
                     ),
                 )
+                if memory_write is not None and updated.metadata is not None:
+                    cursor.execute(
+                        f"INSERT INTO {self.schema}.result_memory_outbox_v2 "
+                        "(session_id, revision, payload) VALUES (%s::uuid, %s, %s) "
+                        "ON CONFLICT (session_id, revision) DO NOTHING",
+                        (
+                            session_id,
+                            updated.revision,
+                            Jsonb({
+                                "metadata": updated.metadata.model_dump(mode="json"),
+                                "write": memory_write.model_dump(mode="json"),
+                            }),
+                        ),
+                    )
                 connection.commit()
                 return updated
         except (SessionNotFound, RevisionConflict):

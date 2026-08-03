@@ -8,8 +8,14 @@ from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, ConfigDict, Field
 
-from .service import BalanceChatService, TurnProcessingError, _context_view, _session_view
-from .store import ContextStoreError, RevisionConflict, SessionNotFound
+from .service import (
+    BalanceChatService,
+    MetadataSessionMismatch,
+    TurnProcessingError,
+    _context_view,
+    _session_view,
+)
+from .store import ContextStoreError, RevisionConflict, SessionNotFound, TurnInProgress
 from .contracts import ClarificationAnswer
 
 
@@ -79,6 +85,19 @@ def create_app(
                     "code": "revision_conflict",
                     "expected_revision": exc.expected,
                     "actual_revision": exc.actual,
+                },
+            ) from exc
+        except TurnInProgress as exc:
+            raise HTTPException(
+                409,
+                detail={"code": "turn_in_progress", "session_id": exc.session_id},
+            ) from exc
+        except MetadataSessionMismatch as exc:
+            raise HTTPException(
+                409,
+                detail={
+                    "code": "metadata_session_incompatible",
+                    "session_id": exc.session_id,
                 },
             ) from exc
         except SessionNotFound as exc:

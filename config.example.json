@@ -16,6 +16,7 @@
     "enabled": true,
     "retrieval_limit": 5,
     "max_chunk_chars": 4000,
-    "max_total_chars": 12000
+    "max_total_chars": 12000,
+    "ttl_s": 86400
   }
 }
