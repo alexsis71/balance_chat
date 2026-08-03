@@ -136,10 +136,15 @@ class AnalysisIntent(ContractModel):
             }
             if not referenced.issubset(set(operand_ids)):
                 raise ValueError("comparison must reference existing operands")
-        if self.operation == Operation.COMPARE and len(self.operands) < 2:
-            raise ValueError("compare requires at least two operands")
-        if self.operation == Operation.COMPARE_PERIODS and len(self.periods) != 2:
-            raise ValueError("compare_periods requires exactly two global periods")
+        if self.operation == Operation.COMPARE and len(self.operands) != 2:
+            raise ValueError("compare requires exactly two operands")
+        if self.operation == Operation.COMPARE_PERIODS:
+            if len(self.operands) != 1:
+                raise ValueError("compare_periods requires exactly one operand")
+            if len(self.periods) != 2:
+                raise ValueError("compare_periods requires exactly two global periods")
+        if self.operation != Operation.COMPARE and self.comparison is not None:
+            raise ValueError("comparison semantics are valid only for compare")
         return self
 
 

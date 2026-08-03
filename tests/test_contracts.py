@@ -57,3 +57,40 @@ def test_compare_supports_two_different_metrics() -> None:
         "own_needs",
     ]
 
+
+def test_compare_rejects_more_than_two_operands() -> None:
+    with pytest.raises(ValidationError, match="exactly two operands"):
+        AnalysisIntent(
+            operation=Operation.COMPARE,
+            operands=[
+                AnalysisOperand(operand_id=f"item_{index}", metric="distribution")
+                for index in range(3)
+            ],
+        )
+
+
+def test_compare_periods_rejects_multiple_operands() -> None:
+    with pytest.raises(ValidationError, match="exactly one operand"):
+        AnalysisIntent(
+            operation=Operation.COMPARE_PERIODS,
+            operands=[
+                AnalysisOperand(operand_id="first", metric="distribution"),
+                AnalysisOperand(operand_id="second", metric="distribution"),
+            ],
+            periods=[
+                PeriodRef(date_from="2025-05-01", date_to="2025-06-01"),
+                PeriodRef(date_from="2025-06-01", date_to="2025-07-01"),
+            ],
+        )
+
+
+def test_scalar_operation_rejects_comparison_semantics() -> None:
+    with pytest.raises(ValidationError, match="only for compare"):
+        AnalysisIntent(
+            operation=Operation.SHOW,
+            operands=[AnalysisOperand(operand_id="supply", metric="distribution")],
+            comparison=ComparisonSpec(
+                baseline_operand_id="supply",
+                target_operand_id="supply",
+            ),
+        )
