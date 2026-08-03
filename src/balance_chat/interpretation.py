@@ -75,6 +75,7 @@ class UnifiedInterpreter:
                 },
             ],
             "request_id": request_id,
+            "allowed_modes": ["mutation", "clarify", "unsupported"],
         }
         raw: Mapping[str, Any] | str | None = None
         try:

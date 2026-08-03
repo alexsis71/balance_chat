@@ -30,6 +30,10 @@ mentions и role. Metadata binder разрешит их после твоего 
 - hints вида `explicit_geo:<name>` получены deterministic metadata matcher:
   для peer-сравнения сохрани каждый такой GEO отдельным `destination` mention;
 - metadata_bundle_version верни без изменений.
+- при наличии `active_dialog_scope` mode всегда `mutation`, `clarify` или
+  `unsupported`; `standalone` в активной сессии запрещён;
+- всегда возвращай все поля верхнего уровня schema; не используй старые поля
+  `standalone`, `directives`, `clarify` или `unsupported`.
 - если передан `clarification_answer`, используй только соответствующий
   `pending_clarification` с теми же `source_turn_id` и `clarification_id`;
   выбранный option является явным ответом пользователя, а не новым отдельным

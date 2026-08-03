@@ -412,53 +412,12 @@ class InterpretationDecision(ContractModel):
         return self
 
 
-def interpretation_decision_json_schema() -> dict[str, Any]:
-    """Return the model schema plus mode-dependent constraints for vLLM grammar."""
+def interpretation_decision_json_schema(
+    allowed_modes: list[str] | None = None,
+) -> dict[str, Any]:
+    """Return a vLLM-compatible strict schema without unsupported conditionals."""
     schema = InterpretationDecision.model_json_schema()
-    draft_ref = {"$ref": "#/$defs/InterpretationDraft"}
-    clarification_ref = {"$ref": "#/$defs/ClarificationContract"}
-    schema["allOf"] = [
-        {
-            "if": {
-                "properties": {"mode": {"enum": ["standalone", "mutation"]}},
-                "required": ["mode"],
-            },
-            "then": {
-                "required": ["draft"],
-                "properties": {
-                    "draft": draft_ref,
-                    "clarification": {"type": "null"},
-                    "unsupported_capability": {"type": "null"},
-                },
-            },
-        },
-        {
-            "if": {
-                "properties": {"mode": {"const": "clarify"}},
-                "required": ["mode"],
-            },
-            "then": {
-                "required": ["clarification"],
-                "properties": {
-                    "draft": {"type": "null"},
-                    "clarification": clarification_ref,
-                    "unsupported_capability": {"type": "null"},
-                },
-            },
-        },
-        {
-            "if": {
-                "properties": {"mode": {"const": "unsupported"}},
-                "required": ["mode"],
-            },
-            "then": {
-                "required": ["unsupported_capability"],
-                "properties": {
-                    "draft": {"type": "null"},
-                    "clarification": {"type": "null"},
-                    "unsupported_capability": {"type": "string", "minLength": 1},
-                },
-            },
-        },
-    ]
+    schema["required"] = list(InterpretationDecision.model_fields)
+    if allowed_modes:
+        schema["properties"]["mode"] = {"enum": list(allowed_modes), "type": "string"}
     return schema

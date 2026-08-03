@@ -9,6 +9,7 @@ from balance_chat.contracts import (
     AnalysisIntent,
     AnalysisOperand,
     ComparisonSpec,
+    InterpretationDecision,
     Operation,
     PeriodRef,
     interpretation_decision_json_schema,
@@ -98,10 +99,6 @@ def test_scalar_operation_rejects_comparison_semantics() -> None:
 
 
 def test_interpretation_schema_expresses_mode_dependent_payloads() -> None:
-    schema = interpretation_decision_json_schema()
-    assert len(schema["allOf"]) == 3
-    executable = schema["allOf"][0]
-    assert executable["then"]["required"] == ["draft"]
-    assert executable["then"]["properties"]["draft"] == {
-        "$ref": "#/$defs/InterpretationDraft"
-    }
+    schema = interpretation_decision_json_schema(["mutation", "clarify"])
+    assert set(schema["required"]) == set(InterpretationDecision.model_fields)
+    assert schema["properties"]["mode"]["enum"] == ["mutation", "clarify"]
