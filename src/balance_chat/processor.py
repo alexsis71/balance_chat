@@ -275,10 +275,15 @@ class PipelineV2TurnProcessor:
         grouped = []
         if outcome == TransitionOutcome.SUCCESS:
             try:
+                interpretation = (
+                    envelope.get("interpretation")
+                    if isinstance(envelope.get("interpretation"), dict)
+                    else {}
+                )
                 members = member_facts_from_rows(
                     envelope.get("rows") or [],
                     dimension=intent.grouping[0].dimension,
-                    default_unit=envelope.get("unit"),
+                    default_unit=(envelope.get("unit") or interpretation.get("unit")),
                 )
                 grouped = CanonicalGroupAggregator().aggregate(members)
             except (GroupingError, ValueError) as exc:

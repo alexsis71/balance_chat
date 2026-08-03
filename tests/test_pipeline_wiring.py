@@ -430,7 +430,7 @@ def test_context_grouping_executes_canonical_group_contract() -> None:
         def execute_raw(self, *_args, **_kwargs):
             return {
                 "status": "ok",
-                "unit": "тыс. м3",
+                "interpretation": {"unit": "тыс. м3"},
                 "rows": [
                     {"geo_id": "GEO:ul", "geo": "Ульяновская область", "fact_value": 10},
                     {"geo_id": "GEO:ul", "geo": "ульяновская обл", "fact_value": 5},
