@@ -107,14 +107,12 @@ def test_multi_source_geo_period_comparison_becomes_one_canonical_operand() -> N
         {**base, "balance": {"id": "BAL:2", "label": "Баланс 2"}},
         {**base, "balance": {"id": "BAL:3", "label": "Баланс 3"}},
     ]
-    registry = SimpleNamespace(
-        geo=lambda value: SimpleNamespace(
-            geo_id="GEO:samara-region",
-            canonical_name="Самарская область",
-        ) if value == "самарская область" else None
+    geo = SimpleNamespace(
+        geo_id="GEO:samara-region",
+        canonical_name="Самарская область",
     )
 
-    intent = PipelineEnvelopeTranslator(registry).intent(envelope)
+    intent = PipelineEnvelopeTranslator().intent(envelope, canonical_geos=[geo])
 
     assert intent.operation == Operation.COMPARE_PERIODS
     assert len(intent.operands) == 1

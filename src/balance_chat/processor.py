@@ -503,7 +503,10 @@ class PipelineV2TurnProcessor:
         )
         status = str(envelope.get("status") or "error")
         try:
-            intent = self.translator.intent(envelope)
+            intent = self.translator.intent(
+                envelope,
+                canonical_geos=self._matched_geo_objects(user_message or message),
+            )
         except Exception as exc:
             code = (
                 "resolved_comparison_degraded"

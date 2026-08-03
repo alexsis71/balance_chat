@@ -26,7 +26,12 @@ class PipelineEnvelopeTranslator:
     def __init__(self, registry: Any | None = None) -> None:
         self.registry = registry
 
-    def intent(self, envelope: Mapping[str, Any]) -> AnalysisIntent:
+    def intent(
+        self,
+        envelope: Mapping[str, Any],
+        *,
+        canonical_geos: list[Any] | None = None,
+    ) -> AnalysisIntent:
         plan = _resolved_plan(envelope)
         raw_intent = plan.get("_intent") if isinstance(plan.get("_intent"), Mapping) else {}
         requested_operation = _operation(raw_intent.get("intent") or plan.get("operation"))
@@ -52,6 +57,7 @@ class PipelineEnvelopeTranslator:
             operation,
             raw_intent,
             expanded,
+            canonical_geos or [],
         )
         operands = (
             [logical_period_operand]
@@ -77,12 +83,15 @@ class PipelineEnvelopeTranslator:
         operation: Operation,
         raw_intent: Mapping[str, Any],
         expressions: list[Mapping[str, Any]],
+        canonical_geos: list[Any],
     ) -> AnalysisOperand | None:
         """Collapse physical balance rows only for one registry-backed GEO target."""
         if operation != Operation.COMPARE_PERIODS or len(expressions) < 2:
             return None
         geo_text = str(raw_intent.get("geo") or "").strip()
-        geo = self.registry.geo(geo_text) if self.registry is not None and geo_text else None
+        geo = canonical_geos[0] if len(canonical_geos) == 1 else None
+        if geo is None and self.registry is not None and geo_text:
+            geo = self.registry.geo(geo_text)
         if geo is None:
             raise EnvelopeTranslationError(
                 "multi-source period comparison lacks one canonical GEO target"
