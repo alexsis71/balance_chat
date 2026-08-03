@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import Any, Mapping
 
-from ..contracts import InterpretationDecision
+from ..contracts import interpretation_decision_json_schema
 
 
 class PipelineInterpretationBackend:
@@ -20,7 +20,7 @@ class PipelineInterpretationBackend:
             payload["messages"],
             models.OutputContract.json_schema(
                 "balance_chat_interpretation_v1",
-                InterpretationDecision.model_json_schema(),
+                interpretation_decision_json_schema(),
             ),
             models.SamplingConfig(
                 temperature=0.0,

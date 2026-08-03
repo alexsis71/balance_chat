@@ -410,3 +410,55 @@ class InterpretationDecision(ContractModel):
         elif self.unsupported_capability is not None:
             raise ValueError("supported interpretation cannot declare unsupported capability")
         return self
+
+
+def interpretation_decision_json_schema() -> dict[str, Any]:
+    """Return the model schema plus mode-dependent constraints for vLLM grammar."""
+    schema = InterpretationDecision.model_json_schema()
+    draft_ref = {"$ref": "#/$defs/InterpretationDraft"}
+    clarification_ref = {"$ref": "#/$defs/ClarificationContract"}
+    schema["allOf"] = [
+        {
+            "if": {
+                "properties": {"mode": {"enum": ["standalone", "mutation"]}},
+                "required": ["mode"],
+            },
+            "then": {
+                "required": ["draft"],
+                "properties": {
+                    "draft": draft_ref,
+                    "clarification": {"type": "null"},
+                    "unsupported_capability": {"type": "null"},
+                },
+            },
+        },
+        {
+            "if": {
+                "properties": {"mode": {"const": "clarify"}},
+                "required": ["mode"],
+            },
+            "then": {
+                "required": ["clarification"],
+                "properties": {
+                    "draft": {"type": "null"},
+                    "clarification": clarification_ref,
+                    "unsupported_capability": {"type": "null"},
+                },
+            },
+        },
+        {
+            "if": {
+                "properties": {"mode": {"const": "unsupported"}},
+                "required": ["mode"],
+            },
+            "then": {
+                "required": ["unsupported_capability"],
+                "properties": {
+                    "draft": {"type": "null"},
+                    "clarification": {"type": "null"},
+                    "unsupported_capability": {"type": "string", "minLength": 1},
+                },
+            },
+        },
+    ]
+    return schema
