@@ -203,7 +203,7 @@ function clarificationHtml(pending) {
     <div>${(question.options || []).map((option) => {
       const value = typeof option === "object" ? option.value ?? option.label : option;
       const label = typeof option === "object" ? option.label ?? option.value : option;
-      return `<button type="button" data-clarify="${escapeHtml(value)}" data-question="${index}">${escapeHtml(label)}</button>`;
+      return `<button type="button" data-clarify="${escapeHtml(value)}" data-question="${index}" data-source-turn="${escapeHtml(pending.turn_id)}" data-clarification-id="${escapeHtml(question.clarification_id)}">${escapeHtml(label)}</button>`;
     }).join("")}</div></div>`).join("")}</section>`;
 }
 
@@ -297,7 +297,7 @@ byId("historyList").addEventListener("click", async (event) => {
 byId("messages").addEventListener("click", (event) => {
   const suggest=event.target.closest("[data-suggest]"); if(suggest) { byId("message").value=suggest.dataset.suggest; byId("chatForm").requestSubmit(); return; }
   const copy=event.target.closest("[data-copy]"); if(copy) copyResult(copy.dataset.copy); const csv=event.target.closest("[data-csv]"); if(csv) exportCsv(csv.dataset.csv);
-  const clarify=event.target.closest("[data-clarify]"); if(clarify) send(clarify.dataset.clarify, {answer:clarify.dataset.clarify});
+  const clarify=event.target.closest("[data-clarify]"); if(clarify) send(clarify.dataset.clarify, {source_turn_id:clarify.dataset.sourceTurn, clarification_id:clarify.dataset.clarificationId, selected_option:clarify.dataset.clarify});
 });
 function showStartupError(error) { setStatus("backend недоступен", "error"); byId("messages").innerHTML=""; appendMessage("error", {title:"Не удалось создать сессию", text:humanError(error)}); }
 

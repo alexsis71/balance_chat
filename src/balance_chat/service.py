@@ -10,6 +10,7 @@ from uuid import uuid4
 from pydantic import Field
 
 from .contracts import (
+    ClarificationAnswer,
     ContextContractV2,
     ContextMutation,
     ContractModel,
@@ -45,7 +46,7 @@ class TurnProcessor(Protocol):
         *,
         message: str,
         execute_db: bool,
-        clarification: dict[str, Any] | None,
+        clarification: ClarificationAnswer | None,
         request_id: str,
     ) -> TurnProcessResult: ...
 
@@ -120,7 +121,7 @@ class BalanceChatService:
         expected_revision: int,
         message: str,
         execute_db: bool = False,
-        clarification: dict[str, Any] | None = None,
+        clarification: ClarificationAnswer | None = None,
         request_id: str | None = None,
     ) -> dict[str, Any]:
         trace_id = request_id or str(uuid4())
@@ -134,7 +135,7 @@ class BalanceChatService:
             expected_revision=expected_revision,
             execute_db=execute_db,
             user_message=message,
-            clarification=clarification,
+            clarification=(clarification.model_dump(mode="json") if clarification else None),
         )
         try:
             with self._session_lock(session_id):

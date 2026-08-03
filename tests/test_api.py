@@ -18,9 +18,11 @@ from balance_chat.store import InMemoryContextStore
 class FakeProcessor:
     def __init__(self) -> None:
         self.calls = 0
+        self.last_clarification = None
 
     def process(self, state, *, message, clarification, **_):
         self.calls += 1
+        self.last_clarification = clarification
         if message == "уточни":
             return TurnProcessResult(
                 mutation=ContextMutation(
@@ -132,6 +134,38 @@ def test_clarification_contract_is_exposed_to_ui() -> None:
     assert response["status"] == "needs_clarification"
     question = response["context"]["pending_clarification"]["questions"][0]
     assert question["options"] == ["май 2025", "июнь 2025"]
+
+
+def test_typed_clarification_answer_reaches_processor() -> None:
+    client, processor = _client()
+    session_id = client.post("/api/v2/chat/sessions").json()["session"]["session_id"]
+    clarified = client.post(
+        "/api/v2/chat",
+        json={
+            "session_id": session_id,
+            "expected_revision": 0,
+            "message": "уточни",
+        },
+    ).json()
+    pending = clarified["context"]["pending_clarification"]
+    question = pending["questions"][0]
+
+    response = client.post(
+        "/api/v2/chat",
+        json={
+            "session_id": session_id,
+            "expected_revision": 1,
+            "message": "май 2025",
+            "clarification": {
+                "source_turn_id": pending["turn_id"],
+                "clarification_id": question["clarification_id"],
+                "selected_option": "май 2025",
+            },
+        },
+    )
+
+    assert response.status_code == 200
+    assert processor.last_clarification.selected_option == "май 2025"
 
 
 def test_delete_session_is_idempotent_and_ui_is_served() -> None:

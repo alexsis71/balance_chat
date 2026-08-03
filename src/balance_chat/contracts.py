@@ -178,9 +178,21 @@ class TurnReference(ContractModel):
     outcome: TransitionOutcome
 
 
+class ClarificationContract(ContractModel):
+    clarification_id: str = Field(default_factory=lambda: str(uuid4()))
+    question: str = Field(min_length=1)
+    options: list[str] = Field(min_length=2, max_length=4)
+
+
+class ClarificationAnswer(ContractModel):
+    source_turn_id: str
+    clarification_id: str
+    selected_option: str = Field(min_length=1)
+
+
 class PendingClarification(ContractModel):
     turn_id: str
-    questions: list[dict[str, Any]] = Field(min_length=1)
+    questions: list[ClarificationContract] = Field(min_length=1)
 
 
 class FieldMutation(ContractModel):
@@ -358,11 +370,6 @@ class InterpretationDraft(ContractModel):
     grouping: GroupingDirective
     grain: ScalarDirective
     reverse_direction: bool = False
-
-
-class ClarificationContract(ContractModel):
-    question: str = Field(min_length=1)
-    options: list[str] = Field(min_length=2, max_length=4)
 
 
 class InterpretationDecision(ContractModel):

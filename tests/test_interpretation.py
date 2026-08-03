@@ -122,6 +122,42 @@ def test_interpreter_rejects_changed_metadata_version() -> None:
         )
 
 
+def test_interpreter_receives_pending_clarification_and_typed_answer() -> None:
+    from balance_chat.contracts import PendingClarification, ClarificationContract
+
+    backend = StubBackend(_decision())
+    interpreter = UnifiedInterpreter(backend)
+    state = ContextContractV2(
+        session_id="session",
+        pending_clarification=PendingClarification(
+            turn_id="turn-1",
+            questions=[ClarificationContract(
+                clarification_id="clarify-1",
+                question="Какой период?",
+                options=["май 2025", "июнь 2025"],
+            )],
+        ),
+    )
+    answer = {
+        "source_turn_id": "turn-1",
+        "clarification_id": "clarify-1",
+        "selected_option": "май 2025",
+    }
+
+    interpreter.interpret(
+        message="май 2025",
+        state=state,
+        capabilities=["show"],
+        domain_hints=[],
+        metadata_bundle_version="2026.07.6",
+        clarification_answer=answer,
+    )
+
+    model_input = json.loads(backend.payload["messages"][1]["content"])
+    assert model_input["clarification_answer"] == answer
+    assert model_input["context"]["pending_clarification"]["turn_id"] == "turn-1"
+
+
 def test_hybrid_policy_skips_unambiguous_standalone_turn() -> None:
     policy = HybridInterpretationPolicy()
     assert not policy.should_invoke(

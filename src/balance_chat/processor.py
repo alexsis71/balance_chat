@@ -12,6 +12,7 @@ from .binding import ContextBindingError, InterpretationMutationCompiler
 from .compat.envelope_translation import PipelineEnvelopeTranslator
 from .contracts import (
     CanonicalEntityRef,
+    ClarificationAnswer,
     ContextContractV2,
     ContextMutation,
     InterpretationMode,
@@ -65,11 +66,13 @@ class PipelineV2TurnProcessor:
         *,
         message: str,
         execute_db: bool,
-        clarification: dict[str, Any] | None,
+        clarification: ClarificationAnswer | None,
         request_id: str,
     ) -> TurnProcessResult:
         started = perf_counter()
         turn_id = str(uuid4())
+        if clarification is not None:
+            _validate_clarification_answer(state, clarification)
         explicit_geos = self._matched_geo_objects(message)
         mixed_metric_operands = self._matched_distribution_own_consumers(message)
         if mixed_metric_operands:
@@ -159,6 +162,10 @@ class PipelineV2TurnProcessor:
                     self.result_memory.for_interpretation(memory_chunks)
                     if self.result_memory
                     else []
+                ),
+                clarification_answer=(
+                    clarification.model_dump(mode="json")
+                    if clarification is not None else None
                 ),
                 request_id=request_id,
             )
@@ -547,6 +554,30 @@ def metadata_ref(registry: Any) -> MetadataVersionRef:
         bundle_version=manifest.bundle_version,
         schema_version=manifest.schema_version,
     )
+
+
+def _validate_clarification_answer(
+    state: ContextContractV2,
+    answer: ClarificationAnswer,
+) -> None:
+    pending = state.pending_clarification
+    if pending is None or pending.turn_id != answer.source_turn_id:
+        raise TurnProcessingError(
+            "clarification answer does not match pending turn",
+            code="clarification_stale",
+        )
+    question = next(
+        (
+            item for item in pending.questions
+            if item.clarification_id == answer.clarification_id
+        ),
+        None,
+    )
+    if question is None or answer.selected_option not in question.options:
+        raise TurnProcessingError(
+            "clarification answer is not one of the offered options",
+            code="clarification_invalid",
+        )
 
 
 def _capabilities() -> list[str]:

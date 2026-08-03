@@ -47,6 +47,7 @@ class UnifiedInterpreter:
         domain_hints: Sequence[str],
         metadata_bundle_version: str,
         result_references: Sequence[Mapping[str, Any]] = (),
+        clarification_answer: Mapping[str, Any] | None = None,
         request_id: str | None = None,
     ) -> InterpretationDecision:
         clean_message = str(message).strip()
@@ -64,6 +65,7 @@ class UnifiedInterpreter:
                             "capabilities": list(capabilities)[: self.max_capabilities],
                             "domain_hints": list(domain_hints)[: self.max_domain_hints],
                             "result_references": list(result_references)[:8],
+                            "clarification_answer": clarification_answer,
                             "metadata_bundle_version": metadata_bundle_version,
                         },
                         ensure_ascii=False,
@@ -141,6 +143,10 @@ def _bounded_context(state: ContextContractV2) -> dict[str, Any]:
         "recent_turns": [
             item.model_dump(mode="json") for item in state.recent_turns[-8:]
         ],
+        "pending_clarification": (
+            state.pending_clarification.model_dump(mode="json")
+            if state.pending_clarification is not None else None
+        ),
     }
 
 

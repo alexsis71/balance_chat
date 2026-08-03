@@ -5,6 +5,7 @@ from typing import Any
 
 from .contracts import (
     AnalysisIntent,
+    ClarificationContract,
     ContextContractV2,
     ContextMutation,
     ContextScope,
@@ -140,7 +141,7 @@ def apply_context_transition(
     outcome: TransitionOutcome,
     *,
     result: ResultReference | None = None,
-    clarification_questions: list[dict[str, Any]] | None = None,
+    clarification_questions: list[ClarificationContract | dict[str, Any]] | None = None,
     recent_turn_limit: int = 20,
     result_limit: int = 50,
 ) -> ContextContractV2:

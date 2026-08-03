@@ -30,3 +30,7 @@ mentions и role. Metadata binder разрешит их после твоего 
 - hints вида `explicit_geo:<name>` получены deterministic metadata matcher:
   для peer-сравнения сохрани каждый такой GEO отдельным `destination` mention;
 - metadata_bundle_version верни без изменений.
+- если передан `clarification_answer`, используй только соответствующий
+  `pending_clarification` с теми же `source_turn_id` и `clarification_id`;
+  выбранный option является явным ответом пользователя, а не новым отдельным
+  запросом.

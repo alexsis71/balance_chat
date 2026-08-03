@@ -10,6 +10,7 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from .service import BalanceChatService, TurnProcessingError, _context_view, _session_view
 from .store import ContextStoreError, RevisionConflict, SessionNotFound
+from .contracts import ClarificationAnswer
 
 
 class ApiModel(BaseModel):
@@ -21,7 +22,7 @@ class ChatTurnRequest(ApiModel):
     expected_revision: int = Field(ge=0)
     message: str = Field(min_length=1)
     execute_db: bool = False
-    clarification: dict[str, Any] | None = None
+    clarification: ClarificationAnswer | None = None
     request_id: str | None = None
 
 
