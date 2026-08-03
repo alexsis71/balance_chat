@@ -9,6 +9,7 @@ from balance_chat.grouping import (
     CanonicalGroupAggregator,
     GroupMemberFact,
     GroupingError,
+    member_facts_from_rows,
 )
 
 
@@ -45,3 +46,20 @@ def test_grouping_rejects_unit_mismatch() -> None:
         CanonicalGroupAggregator().aggregate(
             [_fact("Ульяновская область", "1"), _fact("Ульяновская", "2", "м3")]
         )
+
+
+def test_pipeline_rows_are_bound_by_canonical_geo_id() -> None:
+    members = member_facts_from_rows(
+        [
+            {"geo_id": "GEO:ul", "geo": "Ульяновская область", "fact_value": 10},
+            {"geo_id": "GEO:ul", "geo": "ульяновская обл", "fact_value": 5},
+        ],
+        dimension="geo_group",
+        default_unit="тыс. м3",
+    )
+
+    grouped = CanonicalGroupAggregator().aggregate(members)
+
+    assert len(grouped) == 1
+    assert grouped[0].entity_id == "GEO:ul"
+    assert grouped[0].value == Decimal("15")
