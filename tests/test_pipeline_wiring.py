@@ -28,6 +28,7 @@ from balance_chat.processor import (
     _deterministic_period_mutation,
     _distribution_own_consumers_mentions,
     _peer_destination_mentions,
+    _standalone_facts,
 )
 from balance_chat.reducer import apply_context_transition
 from balance_chat.service import TurnProcessingError
@@ -408,6 +409,13 @@ def test_context_grouping_query_inherits_metric_and_period() -> None:
         TransitionOutcome.SUCCESS,
     )
 
+    assert _deterministic_grouping_query(
+        state, "суммируй данные по областям"
+    ) == (
+        "Суммируй поставки газа по областям за период с "
+        "2025-04-01 по 2025-04-30"
+    )
+
 
 def test_context_grouping_executes_canonical_group_contract() -> None:
     state = apply_context_transition(
@@ -525,13 +533,22 @@ def test_context_grouping_reuses_current_successful_result_reference() -> None:
     assert processed.response["facts"][0]["value"] == "15"
     assert processed.diagnostics["execution"]["grouping_source"] == "result_reference"
 
-    assert _deterministic_grouping_query(
-        state, "суммируй данные по областям"
-    ) == (
-        "Суммируй поставки газа по областям за период с "
-        "2025-04-01 по 2025-04-30"
+
+def test_standalone_result_reference_rows_retain_interpretation_unit() -> None:
+    facts = _standalone_facts(
+        {
+            "interpretation": {"unit": "тыс.м3"},
+            "rows": [{"article_scope": "Самарская обл.", "fact_value": 12}],
+        }
     )
 
+    assert facts == [
+        {
+            "article_scope": "Самарская обл.",
+            "fact_value": 12,
+            "unit": "тыс.м3",
+        }
+    ]
 
 def test_invalid_interpretation_contract_maps_to_typed_turn_error() -> None:
     state = apply_context_transition(

@@ -863,8 +863,18 @@ def _native_memory_summary(native) -> dict[str, Any]:
 
 
 def _standalone_facts(envelope: dict[str, Any]) -> list[dict[str, Any]]:
+    interpretation = (
+        envelope.get("interpretation")
+        if isinstance(envelope.get("interpretation"), dict)
+        else {}
+    )
+    canonical_unit = str(
+        envelope.get("unit") or interpretation.get("unit") or ""
+    ).strip()
     rows = [
-        _safe_mapping(item)
+        _safe_mapping(
+            {**item, **({"unit": canonical_unit} if canonical_unit and not item.get("unit") else {})}
+        )
         for item in (envelope.get("rows") or [])
         if isinstance(item, dict)
     ]
