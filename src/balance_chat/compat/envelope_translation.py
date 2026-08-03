@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from decimal import Decimal, InvalidOperation
+from datetime import date, datetime
 from typing import Any, Mapping
 
 from ..contracts import (
@@ -224,12 +225,15 @@ class PipelineEnvelopeTranslator:
         if len(units) != 1:
             raise EnvelopeTranslationError("scalar result rows use different units")
         aggregate = task.scalar_intent.operands[0].aggregate_type
+        selected_row: Mapping[str, Any] | None = None
         if aggregate == "sum":
             number = sum(values, Decimal("0"))
         elif aggregate == "min":
             number = min(values)
+            selected_row = rows[values.index(number)]
         elif aggregate == "max":
             number = max(values)
+            selected_row = rows[values.index(number)]
         elif len(values) == 1:
             number = values[0]
         else:
@@ -241,6 +245,16 @@ class PipelineEnvelopeTranslator:
             value=number,
             unit=next(iter(units)),
             label=str(rows[0].get("label") or task.operand_id),
+            periods=[
+                {
+                    "date_from": period.date_from.isoformat(),
+                    "date_to": period.date_to.isoformat(),
+                }
+                for period in task.scalar_intent.periods
+            ],
+            extremum_at=_row_date(selected_row),
+            dimension=_row_dimension(selected_row),
+            source_row_count=len(rows),
             provenance=[dict(row) for row in rows],
         )
 
@@ -259,6 +273,39 @@ def _entity(role: str, entity_type: str, value: Mapping[str, Any]) -> OperandEnt
 def _display_name(value: Any) -> str:
     text = str(value).strip()
     return text[:1].upper() + text[1:] if text else text
+
+
+_DATE_FIELDS = ("gas_day", "day", "date", "fact_date", "balance_date", "date_from")
+
+
+def _row_date(row: Mapping[str, Any] | None) -> date | None:
+    if row is None:
+        return None
+    for key in _DATE_FIELDS:
+        value = row.get(key)
+        if value in (None, ""):
+            continue
+        if isinstance(value, datetime):
+            return value.date()
+        if isinstance(value, date):
+            return value
+        try:
+            return date.fromisoformat(str(value)[:10])
+        except ValueError:
+            continue
+    return None
+
+
+def _row_dimension(row: Mapping[str, Any] | None) -> dict[str, Any] | None:
+    if row is None:
+        return None
+    for key in _DATE_FIELDS:
+        if row.get(key) not in (None, ""):
+            return {"name": key, "value": str(row[key])}
+    for key in ("month", "period", "label"):
+        if row.get(key) not in (None, ""):
+            return {"name": key, "value": str(row[key])}
+    return None
 
 
 def _operation(value: Any) -> Operation:

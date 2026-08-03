@@ -193,6 +193,29 @@ def test_additive_scalar_rows_are_summed_with_provenance() -> None:
 
     assert fact.value == Decimal("12.5")
     assert len(fact.provenance) == 2
+    assert fact.source_row_count == 2
+
+
+def test_extremum_fact_preserves_winning_date() -> None:
+    translator = PipelineEnvelopeTranslator()
+    envelope = _envelope()
+    envelope["rows"] = [
+        {"fact_value": "10", "unit": "тыс. м3", "gas_day": "2025-05-03"},
+        {"fact_value": "25", "unit": "тыс. м3", "gas_day": "2025-05-17"},
+    ]
+    intent = translator.intent(envelope)
+    intent.operands[0].aggregate_type = "max"
+    from balance_chat.planning import NativeMultiOperandPlanner
+    task = NativeMultiOperandPlanner().plan(
+        intent.model_copy(update={"operands": [intent.operands[0]]})
+    ).tasks[0]
+
+    fact = translator.fact(task, envelope)
+
+    assert fact.value == Decimal("25")
+    assert fact.extremum_at.isoformat() == "2025-05-17"
+    assert fact.dimension == {"name": "gas_day", "value": "2025-05-17"}
+    assert fact.periods == [{"date_from": "2025-05-01", "date_to": "2025-06-01"}]
 
 
 class RawRuntime:

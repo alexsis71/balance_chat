@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from decimal import Decimal
+from datetime import date
 from typing import Any, Callable, Mapping, Protocol
 
 from pydantic import Field
@@ -18,6 +19,10 @@ class ScalarFact(ContractModel):
     value: Decimal
     unit: str
     label: str
+    periods: list[dict[str, str]] = Field(default_factory=list)
+    extremum_at: date | None = None
+    dimension: dict[str, Any] | None = None
+    source_row_count: int = Field(default=1, ge=1)
     provenance: list[dict[str, Any]] = Field(default_factory=list)
 
 
