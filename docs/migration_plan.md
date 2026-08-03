@@ -40,8 +40,15 @@
     Peer comparison двух городов, mixed distribution/own-consumers comparison и
     contextual grouping проверены с реальной БД. Invalid interpretation contract
     отображается как HTTP 422. Найденные degradation cases не имеют скрытого
-    fallback. Перед cutover остаются повторный DB-backed acceptance и решение
-    владельца системы о переключении entry point.
+    fallback.
 
-Полный regression и решение о production cutover выполняются отдельным
-checkpoint после завершения разработки этапов.
+Финальный checkpoint выполнен 2026-08-03. Полный V2 regression: `84 passed`.
+DB-backed grouping acceptance: 100 физических строк сведены в 63 уникальных
+canonical GEO ID; повторные LLM/MCP/PostgreSQL вызовы для группировки сохранённого
+результата не выполняются. Полный regression sibling `pipeline`: `441 passed`,
+`4 skipped`, `13 failed`. Контрольный прогон тех же кейсов на чистом `pipeline
+HEAD` подтвердил 10 уже существующих падений; ещё три связаны с находящимися в
+его рабочем дереве пользовательскими изменениями (`context article override`,
+`context extremum override`, `reverse direction`). Эти upstream failures не
+скрыты fallback и остаются явным блокером production cutover, но не нарушают
+запускаемость отдельного V2 backend.
