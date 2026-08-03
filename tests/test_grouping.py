@@ -63,3 +63,24 @@ def test_pipeline_rows_are_bound_by_canonical_geo_id() -> None:
     assert len(grouped) == 1
     assert grouped[0].entity_id == "GEO:ul"
     assert grouped[0].value == Decimal("15")
+
+
+def test_legacy_scope_row_requires_curated_canonical_resolver() -> None:
+    def resolve(row, dimension):
+        assert dimension == "geo_group"
+        assert row["article_scope"] == "Ульяновская обл."
+        return CanonicalEntityRef(
+            entity_id="geo:ulyanovsk",
+            entity_type="geo_object",
+            display_name="Ульяновская область",
+        )
+
+    members = member_facts_from_rows(
+        [{"article_scope": "Ульяновская обл.", "fact_value": 7}],
+        dimension="geo_group",
+        default_unit="тыс. м3",
+        canonical_resolver=resolve,
+    )
+
+    assert members[0].entity.entity_id == "geo:ulyanovsk"
+    assert members[0].entity.display_name == "Ульяновская область"

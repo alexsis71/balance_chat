@@ -116,6 +116,7 @@ class PipelineV2TurnProcessor:
                     operands=[AnalysisOperand(
                         operand_id="grouped",
                         metric=scope.intent.operands[0].metric,
+                        unit=scope.intent.operands[0].unit,
                     )],
                     periods=list(scope.intent.periods),
                     grouping=[GroupingSpec(dimension="geo_group")],
@@ -265,11 +266,32 @@ class PipelineV2TurnProcessor:
                 "grouping requires one operand and one canonical dimension",
                 code="native_grouping_failed",
             )
-        envelope = self.runtime.execute_raw(
-            normalized_message,
-            execute_db=execute_db,
-            request_id=request_id,
+        source_reference = next(
+            (
+                item
+                for item in reversed(state.result_references)
+                if state.active_dialog_scope is not None
+                and item.turn_id == state.active_dialog_scope.turn_id
+                and item.status == TransitionOutcome.SUCCESS
+                and item.facts
+            ),
+            None,
         )
+        if source_reference is not None:
+            envelope = {
+                "status": "ok",
+                "rows": source_reference.facts,
+                "unit": intent.operands[0].unit,
+                "warnings": [],
+            }
+            grouping_source = "result_reference"
+        else:
+            envelope = self.runtime.execute_raw(
+                normalized_message,
+                execute_db=execute_db,
+                request_id=request_id,
+            )
+            grouping_source = "pipeline"
         status = str(envelope.get("status") or "error")
         outcome = _outcome(status)
         grouped = []
@@ -283,7 +305,12 @@ class PipelineV2TurnProcessor:
                 members = member_facts_from_rows(
                     envelope.get("rows") or [],
                     dimension=intent.grouping[0].dimension,
-                    default_unit=(envelope.get("unit") or interpretation.get("unit")),
+                    default_unit=(
+                        envelope.get("unit")
+                        or interpretation.get("unit")
+                        or intent.operands[0].unit
+                    ),
+                    canonical_resolver=self._resolve_group_row_entity,
                 )
                 grouped = CanonicalGroupAggregator().aggregate(members)
             except (GroupingError, ValueError) as exc:
@@ -326,10 +353,42 @@ class PipelineV2TurnProcessor:
                 "execution": {
                     "task_count": 1,
                     "group_count": len(grouped),
+                    "grouping_source": grouping_source,
                     "elapsed_ms": int((perf_counter() - started) * 1000),
                 },
             },
         )
+
+    def _resolve_group_row_entity(
+        self, row: dict[str, Any], dimension: str
+    ) -> CanonicalEntityRef | None:
+        if dimension not in {"geo", "geo_group"} or self._normalize_lemmas is None:
+            return None
+        labels = [
+            str(row.get(key) or "").strip()
+            for key in ("geo", "article_scope", "article_name")
+        ]
+        matches: dict[str, Any] = {}
+        for label in labels:
+            if not label:
+                continue
+            normalized = self._normalize_lemmas(label)
+            for geo in self.registry.geo_objects:
+                if any(
+                    self._normalize_lemmas(candidate) == normalized
+                    for candidate in (geo.canonical_name, *geo.aliases)
+                ):
+                    matches[str(geo.geo_id)] = geo
+            if len(matches) == 1:
+                geo = next(iter(matches.values()))
+                return CanonicalEntityRef(
+                    entity_id=str(geo.geo_id),
+                    entity_type="geo_object",
+                    display_name=_official_name(geo.canonical_name),
+                )
+            if len(matches) > 1:
+                return None
+        return None
 
     def _deterministic_geo_mutation(self, state, message: str, turn_id: str):
         scope = state.active_dialog_scope

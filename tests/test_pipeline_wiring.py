@@ -19,6 +19,7 @@ from balance_chat.contracts import (
     OperandEntityRef,
     Operation,
     PeriodRef,
+    ResultReference,
     TransitionOutcome,
 )
 from balance_chat.processor import (
@@ -458,6 +459,71 @@ def test_context_grouping_executes_canonical_group_contract() -> None:
     assert processed.mutation.replace_intent.operation == Operation.GROUP
     assert processed.response["facts"][0]["entity_id"] == "GEO:ul"
     assert processed.response["facts"][0]["value"] == "15"
+
+
+def test_context_grouping_reuses_current_successful_result_reference() -> None:
+    state = apply_context_transition(
+        ContextContractV2(session_id="session"),
+        ContextMutation(
+            turn_id="turn-1",
+            user_message="поставки по областям",
+            replace_intent=AnalysisIntent(
+                operation=Operation.SHOW,
+                operands=[AnalysisOperand(
+                    operand_id="regions",
+                    metric="distribution",
+                    unit="тыс. м3",
+                )],
+                periods=[PeriodRef(date_from="2025-04-01", date_to="2025-05-01")],
+            ),
+        ),
+        TransitionOutcome.SUCCESS,
+        result=ResultReference(
+            turn_id="turn-1",
+            status=TransitionOutcome.SUCCESS,
+            row_count=2,
+            facts=[
+                {"article_scope": "Ульяновская обл.", "fact_value": 10},
+                {"article_scope": "Ульяновская", "fact_value": 5},
+            ],
+        ),
+    )
+
+    class NoRepeatRuntime(RawRuntime):
+        def _import_pipeline_module(self, name):
+            if name == "pipeline_v2.nlp_ru":
+                return SimpleNamespace(normalize_query_lemmas=lambda value: value.casefold().rstrip("."))
+            raise ImportError
+
+        def execute_raw(self, *_args, **_kwargs):
+            raise AssertionError("current result must be grouped without repeating DB execution")
+
+    geo = SimpleNamespace(
+        geo_id="geo:ulyanovsk",
+        canonical_name="Ульяновская область",
+        aliases=("Ульяновская обл.", "Ульяновская"),
+    )
+    registry = SimpleNamespace(geo_objects=(geo,), geo_groups=(), routes=())
+    processor = PipelineV2TurnProcessor(
+        runtime=NoRepeatRuntime(),
+        registry=registry,
+        interpreter=object(),
+        compiler=object(),
+        executor=object(),
+        policy=NeverCalled(),
+    )
+
+    processed = processor.process(
+        state,
+        message="суммируй данные по областям",
+        execute_db=True,
+        clarification=None,
+        request_id="request",
+    )
+
+    assert processed.response["facts"][0]["canonical_name"] == "Ульяновская область"
+    assert processed.response["facts"][0]["value"] == "15"
+    assert processed.diagnostics["execution"]["grouping_source"] == "result_reference"
 
     assert _deterministic_grouping_query(
         state, "суммируй данные по областям"

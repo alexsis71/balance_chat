@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from decimal import Decimal
-from typing import Any, Mapping, Sequence
+from typing import Any, Callable, Mapping, Sequence
 
 from pydantic import Field
 
@@ -71,6 +71,9 @@ def member_facts_from_rows(
     *,
     dimension: str,
     default_unit: str | None = None,
+    canonical_resolver: (
+        Callable[[Mapping[str, Any], str], CanonicalEntityRef | None] | None
+    ) = None,
 ) -> list[GroupMemberFact]:
     """Translate grouped rows without ever using a display label as identity."""
     field_map = {
@@ -90,6 +93,12 @@ def member_facts_from_rows(
             article_ids = row.get("article_ids") or []
             entity_id = article_ids[0] if len(article_ids) == 1 else None
         label = str(row.get(label_field) or "").strip()
+        resolved = None
+        if (entity_id is None or not label) and canonical_resolver is not None:
+            resolved = canonical_resolver(row, dimension)
+            if resolved is not None:
+                entity_id = resolved.entity_id
+                label = resolved.display_name
         value = next(
             (
                 row.get(key)
@@ -107,7 +116,7 @@ def member_facts_from_rows(
             GroupMemberFact(
                 entity=CanonicalEntityRef(
                     entity_id=str(entity_id),
-                    entity_type=entity_type,
+                    entity_type=(resolved.entity_type if resolved is not None else entity_type),
                     display_name=label,
                 ),
                 value=Decimal(str(value)),
