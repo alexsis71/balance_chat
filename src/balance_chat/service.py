@@ -15,6 +15,7 @@ from .contracts import (
     ContextMutation,
     ContractModel,
     ResultReference,
+    ResultMemoryWrite,
     TransitionOutcome,
 )
 from .store import RevisionConflict
@@ -35,6 +36,7 @@ class TurnProcessResult(ContractModel):
     outcome: TransitionOutcome
     response: dict[str, Any] = Field(default_factory=dict)
     result_reference: ResultReference | None = None
+    memory_write: ResultMemoryWrite | None = None
     clarification_questions: list[dict[str, Any]] | None = None
     diagnostics: dict[str, Any] = Field(default_factory=dict)
 
@@ -61,11 +63,13 @@ class BalanceChatService:
         *,
         metadata=None,
         delete_result_memory: Callable[[str], int] | None = None,
+        persist_result_memory: Callable[..., dict[str, Any]] | None = None,
     ) -> None:
         self.store = store
         self.processor = processor
         self.metadata = metadata
         self.delete_result_memory = delete_result_memory
+        self.persist_result_memory = persist_result_memory
         self._locks: defaultdict[str, RLock] = defaultdict(RLock)
         self._locks_guard = RLock()
 
@@ -157,6 +161,38 @@ class BalanceChatService:
                     result=processed.result_reference,
                     clarification_questions=processed.clarification_questions,
                 )
+                memory_status: dict[str, Any] = {}
+                if (
+                    processed.memory_write is not None
+                    and self.persist_result_memory is not None
+                    and committed.metadata is not None
+                ):
+                    try:
+                        memory_status = self.persist_result_memory(
+                            session_id=session_id,
+                            revision=committed.revision,
+                            metadata=committed.metadata,
+                            write=processed.memory_write,
+                        )
+                    except Exception as memory_exc:
+                        memory_status = {
+                            "persisted": False,
+                            "error": type(memory_exc).__name__,
+                        }
+                        log_event(
+                            LOGGER,
+                            logging.ERROR,
+                            "result_memory_post_commit_failed",
+                            request_id=trace_id,
+                            session_id=session_id,
+                            revision=committed.revision,
+                            error_type=type(memory_exc).__name__,
+                        )
+                if memory_status:
+                    processed.diagnostics.setdefault("result_memory", {}).update(
+                        persisted=bool(memory_status.get("persisted")),
+                        stored_chunks=int(memory_status.get("chunks") or 0),
+                    )
                 response = {
                     "status": _public_status(processed.outcome),
                     "session": _session_view(committed),

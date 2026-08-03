@@ -48,6 +48,7 @@ def build_application(config_path: str | Path):
             if memory is not None and callable(getattr(memory.store, "delete_session", None))
             else None
         ),
+        persist_result_memory=(memory.persist_write if memory is not None else None),
     )
     return create_app(
         service,

@@ -9,6 +9,8 @@ from balance_chat.contracts import (
     ContextMutation,
     Operation,
     PeriodRef,
+    ResultMemoryWrite,
+    MetadataVersionRef,
     TransitionOutcome,
 )
 from balance_chat.service import BalanceChatService, TurnProcessResult, TurnProcessingError
@@ -166,6 +168,54 @@ def test_typed_clarification_answer_reaches_processor() -> None:
 
     assert response.status_code == 200
     assert processor.last_clarification.selected_option == "май 2025"
+
+
+def test_result_memory_is_persisted_only_after_context_commit() -> None:
+    class MemoryProcessor(FakeProcessor):
+        def process(self, state, *, message, clarification, **kwargs):
+            result = super().process(
+                state,
+                message=message,
+                clarification=clarification,
+                **kwargs,
+            )
+            result.memory_write = ResultMemoryWrite(
+                turn_id=result.mutation.turn_id,
+                query=message,
+                intent=result.mutation.replace_intent,
+                result_id="result-1",
+                facts=[{"value": 42, "unit": "тыс. м3"}],
+            )
+            return result
+
+    store = InMemoryContextStore()
+    processor = MemoryProcessor()
+    observed = {}
+
+    def persist_result_memory(**kwargs):
+        observed["committed_revision"] = store.get(kwargs["session_id"]).revision
+        return {"persisted": True, "chunks": 1}
+
+    service = BalanceChatService(
+        store,
+        processor,
+        metadata=MetadataVersionRef(
+            bundle_id="sha256:" + "a" * 64,
+            bundle_version="2026.07.7",
+            schema_version="1.1",
+        ),
+        persist_result_memory=persist_result_memory,
+    )
+    state = service.create_session()
+
+    response = service.execute_turn(
+        state.session_id,
+        expected_revision=0,
+        message="Покажи поставки",
+    )
+
+    assert observed["committed_revision"] == 1
+    assert response["diagnostics"]["result_memory"]["persisted"] is True
 
 
 def test_delete_session_is_idempotent_and_ui_is_served() -> None:

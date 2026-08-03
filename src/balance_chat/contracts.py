@@ -171,6 +171,15 @@ class ResultReference(ContractModel):
     facts: list[dict[str, Any]] = Field(default_factory=list)
 
 
+class ResultMemoryWrite(ContractModel):
+    turn_id: str
+    query: str
+    intent: AnalysisIntent
+    result_id: str
+    facts: list[dict[str, Any]] = Field(min_length=1)
+    summary: dict[str, Any] = Field(default_factory=dict)
+
+
 class TurnReference(ContractModel):
     turn_id: str
     user_message: str

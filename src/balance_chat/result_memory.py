@@ -13,6 +13,7 @@ from .contracts import (
     ContractModel,
     MetadataVersionRef,
     PeriodRef,
+    ResultMemoryWrite,
 )
 from .execution import NativeExecutionResult
 
@@ -99,27 +100,52 @@ class PipelineResultMemoryAdapter:
         ]
         if not facts:
             raise ResultMemoryError("successful result has no deterministic facts")
+        write = ResultMemoryWrite(
+            turn_id=turn_id,
+            query=query,
+            intent=intent,
+            result_id=result_id,
+            facts=facts,
+            summary=_deterministic_summary(result),
+        )
+        return self.persist_write(
+            session_id=session_id,
+            revision=revision,
+            metadata=metadata,
+            write=write,
+            expires_at=expires_at,
+        )
+
+    def persist_write(
+        self,
+        *,
+        session_id: str,
+        revision: int,
+        metadata: MetadataVersionRef,
+        write: ResultMemoryWrite,
+        expires_at: datetime | None = None,
+    ) -> dict[str, Any]:
         plan_hash = _sha256(
             {
-                "intent": intent.model_dump(mode="json"),
-                "facts": facts,
+                "intent": write.intent.model_dump(mode="json"),
+                "facts": write.facts,
                 "metadata_bundle_id": metadata.bundle_id,
             }
         )
         envelope = {
             "status": "ok",
-            "question": query,
-            "rows": facts,
-            "summary": _deterministic_summary(result),
-            "debug": {"resolved_plan": _resolved_plan(intent)},
+            "question": write.query,
+            "rows": write.facts,
+            "summary": write.summary,
+            "debug": {"resolved_plan": _resolved_plan(write.intent)},
         }
         reference = _ResultRef(
-            result_id=result_id,
-            turn_id=turn_id,
+            result_id=write.result_id,
+            turn_id=write.turn_id,
             status="ok",
-            operation=intent.operation.value,
-            unit=facts[0].get("unit"),
-            facts=facts,
+            operation=write.intent.operation.value,
+            unit=write.facts[0].get("unit"),
+            facts=write.facts,
             source_refs=[],
             resolved_plan_hash=plan_hash,
             metadata_bundle_version=metadata.bundle_version,
@@ -132,7 +158,7 @@ class PipelineResultMemoryAdapter:
                     session_revision=revision,
                     expires_at=expires_at
                     or datetime.now(timezone.utc) + timedelta(seconds=self.ttl_s),
-                    turn=_Turn(turn_id=turn_id, message=query),
+                    turn=_Turn(turn_id=write.turn_id, message=write.query),
                     envelope=envelope,
                     result_ref=reference,
                     metadata=metadata,
