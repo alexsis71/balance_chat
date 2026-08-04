@@ -840,6 +840,7 @@ class PipelineV2TurnProcessor:
         if self._normalize_lemmas is None:
             return self._matched_geo_objects(message)
         query_tokens = self._normalize_lemmas(message).split()
+        business_spans = _business_entity_token_spans(query_tokens)
         candidates: list[tuple[int, int, float, Any]] = []
         for geo in self.registry.geo_objects:
             best: tuple[int, int, float, Any] | None = None
@@ -849,7 +850,8 @@ class PipelineV2TurnProcessor:
                     continue
                 width = len(label_tokens)
                 for start in range(0, len(query_tokens) - width + 1):
-                    if _business_qualified_geo_span(query_tokens, start):
+                    end = start + width
+                    if any(start < right and end > left for left, right in business_spans):
                         continue
                     window = query_tokens[start:start + width]
                     scores = [
@@ -859,7 +861,7 @@ class PipelineV2TurnProcessor:
                     threshold = 0.84 if width == 1 else 0.76
                     if min(scores) < threshold:
                         continue
-                    candidate = (start, start + width, sum(scores) / width, geo)
+                    candidate = (start, end, sum(scores) / width, geo)
                     if best is None or candidate[2] > best[2]:
                         best = candidate
             if best is not None:
@@ -1805,14 +1807,19 @@ _BUSINESS_ENTITY_BOUNDARIES = {
 }
 
 
-def _business_qualified_geo_span(tokens: list[str], start: int) -> bool:
-    """Do not reinterpret a place inside `ГП ТГ …` / `ТГ …` as standalone GEO."""
-    prefix = tokens[max(0, start - 3):start]
-    try:
-        marker = len(prefix) - 1 - prefix[::-1].index("тг")
-    except ValueError:
-        return False
-    return not any(item in _BUSINESS_ENTITY_BOUNDARIES for item in prefix[marker + 1:])
+def _business_entity_token_spans(tokens: list[str]) -> list[tuple[int, int]]:
+    """First pass: reserve names qualified by `ГП ТГ` / `ТГ` for business binding."""
+    spans: list[tuple[int, int]] = []
+    for index, token in enumerate(tokens):
+        if token != "тг" or index + 1 >= len(tokens):
+            continue
+        start = index + 1
+        end = start
+        while end < len(tokens) and tokens[end] not in _BUSINESS_ENTITY_BOUNDARIES:
+            end += 1
+        if end > start:
+            spans.append((start, end))
+    return spans
 
 
 def _metadata_numeric_id(value: Any) -> int:

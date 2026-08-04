@@ -1391,7 +1391,7 @@ def test_current_geo_tagger_does_not_replace_qualified_balance_and_article() -> 
             SimpleNamespace(
                 geo_id="novgorod",
                 canonical_name="новгород",
-                aliases=("н новгород",),
+                aliases=("н новгород", "нижний новгород"),
             ),
         )
     )
@@ -1400,9 +1400,13 @@ def test_current_geo_tagger_does_not_replace_qualified_balance_and_article() -> 
         "суммарный объём из ГП ТГ Москва в ТГ Н.Новгород"
     )
     standalone = processor._tagged_geo_objects("покажи поставки в Москву")
+    mixed_roles = processor._tagged_geo_objects(
+        "Суммарное распределение из ТГ Нижний Новгород в Нижний Новгород"
+    )
 
     assert qualified == []
     assert [item.geo_id for item in standalone] == ["moscow"]
+    assert [item.geo_id for item in mixed_roles] == ["novgorod"]
 
 
 def test_daily_balance_row_overrides_generic_unit_without_balance_entity() -> None:
