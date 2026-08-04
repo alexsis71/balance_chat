@@ -283,7 +283,7 @@ class PipelineEnvelopeTranslator:
             task_id=task.task_id,
             value=number,
             unit=next(iter(units)),
-            label=str(rows[0].get("label") or task.operand_id),
+            label=_fact_label(task, rows[0]),
             periods=[
                 {
                     "date_from": period.date_from.isoformat(),
@@ -312,6 +312,29 @@ def _entity(role: str, entity_type: str, value: Mapping[str, Any]) -> OperandEnt
 def _display_name(value: Any) -> str:
     text = str(value).strip()
     return text[:1].upper() + text[1:] if text else text
+
+
+def _fact_label(task: ExecutionTask, row: Mapping[str, Any]) -> str:
+    for key in ("label", "article_name", "article_scope", "geo", "balance"):
+        value = str(row.get(key) or "").strip()
+        if value:
+            return value
+    operand = task.scalar_intent.operands[0]
+    entities = {item.role: item.entity.display_name for item in operand.entities}
+    if entities.get("source") and entities.get("destination"):
+        return f"{entities['source']} → {entities['destination']}"
+    for role in ("article", "destination", "route", "source", "balance"):
+        if entities.get(role):
+            return entities[role]
+    metric_labels = {
+        "distribution": "Распределение газа",
+        "incoming": "Поступление газа",
+        "export": "Экспорт газа",
+        "stock": "Запасы газа",
+        "balance": "Баланс газа",
+        "flow_balance": "Баланс потоков газа",
+    }
+    return metric_labels.get(operand.metric, operand.metric)
 
 
 _DATE_FIELDS = ("gas_day", "day", "date", "fact_date", "balance_date", "date_from")

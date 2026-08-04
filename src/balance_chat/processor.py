@@ -40,6 +40,12 @@ from .service import TurnProcessResult, TurnProcessingError
 LOGGER = logging.getLogger("balance_chat.processor")
 
 
+_REVERSE_DIRECTION = re.compile(
+    r"^\s*(?:(?:а|и)\s+)?(?:обратно|наоборот)\b",
+    re.IGNORECASE,
+)
+
+
 class PipelineV2TurnProcessor:
     """Production wiring for interpretation, binding, planning, execution and memory."""
 
@@ -84,6 +90,25 @@ class PipelineV2TurnProcessor:
         turn_id = str(uuid4())
         if clarification is not None:
             _validate_clarification_answer(state, clarification)
+        reverse = self._deterministic_reverse_mutation(state, message, turn_id)
+        if reverse is not None:
+            mutation, relation_found = reverse
+            if not relation_found:
+                return self._reverse_no_data(
+                    mutation,
+                    request_id=request_id,
+                    started=started,
+                )
+            return self._execute_mutation(
+                state,
+                mutation,
+                normalized_message=mutation.normalized_message or message,
+                execute_db=execute_db,
+                request_id=request_id,
+                started=started,
+                interpretation_mode="deterministic_reverse",
+                memory_chunks=[],
+            )
         explicit_geos = self._matched_geo_objects(message)
         mixed_metric_operands = self._matched_distribution_own_consumers(message)
         if mixed_metric_operands:
@@ -431,6 +456,149 @@ class PipelineV2TurnProcessor:
             user_message=message,
             normalized_message=message,
             replace_intent=intent,
+        )
+
+    def _deterministic_reverse_mutation(self, state, message: str, turn_id: str):
+        """Resolve a conversational reverse only from canonical active metadata."""
+        if _REVERSE_DIRECTION.search(str(message)) is None:
+            return None
+        scope = state.active_dialog_scope
+        if scope is None or len(scope.intent.operands) != 1:
+            return None
+        operand = scope.intent.operands[0]
+        by_role = {item.role: item for item in operand.entities}
+        balance_ref = by_role.get("balance")
+        article_ref = by_role.get("article")
+        if balance_ref is None or article_ref is None:
+            source = by_role.get("source")
+            destination = by_role.get("destination")
+            if source is None or destination is None:
+                return None
+            reversed_operand = InterpretationMutationCompiler._reverse_operand(operand)
+            intent = scope.intent.model_copy(
+                update={
+                    "operands": [reversed_operand],
+                    "comparison": None,
+                },
+                deep=True,
+            )
+            return (
+                ContextMutation(
+                    turn_id=turn_id,
+                    user_message=message,
+                    normalized_message=message,
+                    replace_intent=intent,
+                ),
+                True,
+            )
+
+        source_balance = self.registry.balance(
+            _metadata_numeric_id(balance_ref.entity.entity_id)
+        )
+        current_article = self.registry.article(
+            _metadata_numeric_id(article_ref.entity.entity_id)
+        )
+        if source_balance is None or current_article is None:
+            return None
+        destination_balance = next(
+            (
+                self.registry.balance(value)
+                for value in (
+                    current_article.canonical_name,
+                    *current_article.aliases,
+                    article_ref.entity.display_name,
+                )
+                if self.registry.balance(value) is not None
+            ),
+            None,
+        )
+        reverse_articles: dict[int, Any] = {}
+        if destination_balance is not None:
+            for value in (source_balance.canonical_name, *source_balance.aliases):
+                for candidate in self.registry.find_article_candidates(
+                    value,
+                    balance_id=destination_balance.balance_id,
+                ):
+                    if (
+                        str(candidate.section).strip().casefold() == "распределение"
+                        and any(
+                            _normalize_text(part) == "за пределы"
+                            for part in candidate.path
+                        )
+                    ):
+                        reverse_articles[candidate.article_id] = candidate
+        reverse_article = (
+            next(iter(reverse_articles.values()))
+            if len(reverse_articles) == 1
+            else None
+        )
+        relation_found = destination_balance is not None and reverse_article is not None
+        reversed_entities = (
+            _balance_article_entities(destination_balance, reverse_article)
+            if relation_found
+            else list(operand.entities)
+        )
+        intent = scope.intent.model_copy(
+            update={
+                "operands": [
+                    operand.model_copy(update={"entities": reversed_entities}, deep=True)
+                ],
+                "comparison": None,
+            },
+            deep=True,
+        )
+        normalized = (
+            f"Обратное направление: {destination_balance.canonical_name} — "
+            f"{reverse_article.canonical_name}"
+            if relation_found
+            else message
+        )
+        return (
+            ContextMutation(
+                turn_id=turn_id,
+                user_message=message,
+                normalized_message=normalized,
+                replace_intent=intent,
+            ),
+            relation_found,
+        )
+
+    @staticmethod
+    def _reverse_no_data(mutation, *, request_id, started):
+        log_event(
+            LOGGER,
+            logging.INFO,
+            "reverse_relation_not_found",
+            request_id=request_id,
+            pre_database=True,
+        )
+        return TurnProcessResult(
+            mutation=mutation,
+            outcome=TransitionOutcome.NO_DATA,
+            response={
+                "operation": mutation.replace_intent.operation.value,
+                "status": "no_data",
+                "facts": [],
+                "warnings": [
+                    {
+                        "code": "reverse_relation_not_found",
+                        "message": "Для обратного направления нет однозначной связи в metadata.",
+                    }
+                ],
+            },
+            diagnostics={
+                "interpretation": {
+                    "mode": "deterministic_reverse",
+                    "source": "deterministic",
+                    "confidence": 1.0,
+                },
+                "execution": {
+                    "status": "no_data",
+                    "task_count": 0,
+                    "layer": "pre_database_metadata_gate",
+                    "elapsed_ms": int((perf_counter() - started) * 1000),
+                },
+            },
         )
 
     def _matched_geo_objects(self, message: str) -> list[Any]:
@@ -1222,6 +1390,11 @@ def _official_name(value: str) -> str:
 def _normalize_text(value: str) -> str:
     text = str(value).casefold().replace("ё", "е")
     return " ".join(re.sub(r"[^0-9a-zа-я]+", " ", text).split())
+
+
+def _metadata_numeric_id(value: Any) -> int:
+    match = re.search(r"(\d+)$", str(value).strip())
+    return int(match.group(1)) if match else -1
 
 
 def _balance_article_entities(balance, article) -> list[OperandEntityRef]:

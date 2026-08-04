@@ -122,7 +122,7 @@ class HybridInterpretationPolicy:
         re.IGNORECASE,
     )
     _REFERENCES = re.compile(
-        r"\b(?:их|это|этот|эта|эти|предыдущ\w*|перв\w*|втор\w*|обратно)\b",
+        r"\b(?:их|это|этот|эта|эти|предыдущ\w*|перв\w*|втор\w*|обратно|наоборот)\b",
         re.IGNORECASE,
     )
 

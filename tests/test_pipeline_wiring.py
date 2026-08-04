@@ -36,6 +36,7 @@ from balance_chat.processor import (
 from balance_chat.reducer import apply_context_transition
 from balance_chat.service import TurnProcessingError
 from balance_chat.interpretation import InterpretationError
+from balance_chat.execution import NativeExecutionResult, ScalarFact, TaskExecutionResult
 
 
 def _envelope():
@@ -373,6 +374,41 @@ def test_additive_scalar_rows_are_summed_with_provenance() -> None:
     assert fact.source_row_count == 2
 
 
+def test_scalar_fact_uses_business_label_instead_of_operand_id() -> None:
+    from balance_chat.planning import NativeMultiOperandPlanner
+
+    intent = AnalysisIntent(
+        operation=Operation.AGGREGATE,
+        operands=[AnalysisOperand(
+            operand_id="operand_1",
+            metric="distribution",
+            aggregate_type="max",
+            entities=[OperandEntityRef(
+                role="article",
+                entity=CanonicalEntityRef(
+                    entity_id="2010000039766",
+                    entity_type="article",
+                    display_name="ТГ Н.-Новгород",
+                ),
+            )],
+        )],
+        periods=[PeriodRef(date_from="2025-04-01", date_to="2025-07-01")],
+    )
+    task = NativeMultiOperandPlanner().plan(intent).tasks[0]
+    fact = PipelineEnvelopeTranslator().fact(task, {
+        "status": "ok",
+        "unit": "тыс. м3",
+        "rows": [{
+            "fact_value": "94602.041",
+            "article_name": "    ТГ Н.-Новгород",
+            "gas_day": "2025-04-10",
+        }],
+    })
+
+    assert fact.label == "ТГ Н.-Новгород"
+    assert fact.label != "operand_1"
+
+
 def test_public_native_fact_does_not_expose_provenance() -> None:
     from balance_chat.execution import NativeExecutionResult, TaskExecutionResult, ScalarFact
     from balance_chat.processor import _public_native_result
@@ -505,6 +541,192 @@ class NeverCalled:
 class InvalidInterpreter:
     def interpret(self, **_kwargs):
         raise InterpretationError("invalid structured output")
+
+
+class _ReverseRegistry:
+    def __init__(self, *, reverse_exists: bool = True):
+        self.geo_objects = ()
+        self.geo_groups = ()
+        self.routes = ()
+        self.source = SimpleNamespace(
+            balance_id=10,
+            canonical_name="ГП ТГ Н.Новгород суточный баланс",
+            aliases=("тг н новгород",),
+        )
+        self.destination = SimpleNamespace(
+            balance_id=20,
+            canonical_name="ГП ТГ Москва суточный баланс",
+            aliases=("тг москва",),
+        )
+        self.current_article = SimpleNamespace(
+            article_id=11,
+            balance_id=10,
+            canonical_name="ТГ Москва",
+            aliases=(),
+            section="Распределение",
+            path=("Распределение", "За пределы", "ТГ Москва"),
+        )
+        self.reverse_article = SimpleNamespace(
+            article_id=21,
+            balance_id=20,
+            canonical_name="ТГ Н.-Новгород",
+            aliases=(),
+            section="Распределение",
+            path=("Распределение", "За пределы", "ТГ Н.-Новгород"),
+        )
+        self.reverse_exists = reverse_exists
+
+    def balance(self, value):
+        if value == 10 or "н новгород" in _test_normalize(value):
+            return self.source
+        if value == 20 or "москва" in _test_normalize(value):
+            return self.destination
+        return None
+
+    def article(self, value):
+        return self.current_article if value == 11 else None
+
+    def find_article_candidates(self, value, *, balance_id=None):
+        if (
+            self.reverse_exists
+            and balance_id == 20
+            and "н новгород" in _test_normalize(value)
+        ):
+            return (self.reverse_article,)
+        return ()
+
+
+def _test_normalize(value):
+    import re
+    return " ".join(re.sub(r"[^0-9a-zа-я]+", " ", str(value).casefold()).split())
+
+
+class _NoInterpretationRuntime:
+    def _import_pipeline_module(self, _name):
+        raise ImportError
+
+
+class _ReverseExecutor:
+    def __init__(self):
+        self.calls = 0
+
+    def execute(self, plan, **_kwargs):
+        self.calls += 1
+        task = plan.tasks[0]
+        return NativeExecutionResult(
+            operation=plan.operation,
+            status="ok",
+            task_results=[TaskExecutionResult(
+                task_id=task.task_id,
+                status="ok",
+                fact=ScalarFact(
+                    task_id=task.task_id,
+                    value=Decimal("94602.041"),
+                    unit="тыс. м3",
+                    label="ТГ Н.-Новгород",
+                ),
+                envelope={"status": "ok"},
+            )],
+        )
+
+
+def _route_state():
+    return apply_context_transition(
+        ContextContractV2(session_id="session"),
+        ContextMutation(
+            turn_id="turn-1",
+            user_message="транспорт из Новгорода в Москву",
+            replace_intent=AnalysisIntent(
+                operation=Operation.AGGREGATE,
+                operands=[AnalysisOperand(
+                    operand_id="operand_1",
+                    metric="distribution",
+                    aggregate_type="max",
+                    entities=[
+                        OperandEntityRef(
+                            role="balance",
+                            entity=CanonicalEntityRef(
+                                entity_id="BAL:10",
+                                entity_type="balance",
+                                display_name="ГП ТГ Н.Новгород суточный баланс",
+                            ),
+                        ),
+                        OperandEntityRef(
+                            role="article",
+                            entity=CanonicalEntityRef(
+                                entity_id="ART:11",
+                                entity_type="article",
+                                display_name="ТГ Москва",
+                            ),
+                        ),
+                    ],
+                )],
+                periods=[PeriodRef(date_from="2025-04-01", date_to="2025-07-01")],
+            ),
+        ),
+        TransitionOutcome.SUCCESS,
+    )
+
+
+@pytest.mark.parametrize(
+    "message",
+    ["и наоборот", "и наоборот из ТГ Москва в ТГ Н. Новгород"],
+)
+def test_reverse_followup_resolves_opposite_balance_article_without_qwen(message) -> None:
+    registry = _ReverseRegistry()
+    executor = _ReverseExecutor()
+    processor = PipelineV2TurnProcessor(
+        runtime=_NoInterpretationRuntime(),
+        registry=registry,
+        interpreter=object(),
+        compiler=object(),
+        executor=executor,
+    )
+
+    processed = processor.process(
+        _route_state(),
+        message=message,
+        execute_db=True,
+        clarification=None,
+        request_id="request",
+    )
+
+    assert processed.outcome == TransitionOutcome.SUCCESS
+    assert executor.calls == 1
+    assert processed.diagnostics["interpretation"]["mode"] == "deterministic_reverse"
+    entities = {
+        item.role: item.entity.display_name
+        for item in processed.mutation.replace_intent.operands[0].entities
+    }
+    assert entities == {
+        "balance": "ГП ТГ Москва суточный баланс",
+        "article": "ТГ Н.-Новгород",
+    }
+    assert processed.response["facts"][0]["label"] == "ТГ Н.-Новгород"
+
+
+def test_reverse_without_curated_relation_is_no_data_before_execution() -> None:
+    executor = _ReverseExecutor()
+    processor = PipelineV2TurnProcessor(
+        runtime=_NoInterpretationRuntime(),
+        registry=_ReverseRegistry(reverse_exists=False),
+        interpreter=object(),
+        compiler=object(),
+        executor=executor,
+    )
+
+    processed = processor.process(
+        _route_state(),
+        message="и наоборот",
+        execute_db=True,
+        clarification=None,
+        request_id="request",
+    )
+
+    assert processed.outcome == TransitionOutcome.NO_DATA
+    assert executor.calls == 0
+    assert processed.response["warnings"][0]["code"] == "reverse_relation_not_found"
+    assert processed.diagnostics["execution"]["task_count"] == 0
 
 
 def test_standalone_processor_uses_current_resolved_plan_without_llm() -> None:
