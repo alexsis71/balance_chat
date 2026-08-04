@@ -244,7 +244,7 @@ class PipelineEnvelopeTranslator:
         )
         values: list[Decimal] = []
         units: set[str] = set()
-        canonical_unit = _canonical_task_unit(task)
+        canonical_unit = _canonical_task_unit(task, rows)
         for row in rows:
             value = next(
                 (row.get(key) for key in ("fact_value", "fact", "value", "amount", "volume") if row.get(key) is not None),
@@ -342,7 +342,10 @@ def _fact_label(task: ExecutionTask, row: Mapping[str, Any]) -> str:
     return metric_labels.get(operand.metric, operand.metric)
 
 
-def _canonical_task_unit(task: ExecutionTask) -> str | None:
+def _canonical_task_unit(
+    task: ExecutionTask,
+    rows: list[Mapping[str, Any]] = (),
+) -> str | None:
     """Daily balance facts are stored and exposed in thousands of cubic metres."""
     operand = task.scalar_intent.operands[0]
     for reference in operand.entities:
@@ -351,6 +354,13 @@ def _canonical_task_unit(task: ExecutionTask) -> str | None:
             and "суточный баланс" in reference.entity.display_name.casefold()
         ):
             return "тыс. м3"
+    for row in rows:
+        for key in (
+            "balance", "balance_name", "balance_label",
+            "source_balance", "source_balance_name",
+        ):
+            if "суточный баланс" in str(row.get(key) or "").casefold():
+                return "тыс. м3"
     return None
 
 

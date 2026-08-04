@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from decimal import Decimal
+import re
 from types import SimpleNamespace
 
 import pytest
@@ -1375,3 +1376,66 @@ def test_current_geo_tagger_handles_inflection_and_preserves_mention_order() -> 
     tagged = processor._tagged_geo_objects("Сравни Самару и Казань за лето 2025")
 
     assert [item.geo_id for item in tagged] == ["samara", "kazan"]
+
+
+def test_current_geo_tagger_does_not_replace_qualified_balance_and_article() -> None:
+    processor = object.__new__(PipelineV2TurnProcessor)
+    processor._normalize_lemmas = lambda value: " ".join(
+        re.sub(r"[^0-9a-zа-я]+", " ", str(value).casefold())
+        .replace("москву", "москва")
+        .split()
+    )
+    processor.registry = SimpleNamespace(
+        geo_objects=(
+            SimpleNamespace(geo_id="moscow", canonical_name="москва", aliases=()),
+            SimpleNamespace(
+                geo_id="novgorod",
+                canonical_name="новгород",
+                aliases=("н новгород",),
+            ),
+        )
+    )
+
+    qualified = processor._tagged_geo_objects(
+        "суммарный объём из ГП ТГ Москва в ТГ Н.Новгород"
+    )
+    standalone = processor._tagged_geo_objects("покажи поставки в Москву")
+
+    assert qualified == []
+    assert [item.geo_id for item in standalone] == ["moscow"]
+
+
+def test_daily_balance_row_overrides_generic_unit_without_balance_entity() -> None:
+    from balance_chat.planning import NativeMultiOperandPlanner
+
+    intent = AnalysisIntent(
+        operation=Operation.AGGREGATE,
+        operands=[AnalysisOperand(
+            operand_id="route",
+            metric="distribution",
+            aggregate_type="sum",
+            entities=[OperandEntityRef(
+                role="article",
+                entity=CanonicalEntityRef(
+                    entity_id="2010000039766",
+                    entity_type="article",
+                    display_name="ТГ Н.-Новгород",
+                ),
+            )],
+        )],
+        periods=[PeriodRef(date_from="2025-04-01", date_to="2025-07-01")],
+    )
+    task = NativeMultiOperandPlanner().plan(intent).tasks[0]
+
+    fact = PipelineEnvelopeTranslator().fact(task, {
+        "status": "ok",
+        "unit": "млн м3",
+        "rows": [{
+            "fact_value": "69937.11",
+            "balance": "ГП ТГ Москва суточный баланс",
+            "article_name": "ТГ Н.-Новгород",
+        }],
+    })
+
+    assert fact.unit == "тыс. м3"
+    assert fact.value == Decimal("69937.11")

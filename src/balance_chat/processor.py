@@ -849,6 +849,8 @@ class PipelineV2TurnProcessor:
                     continue
                 width = len(label_tokens)
                 for start in range(0, len(query_tokens) - width + 1):
+                    if _business_qualified_geo_span(query_tokens, start):
+                        continue
                     window = query_tokens[start:start + width]
                     scores = [
                         SequenceMatcher(None, left, right).ratio()
@@ -1796,6 +1798,21 @@ def _official_name(value: str) -> str:
 def _normalize_text(value: str) -> str:
     text = str(value).casefold().replace("ё", "е")
     return " ".join(re.sub(r"[^0-9a-zа-я]+", " ", text).split())
+
+
+_BUSINESS_ENTITY_BOUNDARIES = {
+    "в", "из", "до", "между", "и", "за", "по", "для", "с", "на", "к", "от"
+}
+
+
+def _business_qualified_geo_span(tokens: list[str], start: int) -> bool:
+    """Do not reinterpret a place inside `ГП ТГ …` / `ТГ …` as standalone GEO."""
+    prefix = tokens[max(0, start - 3):start]
+    try:
+        marker = len(prefix) - 1 - prefix[::-1].index("тг")
+    except ValueError:
+        return False
+    return not any(item in _BUSINESS_ENTITY_BOUNDARIES for item in prefix[marker + 1:])
 
 
 def _metadata_numeric_id(value: Any) -> int:
