@@ -25,6 +25,8 @@ from balance_chat.contracts import (
 from balance_chat.processor import (
     PipelineV2TurnProcessor,
     _deterministic_grouping_query,
+    _deterministic_extremum_comparison,
+    _extremum_comparison_summary,
     _deterministic_period_mutation,
     _distribution_own_consumers_mentions,
     _native_summary_envelope,
@@ -769,6 +771,103 @@ def test_reverse_without_curated_relation_is_no_data_before_execution() -> None:
     assert executor.calls == 0
     assert processed.response["warnings"][0]["code"] == "reverse_relation_not_found"
     assert processed.diagnostics["execution"]["task_count"] == 0
+
+
+def test_compare_with_minimum_inherits_exact_route_and_period() -> None:
+    state = _route_state()
+
+    mutation = _deterministic_extremum_comparison(
+        state,
+        "сравни с минимумом за тот же период",
+        "turn-2",
+    )
+
+    assert mutation is not None
+    intent = mutation.replace_intent
+    assert intent.operation == Operation.COMPARE
+    assert [item.aggregate_type for item in intent.operands] == ["max", "min"]
+    assert intent.periods == state.active_dialog_scope.intent.periods
+    assert intent.operands[0].entities == intent.operands[1].entities
+    assert intent.operands[0].entities == state.active_dialog_scope.intent.operands[0].entities
+    assert intent.comparison.baseline_operand_id == "extremum_baseline"
+    assert intent.comparison.target_operand_id == "extremum_target"
+
+
+def test_extremum_comparison_does_not_treat_minimum_as_metadata_entity() -> None:
+    mutation = _deterministic_extremum_comparison(
+        _route_state(),
+        "Сравни с минимальным значением",
+        "turn-2",
+    )
+
+    assert mutation is not None
+    assert all(
+        entity.entity.display_name != "минимум"
+        for operand in mutation.replace_intent.operands
+        for entity in operand.entities
+    )
+
+
+def test_extremum_comparison_fallback_uses_typed_percent_base_and_dates() -> None:
+    from balance_chat.execution import ComparisonResult
+
+    intent = _deterministic_extremum_comparison(
+        _route_state(),
+        "сравни с минимумом за тот же период",
+        "turn-2",
+    ).replace_intent
+    native = NativeExecutionResult(
+        operation=Operation.COMPARE,
+        status="ok",
+        task_results=[
+            TaskExecutionResult(
+                task_id="task_1",
+                status="ok",
+                fact=ScalarFact(
+                    task_id="task_1",
+                    value=Decimal("367869.336"),
+                    unit="тыс. м3",
+                    label="ТГ Москва",
+                    extremum_at="2025-04-10",
+                ),
+                envelope={"status": "ok"},
+            ),
+            TaskExecutionResult(
+                task_id="task_2",
+                status="ok",
+                fact=ScalarFact(
+                    task_id="task_2",
+                    value=Decimal("253845.571"),
+                    unit="тыс. м3",
+                    label="ТГ Москва",
+                    extremum_at="2025-04-20",
+                ),
+                envelope={"status": "ok"},
+            ),
+        ],
+        comparison=ComparisonResult(
+            baseline_task_id="task_1",
+            target_task_id="task_2",
+            baseline_value=Decimal("367869.336"),
+            target_value=Decimal("253845.571"),
+            delta=Decimal("-114023.765"),
+            percent_change=Decimal("-30.9957242535703"),
+            unit="тыс. м3",
+        ),
+    )
+
+    summary = _extremum_comparison_summary(
+        native,
+        intent,
+        upstream_summary={"generated_by": "deterministic_fallback"},
+    )
+
+    assert summary["generated_by"] == "deterministic_contract"
+    assert "10.04.2025" in summary["text"]
+    assert "20.04.2025" in summary["text"]
+    assert "114\u00a0023,77" in summary["text"]
+    assert "31,00%" in summary["text"]
+    assert "44,92%" not in summary["text"]
 
 
 def test_standalone_processor_uses_current_resolved_plan_without_llm() -> None:

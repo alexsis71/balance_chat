@@ -5,6 +5,7 @@ import json
 import logging
 import re
 from datetime import date, timedelta
+from decimal import Decimal, ROUND_HALF_UP
 from time import perf_counter
 from typing import Any
 from uuid import uuid4
@@ -16,6 +17,7 @@ from .contracts import (
     AnalysisOperand,
     CanonicalEntityRef,
     ClarificationAnswer,
+    ComparisonSpec,
     ContextContractV2,
     ContextMutation,
     GroupingSpec,
@@ -42,6 +44,10 @@ LOGGER = logging.getLogger("balance_chat.processor")
 
 _REVERSE_DIRECTION = re.compile(
     r"^\s*(?:(?:а|и)\s+)?(?:обратно|наоборот)\b",
+    re.IGNORECASE,
+)
+_COMPARE_WITH_EXTREMUM = re.compile(
+    r"\bсравн\w*\s+с\s+(?P<extremum>миним\w*|максим\w*)\b",
     re.IGNORECASE,
 )
 
@@ -107,6 +113,22 @@ class PipelineV2TurnProcessor:
                 request_id=request_id,
                 started=started,
                 interpretation_mode="deterministic_reverse",
+                memory_chunks=[],
+            )
+        extremum_comparison = _deterministic_extremum_comparison(
+            state,
+            message,
+            turn_id,
+        )
+        if extremum_comparison is not None:
+            return self._execute_mutation(
+                state,
+                extremum_comparison,
+                normalized_message=extremum_comparison.normalized_message or message,
+                execute_db=execute_db,
+                request_id=request_id,
+                started=started,
+                interpretation_mode="deterministic_extremum_comparison",
                 memory_chunks=[],
             )
         explicit_geos = self._matched_geo_objects(message)
@@ -808,9 +830,24 @@ class PipelineV2TurnProcessor:
                     _native_summary_envelope(native, plan, normalized_message, intent),
                     request_id=f"{request_id}:summary",
                 )
-                response["summary"] = _public_summary(summary_envelope.get("summary"))
+                public_summary = _public_summary(summary_envelope.get("summary"))
+                contract_summary = _extremum_comparison_summary(
+                    native,
+                    intent,
+                    upstream_summary=public_summary,
+                )
+                response["summary"] = contract_summary or public_summary
                 response["warnings"] = summary_envelope.get("warnings") or []
                 summary_diagnostics.update(_summary_diagnostics(summary_envelope))
+                if contract_summary is not None:
+                    summary_diagnostics.update(
+                        generated_by=contract_summary["generated_by"],
+                        upstream_generated_by=(
+                            public_summary.get("generated_by")
+                            if isinstance(public_summary, dict)
+                            else None
+                        ),
+                    )
             except Exception as exc:
                 summary_diagnostics.update(
                     {"status": "error", "error_type": type(exc).__name__}
@@ -1185,6 +1222,87 @@ def _native_summary_envelope(native, plan, question: str, intent: AnalysisIntent
     }
 
 
+def _extremum_comparison_summary(
+    native,
+    intent: AnalysisIntent,
+    *,
+    upstream_summary: dict[str, Any] | None,
+) -> dict[str, Any] | None:
+    aggregates = [operand.aggregate_type for operand in intent.operands]
+    if (
+        native.operation != Operation.COMPARE
+        or len(aggregates) != 2
+        or set(aggregates) != {"max", "min"}
+        or native.comparison is None
+    ):
+        return None
+    if (
+        isinstance(upstream_summary, dict)
+        and upstream_summary.get("generated_by") == "llm"
+    ):
+        return None
+    facts = [result.fact for result in native.task_results]
+    if len(facts) != 2 or any(fact is None for fact in facts):
+        return None
+    by_aggregate = dict(zip(aggregates, facts))
+    maximum = by_aggregate["max"]
+    minimum = by_aggregate["min"]
+    spread = maximum.value - minimum.value
+    comparison = native.comparison
+    direction = (
+        "Минимум ниже максимума"
+        if comparison.delta < 0
+        else "Максимум выше минимума"
+    )
+    percent = abs(comparison.percent_change) if comparison.percent_change is not None else None
+    percent_text = (
+        f", или на {_format_ru_number(percent)}% относительно базового значения"
+        if percent is not None
+        else ""
+    )
+    maximum_date = _format_fact_date(maximum.extremum_at)
+    minimum_date = _format_fact_date(minimum.extremum_at)
+    return {
+        "title": "Сравнение максимума и минимума за сохранённый период",
+        "text": (
+            f"Максимум составил {_format_ru_number(maximum.value)} {maximum.unit}"
+            f"{f' и был достигнут {maximum_date}' if maximum_date else ''}. "
+            f"Минимум составил {_format_ru_number(minimum.value)} {minimum.unit}"
+            f"{f' и был достигнут {minimum_date}' if minimum_date else ''}. "
+            f"{direction} на {_format_ru_number(abs(spread))} {maximum.unit}"
+            f"{percent_text}."
+        ),
+        "bullets": [
+            f"Максимум: {_format_ru_number(maximum.value)} {maximum.unit}"
+            + (f" — {maximum_date}" if maximum_date else ""),
+            f"Минимум: {_format_ru_number(minimum.value)} {minimum.unit}"
+            + (f" — {minimum_date}" if minimum_date else ""),
+        ],
+        "metrics": {
+            "maximum": str(maximum.value),
+            "minimum": str(minimum.value),
+            "delta": str(comparison.delta),
+            "percent_change": (
+                str(comparison.percent_change)
+                if comparison.percent_change is not None
+                else None
+            ),
+        },
+        "confidence": "high",
+        "generated_by": "deterministic_contract",
+    }
+
+
+def _format_ru_number(value: Any) -> str:
+    number = Decimal(str(value)).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
+    rendered = f"{number:,.2f}"
+    return rendered.replace(",", "\u00a0").replace(".", ",")
+
+
+def _format_fact_date(value: Any) -> str | None:
+    return value.strftime("%d.%m.%Y") if value is not None else None
+
+
 _TECHNICAL_SUMMARY_TEXT = re.compile(
     r"^Операция\s+\S+\s+выполнена\s+через\s+deterministic execution layer\.?$",
     re.I,
@@ -1395,6 +1513,53 @@ def _normalize_text(value: str) -> str:
 def _metadata_numeric_id(value: Any) -> int:
     match = re.search(r"(\d+)$", str(value).strip())
     return int(match.group(1)) if match else -1
+
+
+def _deterministic_extremum_comparison(state, message: str, turn_id: str):
+    """Compare max/min over the exact active operand and canonical period."""
+    match = _COMPARE_WITH_EXTREMUM.search(str(message))
+    scope = state.active_dialog_scope
+    if match is None or scope is None or len(scope.intent.operands) != 1:
+        return None
+    baseline = scope.intent.operands[0]
+    if baseline.aggregate_type not in {"max", "min"}:
+        return None
+    target_aggregate = (
+        "min"
+        if match.group("extremum").casefold().startswith("миним")
+        else "max"
+    )
+    if target_aggregate == baseline.aggregate_type:
+        return None
+    baseline = baseline.model_copy(update={"operand_id": "extremum_baseline"}, deep=True)
+    target = baseline.model_copy(
+        update={
+            "operand_id": "extremum_target",
+            "aggregate_type": target_aggregate,
+        },
+        deep=True,
+    )
+    labels = {"max": "максимум", "min": "минимум"}
+    normalized = (
+        f"Сравни {labels[baseline.aggregate_type]} и {labels[target_aggregate]} "
+        "для сохранённых сущностей и периода"
+    )
+    intent = AnalysisIntent(
+        operation=Operation.COMPARE,
+        operands=[baseline, target],
+        periods=[item.model_copy(deep=True) for item in scope.intent.periods],
+        grain=scope.intent.grain,
+        comparison=ComparisonSpec(
+            baseline_operand_id=baseline.operand_id,
+            target_operand_id=target.operand_id,
+        ),
+    )
+    return ContextMutation(
+        turn_id=turn_id,
+        user_message=message,
+        normalized_message=normalized,
+        replace_intent=intent,
+    )
 
 
 def _balance_article_entities(balance, article) -> list[OperandEntityRef]:
