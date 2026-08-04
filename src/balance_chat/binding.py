@@ -379,7 +379,8 @@ class InterpretationMutationCompiler:
         if not missing:
             return
         if len(specs) == 1:
-            specs[0].entity_mode = "replace"
+            if specs[0].entity_mode == "inherit":
+                specs[0].entity_mode = "add"
             specs[0].entity_mentions.extend(missing)
             return
         if len(missing) == len(specs):

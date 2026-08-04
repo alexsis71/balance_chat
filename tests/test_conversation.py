@@ -250,6 +250,94 @@ def test_current_message_geo_tag_replaces_stale_geo_without_phrase_rules() -> No
     assert entities[0].entity.display_name == "Казань"
 
 
+def test_current_geo_updates_role_without_clearing_business_entities() -> None:
+    period = PeriodRef(date_from="2025-04-01", date_to="2025-07-01")
+    route = AnalysisOperand(
+        operand_id="route",
+        metric="distribution",
+        aggregate_type="sum",
+        entities=[
+            OperandEntityRef(
+                role="balance",
+                entity=CanonicalEntityRef(
+                    entity_id="balance:nn",
+                    entity_type="balance",
+                    display_name="ГП ТГ Н.Новгород суточный баланс",
+                ),
+            ),
+            OperandEntityRef(
+                role="article",
+                entity=CanonicalEntityRef(
+                    entity_id="article:route",
+                    entity_type="article",
+                    display_name="Распределение",
+                ),
+            ),
+        ],
+    )
+    state = apply_context_transition(
+        ContextContractV2(session_id="session"),
+        ContextMutation(
+            turn_id="turn-1",
+            user_message="распределение из ТГ Нижний Новгород",
+            replace_intent=AnalysisIntent(
+                operation=Operation.SHOW,
+                operands=[route],
+                periods=[period],
+            ),
+        ),
+        TransitionOutcome.SUCCESS,
+    )
+    decision = InterpretationDecision.model_validate(
+        {
+            "mode": "mutation",
+            "normalized_message": "Суммарное распределение в Нижний Новгород",
+            "confidence": 0.95,
+            "draft": None,
+            "intent_graph": {
+                "operation": "show",
+                "operands": [{
+                    "operand_id": "route",
+                    "source_operand_handle": "t0001.o.route",
+                    "metric": "distribution",
+                    "aggregate_type": "sum",
+                }],
+            },
+            "clarification": None,
+            "unsupported_capability": None,
+            "assumptions": [],
+            "metadata_bundle_version": "2026.08.1",
+        }
+    )
+    registry = SimpleNamespace(
+        geo=lambda text: SimpleNamespace(
+            geo_id="geo:nizhny-novgorod", canonical_name="нижний новгород"
+        ) if text == "Нижний Новгород" else None,
+        geo_group=lambda _text: None,
+        find_article_candidates=lambda _text: (),
+    )
+
+    mutation = InterpretationMutationCompiler(RegistryEntityBinder(registry)).compile(
+        decision,
+        state,
+        turn_id="turn-2",
+        user_message="Суммарное распределение из ТГ Нижний Новгород в Нижний Новгород",
+        current_entity_mentions=[
+            EntityMention(text="Нижний Новгород", role="destination")
+        ],
+    )
+
+    by_role = {
+        item.role: item.entity.display_name
+        for item in mutation.replace_intent.operands[0].entities
+    }
+    assert by_role == {
+        "balance": "ГП ТГ Н.Новгород суточный баланс",
+        "article": "Распределение",
+        "destination": "Нижний новгород",
+    }
+
+
 def test_explicit_handles_override_default_inherit_modes() -> None:
     state = _append(ContextContractV2(session_id="session"), 1, "Самара")
     frame = state.conversation_window[-1]
