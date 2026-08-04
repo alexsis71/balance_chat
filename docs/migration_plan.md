@@ -18,8 +18,9 @@
 5. **Native multi-operand planner — завершён.** Сравнения entity/entity,
    metric/metric и period/period с фиксированной baseline/target семантикой.
 6. **Native executor — завершён.** Выполнение операндов через существующий
-   unified strict runtime без multi-step/summary LLM; композиция фактов после
-   всех subresults.
+   unified strict runtime без multi-step и без summary на scalar subqueries;
+   композиция фактов после всех subresults и один bounded summary-вызов над
+   готовым результатом без повторного DB execution.
 7. **Canonical grouping — завершено.** GEO groups и другие
    измерения, агрегация по canonical ID/официальному имени и provenance
    исходных строк.

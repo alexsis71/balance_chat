@@ -90,3 +90,54 @@ def test_runtime_calls_unified_strict_without_fallback() -> None:
     assert captured["backend_override"] == "unified_strict"
     assert captured["allow_multi_step"] is False
     assert captured["context_override"]["periods"][0]["date_to"] == "2025-06-01"
+
+
+def test_raw_runtime_keeps_summary_and_followups_disabled() -> None:
+    repo_root = Path(__file__).resolve().parents[2]
+    pipeline_root = repo_root / "pipeline"
+    runtime = PipelineRuntime(
+        RuntimeConfig(
+            pipeline_root=pipeline_root,
+            metadata_manifest=pipeline_root / "data" / "metadata" / "manifest.json",
+        )
+    )
+    captured: dict = {}
+
+    def execute_query(query: str, **kwargs: object) -> dict:
+        captured.update(query=query, **kwargs)
+        return {"status": "ok"}
+
+    runtime._import_pipeline_module = lambda _: SimpleNamespace(execute_query=execute_query)
+    runtime.execute_raw("Покажи поставки", execute_db=True)
+
+    assert captured["apply_summary"] is False
+    assert captured["allow_multi_step"] is False
+
+
+def test_summary_bridge_does_not_repeat_pipeline_execution() -> None:
+    repo_root = Path(__file__).resolve().parents[2]
+    pipeline_root = repo_root / "pipeline"
+    runtime = PipelineRuntime(
+        RuntimeConfig(
+            pipeline_root=pipeline_root,
+            metadata_manifest=pipeline_root / "data" / "metadata" / "manifest.json",
+        )
+    )
+    calls: list[str] = []
+
+    def apply_summary(envelope: dict, request_id: str) -> dict:
+        calls.append(request_id)
+        return {**envelope, "summary": {"generated_by": "llm", "text": "Вывод"}}
+
+    runtime._import_pipeline_module = lambda _: SimpleNamespace(
+        _apply_configured_summary=apply_summary,
+        execute_query=lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            AssertionError("summary must not execute the query again")
+        ),
+    )
+    result = runtime.summarize_envelope(
+        {"status": "ok", "rows": [{"fact_value": 1}]}, request_id="summary"
+    )
+
+    assert calls == ["summary"]
+    assert result["summary"]["generated_by"] == "llm"

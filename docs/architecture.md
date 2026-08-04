@@ -119,6 +119,13 @@ canonical exclusive-end период. Baseline и target сохраняются 
 только над явными deterministic facts; отсутствие факта, разные единицы и
 ошибка subtask возвращаются явно, без подстановки другого результата.
 
+После завершения всех DB/scalar tasks presentation model вызывается ровно один
+раз над уже готовым bounded envelope. Summary не повторяет Planner, MCP или
+PostgreSQL execution и не может менять факты. Для standalone DB-запроса summary
+включается на финальном unified envelope; semantic/dry-run вызовы остаются без
+него. Источник summary и deterministic execution layer фиксируются в JSON-логе,
+а техническое сообщение про execution layer не входит в публичный ответ.
+
 ## Canonical grouping
 
 Строки группируются только по canonical entity ID. Варианты label не создают

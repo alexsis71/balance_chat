@@ -276,6 +276,7 @@ class BalanceChatService:
                 ),
                 interpretation=processed.diagnostics.get("interpretation"),
                 execution=processed.diagnostics.get("execution"),
+                summary=processed.diagnostics.get("summary"),
                 result_memory=processed.diagnostics.get("result_memory"),
                 elapsed_ms=int((perf_counter() - started) * 1000),
             )

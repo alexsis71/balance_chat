@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import logging
 import re
 from datetime import date, timedelta
 from time import perf_counter
@@ -30,9 +31,13 @@ from .contracts import (
 from .execution import NativeExecutor
 from .grouping import CanonicalGroupAggregator, GroupingError, member_facts_from_rows
 from .interpretation import HybridInterpretationPolicy, InterpretationError, UnifiedInterpreter
+from .observability import log_event
 from .planning import NativeMultiOperandPlanner, PlanningError
 from .result_memory import PipelineResultMemoryAdapter
 from .service import TurnProcessResult, TurnProcessingError
+
+
+LOGGER = logging.getLogger("balance_chat.processor")
 
 
 class PipelineV2TurnProcessor:
@@ -622,6 +627,35 @@ class PipelineV2TurnProcessor:
         except Exception as exc:
             raise TurnProcessingError("native scalar execution failed") from exc
         outcome = _outcome(native.status)
+        response = _public_native_result(native)
+        summary_diagnostics: dict[str, Any] = {
+            "requested": False,
+            "execution_layer": "native_deterministic",
+        }
+        summarize = getattr(self.runtime, "summarize_envelope", None)
+        if outcome == TransitionOutcome.SUCCESS and execute_db and callable(summarize):
+            summary_diagnostics["requested"] = True
+            try:
+                summary_envelope = summarize(
+                    _native_summary_envelope(native, plan, normalized_message, intent),
+                    request_id=f"{request_id}:summary",
+                )
+                response["summary"] = _public_summary(summary_envelope.get("summary"))
+                response["warnings"] = summary_envelope.get("warnings") or []
+                summary_diagnostics.update(_summary_diagnostics(summary_envelope))
+            except Exception as exc:
+                summary_diagnostics.update(
+                    {"status": "error", "error_type": type(exc).__name__}
+                )
+                log_event(
+                    LOGGER,
+                    logging.WARNING,
+                    "native_summary_failed",
+                    request_id=request_id,
+                    operation=native.operation.value,
+                    error_type=type(exc).__name__,
+                    exc_info=True,
+                )
         result_ref = None
         memory_diag: dict[str, Any] = self.result_memory.safe_diagnostics(memory_chunks) if self.result_memory else {}
         if outcome == TransitionOutcome.SUCCESS:
@@ -649,15 +683,18 @@ class PipelineV2TurnProcessor:
                 },
                 "execution": {
                     "task_count": len(plan.tasks),
+                    "layer": "native_deterministic",
                     "elapsed_ms": int((perf_counter() - started) * 1000),
                 },
             }
         )
+        diagnostics.setdefault("execution", {})["layer"] = "native_deterministic"
         diagnostics["result_memory"] = memory_diag
+        diagnostics["summary"] = summary_diagnostics
         return TurnProcessResult(
             mutation=mutation,
             outcome=outcome,
-            response=_public_native_result(native),
+            response=response,
             result_reference=result_ref,
             memory_write=memory_write,
             diagnostics=diagnostics,
@@ -681,6 +718,31 @@ class PipelineV2TurnProcessor:
             request_id=request_id,
         )
         status = str(envelope.get("status") or "error")
+        summary_diagnostics: dict[str, Any] = {
+            "requested": False,
+            "execution_layer": "unified_strict",
+        }
+        summarize = getattr(self.runtime, "summarize_envelope", None)
+        if status in {"ok", "partial"} and execute_db and callable(summarize):
+            summary_diagnostics["requested"] = True
+            try:
+                envelope = summarize(
+                    envelope,
+                    request_id=f"{request_id}:summary",
+                )
+                summary_diagnostics.update(_summary_diagnostics(envelope))
+            except Exception as exc:
+                summary_diagnostics.update(
+                    {"status": "error", "error_type": type(exc).__name__}
+                )
+                log_event(
+                    LOGGER,
+                    logging.WARNING,
+                    "standalone_summary_failed",
+                    request_id=request_id,
+                    error_type=type(exc).__name__,
+                    exc_info=True,
+                )
         try:
             intent = self.translator.intent(
                 envelope,
@@ -727,8 +789,10 @@ class PipelineV2TurnProcessor:
                 "execution": {
                     "status": status,
                     "task_count": 1,
+                    "layer": "unified_strict",
                     "elapsed_ms": int((perf_counter() - started) * 1000),
                 },
+                "summary": summary_diagnostics,
             },
         )
 
@@ -907,6 +971,91 @@ def _public_native_result(native) -> dict[str, Any]:
     }
 
 
+def _native_summary_envelope(native, plan, question: str, intent: AnalysisIntent) -> dict[str, Any]:
+    rows: list[dict[str, Any]] = []
+    comparison = native.comparison
+    for task, result in zip(plan.tasks, native.task_results):
+        fact = result.fact
+        if fact is None:
+            continue
+        operand = task.scalar_intent.operands[0]
+        row: dict[str, Any] = {
+            "label": fact.label,
+            "fact_value": str(fact.value),
+            "unit": fact.unit,
+            "aggregate_type": operand.aggregate_type,
+        }
+        if fact.extremum_at is not None:
+            row["gas_day"] = fact.extremum_at.isoformat()
+        if fact.periods:
+            row.update(
+                date_from=fact.periods[0].get("date_from"),
+                date_to=fact.periods[0].get("date_to"),
+            )
+        if task.period_index is not None:
+            row["period_no"] = task.period_index + 1
+        if comparison is not None:
+            if fact.task_id == comparison.baseline_task_id:
+                row["side"] = "left"
+            elif fact.task_id == comparison.target_task_id:
+                row["side"] = "right"
+        rows.append(row)
+    metrics = list(dict.fromkeys(item.metric for item in intent.operands))
+    return {
+        "status": native.status,
+        "operation": native.operation.value,
+        "question": question,
+        "interpretation": {
+            "metric": metrics[0] if len(metrics) == 1 else "composite",
+            "unit": rows[0].get("unit") if rows else None,
+        },
+        "periods": [item.model_dump(mode="json") for item in intent.periods],
+        "rows": rows,
+        "summary": {"title": "Результат готов", "text": ""},
+        "warnings": [],
+        "debug": {"execution_layer": "native_deterministic"},
+    }
+
+
+_TECHNICAL_SUMMARY_TEXT = re.compile(
+    r"^Операция\s+\S+\s+выполнена\s+через\s+deterministic execution layer\.?$",
+    re.I,
+)
+
+
+def _public_summary(value: Any) -> dict[str, Any] | None:
+    if not isinstance(value, dict):
+        return None
+    summary = _safe_mapping(value)
+    if _TECHNICAL_SUMMARY_TEXT.fullmatch(str(summary.get("text") or "").strip()):
+        summary.pop("text", None)
+    return summary
+
+
+def _summary_diagnostics(
+    envelope: dict[str, Any], *, requested: bool = True
+) -> dict[str, Any]:
+    summary = envelope.get("summary") if isinstance(envelope.get("summary"), dict) else {}
+    warning_codes = [
+        str(item.get("code"))
+        for item in (envelope.get("warnings") or [])
+        if isinstance(item, dict) and item.get("code")
+    ]
+    generated_by = str(summary.get("generated_by") or "deterministic")
+    return {
+        "requested": requested,
+        "status": (
+            "skipped"
+            if not requested
+            else "fallback" if "summary_writer_failed" in warning_codes else "ok"
+        ),
+        "generated_by": generated_by,
+        "technical_text_suppressed": bool(
+            _TECHNICAL_SUMMARY_TEXT.fullmatch(str(summary.get("text") or "").strip())
+        ),
+    }
+
+
 def _public_pipeline_result(envelope: dict[str, Any]) -> dict[str, Any]:
     return {
         "status": envelope.get("status"),
@@ -915,7 +1064,7 @@ def _public_pipeline_result(envelope: dict[str, Any]) -> dict[str, Any]:
             for item in (envelope.get("rows") or [])
             if isinstance(item, dict)
         ],
-        "summary": envelope.get("summary") if isinstance(envelope.get("summary"), dict) else None,
+        "summary": _public_summary(envelope.get("summary")),
         "warnings": envelope.get("warnings") or [],
     }
 

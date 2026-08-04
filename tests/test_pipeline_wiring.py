@@ -27,7 +27,9 @@ from balance_chat.processor import (
     _deterministic_grouping_query,
     _deterministic_period_mutation,
     _distribution_own_consumers_mentions,
+    _native_summary_envelope,
     _peer_destination_mentions,
+    _public_pipeline_result,
     _standalone_translation_error,
     _standalone_facts,
 )
@@ -395,6 +397,66 @@ def test_public_native_fact_does_not_expose_provenance() -> None:
     assert "provenance" not in _public_native_result(native)["facts"][0]
 
 
+def test_public_result_suppresses_deterministic_execution_phrase() -> None:
+    result = _public_pipeline_result(
+        {
+            "status": "ok",
+            "rows": [{"fact_value": 1}],
+            "summary": {
+                "title": "Результат готов: 1 строк",
+                "text": "Операция aggregate выполнена через deterministic execution layer.",
+            },
+        }
+    )
+
+    assert result["summary"] == {"title": "Результат готов: 1 строк"}
+
+
+def test_native_summary_receives_exact_extremum_date() -> None:
+    from balance_chat.execution import NativeExecutionResult, ScalarFact, TaskExecutionResult
+    from balance_chat.planning import NativeMultiOperandPlanner
+
+    intent = AnalysisIntent(
+        operation=Operation.AGGREGATE,
+        operands=[AnalysisOperand(
+            operand_id="transport",
+            metric="distribution",
+            aggregate_type="max",
+        )],
+        periods=[PeriodRef(date_from="2025-04-01", date_to="2025-07-01")],
+    )
+    plan = NativeMultiOperandPlanner().plan(intent)
+    native = NativeExecutionResult(
+        operation=Operation.AGGREGATE,
+        status="ok",
+        task_results=[TaskExecutionResult(
+            task_id="task_1",
+            status="ok",
+            fact=ScalarFact(
+                task_id="task_1",
+                value=Decimal("367869.34"),
+                unit="тыс. м3",
+                label="ТГ Москва",
+                periods=[{"date_from": "2025-04-01", "date_to": "2025-07-01"}],
+                extremum_at="2025-04-10",
+            ),
+            envelope={"status": "ok"},
+        )],
+    )
+
+    envelope = _native_summary_envelope(native, plan, "Когда был максимум?", intent)
+
+    assert envelope["rows"] == [{
+        "label": "ТГ Москва",
+        "fact_value": "367869.34",
+        "unit": "тыс. м3",
+        "aggregate_type": "max",
+        "gas_day": "2025-04-10",
+        "date_from": "2025-04-01",
+        "date_to": "2025-07-01",
+    }]
+
+
 def test_extremum_fact_preserves_winning_date() -> None:
     translator = PipelineEnvelopeTranslator()
     envelope = _envelope()
@@ -420,6 +482,19 @@ def test_extremum_fact_preserves_winning_date() -> None:
 class RawRuntime:
     def execute_raw(self, *_args, **_kwargs):
         return _envelope()
+
+
+class SummaryFlagRuntime(RawRuntime):
+    def __init__(self):
+        self.summary_calls = 0
+
+    def summarize_envelope(self, envelope, **_kwargs):
+        self.summary_calls += 1
+        return {**envelope, "summary": {
+            "generated_by": "llm",
+            "title": "Максимум поставок",
+            "text": "Максимум достигнут 10 апреля 2025 года.",
+        }}
 
 
 class NeverCalled:
@@ -460,6 +535,31 @@ def test_standalone_processor_uses_current_resolved_plan_without_llm() -> None:
     assert processed.outcome == "success"
     assert len(processed.mutation.replace_intent.operands) == 2
     assert processed.diagnostics["interpretation"]["source"] == "pipeline"
+
+
+def test_standalone_db_result_requests_one_final_llm_summary() -> None:
+    runtime = SummaryFlagRuntime()
+    processor = PipelineV2TurnProcessor(
+        runtime=runtime,
+        registry=object(),
+        interpreter=object(),
+        compiler=object(),
+        executor=object(),
+        policy=NeverCalled(),
+    )
+    state = ContextContractV2(session_id="session")
+
+    processed = processor.process(
+        state,
+        message="Когда был максимум поставок за май 2025",
+        execute_db=True,
+        clarification=None,
+        request_id="request",
+    )
+
+    assert runtime.summary_calls == 1
+    assert processed.response["summary"]["generated_by"] == "llm"
+    assert processed.diagnostics["summary"]["generated_by"] == "llm"
 
 
 def test_explicit_compare_with_month_preserves_canonical_baseline() -> None:

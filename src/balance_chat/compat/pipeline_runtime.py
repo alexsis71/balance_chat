@@ -96,6 +96,16 @@ class PipelineRuntime:
             backend_override="unified_strict",
         )
 
+    def summarize_envelope(
+        self,
+        envelope: dict[str, Any],
+        *,
+        request_id: str,
+    ) -> dict[str, Any]:
+        """Apply the configured presentation model without repeating execution."""
+        pipeline_api = self._import_pipeline_module("pipeline_api")
+        return pipeline_api._apply_configured_summary(dict(envelope), request_id)
+
     def execute(
         self,
         query: str,
