@@ -218,6 +218,11 @@ class InterpretationMutationCompiler:
             state.active_dialog_scope.intent.operands
             if state.active_dialog_scope is not None else []
         )
+        graph_periods = self._referenced_periods(
+            graph.period_handles, graph.periods, period_index
+        )
+        if not graph_periods and state.active_dialog_scope is not None:
+            graph_periods = deepcopy(state.active_dialog_scope.intent.periods)
         operands: list[AnalysisOperand] = []
         graph_specs = [item.model_copy(deep=True) for item in graph.operands]
         self._reconcile_current_mentions(
@@ -237,6 +242,28 @@ class InterpretationMutationCompiler:
                 # explicitly selects another historical operand. This is generic
                 # inherit semantics, not language-specific recovery.
                 source = active_operands[0].model_copy(deep=True)
+            elif decision.mode == InterpretationMode.MUTATION and active_operands:
+                requested_periods = (
+                    self._referenced_periods(
+                        spec.period_handles, spec.periods, period_index
+                    )
+                    if spec.period_handles or spec.periods
+                    else graph_periods
+                )
+                source = self._unique_active_operand_for_period(
+                    active_operands, requested_periods
+                )
+            if (
+                source is None
+                and decision.mode == InterpretationMode.MUTATION
+                and active_operands
+                and spec.entity_mode == "inherit"
+                and not spec.entity_handles
+                and not spec.entity_mentions
+            ):
+                raise ContextBindingError(
+                    "context graph omitted an ambiguous source operand handle"
+                )
             metric = spec.metric or (source.metric if source is not None else None)
             if not metric:
                 raise ContextBindingError(
@@ -282,11 +309,7 @@ class InterpretationMutationCompiler:
             if spec.reverse_direction:
                 operand = self._resolve_reverse_operand(operand)
             operands.append(operand)
-        periods = self._referenced_periods(
-            graph.period_handles, graph.periods, period_index
-        )
-        if not periods and state.active_dialog_scope is not None:
-            periods = deepcopy(state.active_dialog_scope.intent.periods)
+        periods = graph_periods
         operation = graph.operation
         if len(operands) == 2 and operation in {Operation.SHOW, Operation.AGGREGATE}:
             operation = Operation.COMPARE
@@ -369,6 +392,21 @@ class InterpretationMutationCompiler:
         if len(missing) == 1:
             specs[-1].entity_mode = "replace"
             specs[-1].entity_mentions.append(missing[0])
+
+    @staticmethod
+    def _unique_active_operand_for_period(
+        operands: Sequence[AnalysisOperand],
+        requested: Sequence[PeriodRef],
+    ) -> AnalysisOperand | None:
+        if not requested:
+            return None
+        requested_keys = {(item.date_from, item.date_to) for item in requested}
+        matches = [
+            item for item in operands
+            if {(period.date_from, period.date_to) for period in item.periods}
+            == requested_keys
+        ]
+        return matches[0].model_copy(deep=True) if len(matches) == 1 else None
 
     def _resolve_reverse_operand(self, operand: AnalysisOperand) -> AnalysisOperand:
         by_role = {item.role: item for item in operand.entities}

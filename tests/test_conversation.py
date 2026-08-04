@@ -284,6 +284,61 @@ def test_explicit_handles_override_default_inherit_modes() -> None:
     assert mutation.replace_intent.operands[0].entities[0].entity.display_name == "Самара"
 
 
+def test_single_followup_selects_unique_operand_matching_active_period() -> None:
+    spring = PeriodRef(date_from="2025-03-01", date_to="2025-06-01")
+    summer = PeriodRef(date_from="2025-06-01", date_to="2025-09-01")
+    base = _operand("Самарская область")
+    comparison = AnalysisIntent(
+        operation=Operation.COMPARE,
+        operands=[
+            base.model_copy(update={"operand_id": "spring", "periods": [spring]}),
+            base.model_copy(update={"operand_id": "summer", "periods": [summer]}),
+        ],
+        periods=[summer],
+        comparison={
+            "baseline_operand_id": "spring",
+            "target_operand_id": "summer",
+        },
+    )
+    state = apply_context_transition(
+        ContextContractV2(session_id="session"),
+        ContextMutation(
+            turn_id="turn-1",
+            user_message="сравни весну и лето",
+            replace_intent=comparison,
+        ),
+        TransitionOutcome.SUCCESS,
+    )
+    decision = InterpretationDecision.model_validate(
+        {
+            "mode": "mutation",
+            "normalized_message": "Покажи максимум за лето",
+            "confidence": 0.95,
+            "draft": None,
+            "intent_graph": {
+                "operation": "show",
+                "operands": [{
+                    "operand_id": "maximum",
+                    "metric": "distribution",
+                    "aggregate_type": "max",
+                }],
+            },
+            "clarification": None,
+            "unsupported_capability": None,
+            "assumptions": [],
+            "metadata_bundle_version": "2026.07.7",
+        }
+    )
+
+    mutation = InterpretationMutationCompiler(
+        RegistryEntityBinder(SimpleNamespace())
+    ).compile(decision, state, turn_id="turn-2", user_message="максимум летом")
+
+    operand = mutation.replace_intent.operands[0]
+    assert operand.entities[0].entity.display_name == "Самарская область"
+    assert operand.aggregate_type == "max"
+
+
 def test_model_payload_and_handle_indexes_are_bounded_to_same_window() -> None:
     state = ContextContractV2(session_id="session")
     for revision in range(1, 9):
