@@ -88,5 +88,18 @@ metadata, Qwen, pgvector и соединение с расчётным PostgreSQ
 API factory: `balance_chat.api:create_app`. UI обслуживается этим же
 приложением по `/`, endpoints используют префикс `/api/v2`.
 
+Чтобы сохранить legacy UI на порту `8787` и опубликовать новую версию на том
+же origin под `/v2/`, сначала запустите V2 backend на `8790`, затем gateway:
+
+```powershell
+$env:PYTHONPATH = (Resolve-Path .\src).Path
+python .\run_gateway.py --config .\config.example.json --host 127.0.0.1 --port 8787
+```
+
+После этого legacy UI доступен по `http://127.0.0.1:8787/`, Context Chat V2 —
+по `http://127.0.0.1:8787/v2/`, а его health endpoint — по
+`http://127.0.0.1:8787/v2/api/v2/health`. Gateway только маршрутизирует HTTP и
+не добавляет fallback между legacy и V2 execution.
+
 Результаты staging-проверки и открытые ограничения описаны в
 [`docs/context_chat_v2_staging_acceptance.md`](docs/context_chat_v2_staging_acceptance.md).

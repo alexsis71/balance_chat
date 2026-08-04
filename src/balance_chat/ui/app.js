@@ -1,5 +1,6 @@
 const HISTORY_KEY = "ai-balances-context-v2-history";
 const MAX_HISTORY = 30;
+const APP_BASE = location.pathname === "/v2" || location.pathname.startsWith("/v2/") ? "/v2" : "";
 const state = { sessionId: null, revision: 0, busy: false, histories: loadHistory() };
 const byId = (id) => document.getElementById(id);
 
@@ -17,7 +18,7 @@ function requestId() {
   return globalThis.crypto?.randomUUID?.() || `ui-${Date.now()}-${Math.random().toString(16).slice(2)}`;
 }
 async function api(path, options = {}) {
-  const response = await fetch(path, {headers:{"Content-Type":"application/json"}, ...options});
+  const response = await fetch(`${APP_BASE}${path}`, {headers:{"Content-Type":"application/json"}, ...options});
   let body = {};
   try { body = await response.json(); } catch { body = {}; }
   if (!response.ok) {
