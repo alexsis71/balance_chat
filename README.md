@@ -20,6 +20,13 @@
   мутаций в существующей схеме `chat_rag`.
 - unified interpretation contract совмещает нормализацию и контекстные
   directives, не позволяя модели назначать canonical IDs.
+- authoritative conversation ledger хранит последние семь turn: исходный и
+  нормализованный текст, typed operands, canonical entity/GEO tags,
+  exclusive-end периоды, краткий ответ и bounded facts результата. Каждый
+  следующий turn активной сессии интерпретируется Qwen по этому окну целиком.
+- стабильные handles turn/operand/entity/period позволяют модели ссылаться на
+  уже разрешённый контекст без повторного natural-language resolution;
+  неизвестный или неоднозначный handle останавливает запрос явно.
 - deterministic binder разрешает mentions через ready metadata registry и
   компилирует их в валидный `ContextMutation`.
 - result memory переиспользует существующий pgvector store, сохраняя только
@@ -68,6 +75,11 @@ ID, revision, hash/длина исходного и нормализованны
 operands, bounded interpretation/execution diagnostics, длительность и stack
 trace ошибки. API key, DSN, prompts, SQL и raw DB rows не журналируются. Каталог
 `logs/` исключён из Git.
+
+Событие `turn_started` содержит исходный текст даже для запроса, завершившегося
+до commit. После commit событие `conversation_turn_committed` фиксирует handles,
+canonical entity/period tags, ссылку на bounded result и фактический размер
+семиповоротного окна. Это даёт полный audit каждого turn без debug-панели UI.
 
 Ответ health также не содержит DSN, API key, prompts, SQL или raw rows.
 

@@ -85,15 +85,50 @@ LLM или execution. Reservation хранится в PostgreSQL с TTL, а `req
 ## Unified interpretation
 
 `UnifiedInterpreter` объединяет исправление формулировки и определение
-контекстной мутации в одном structured-output вызове. Hybrid policy вызывает
-модель только для контекстных ссылок, clarify answer и вероятной опечатки;
-самодостаточный запрос может идти прямо в deterministic resolver.
+контекстной мутации в одном structured-output вызове. Первый самодостаточный
+turn может идти прямо в deterministic resolver. После появления active scope
+каждый следующий turn проходит через Qwen, потому что даже внешне полный вопрос
+может ссылаться на ранее выбранные GEO, business entity, operand или период.
 
 Ответ модели содержит текстовые entity mentions, directives и canonical
 exclusive-end периоды, но никогда runtime IDs. `metadata_bundle_version`
 проверяется безусловно. Следующий deterministic binder связывает mentions с
 ready MetadataRegistry и только после этого создаёт исполнимый
 `ContextMutation`.
+
+## Seven-turn conversation ledger
+
+`ContextContractV2.conversation_window` — authoritative хронологическое окно из
+последних семи зафиксированных turn. В каждом `ResolvedTurnFrame` хранятся:
+
+- исходный и нормализованный текст пользователя, краткий ответ и outcome;
+- полный canonical `AnalysisIntent` и snapshots всех operands;
+- типизированные entity tags с ролью (`balance`, `article`, `source`,
+  `destination`, `route`, `subject`) и canonical metadata ID;
+- canonical `PeriodRef` с exclusive-end границами;
+- bounded result facts и ссылка на результат, но не полные таблицы или raw rows.
+
+Turn получает handle вида `t0007`, operand — `t0007.o.operand_1`, canonical
+entity и период — стабильный content-derived handle. Qwen получает окно целиком
+и возвращает `ContextIntentGraph`, который либо клонирует прежние operands по
+handle, либо добавляет новые textual mentions. Deterministic compiler проверяет
+каждую ссылку, связывает новые mentions с metadata и строит следующий полный
+intent. Модель не назначает runtime ID и не исполняет расчёт.
+
+Если после multi-operand turn следующий запрос не указал source handle,
+compiler допускает только однозначный выбор: например, единственный operand с
+тем же canonical периодом. Неоднозначность является binding error, а не поводом
+сбросить GEO или перейти к общему балансу. Явные сущности текущего сообщения
+имеют приоритет над унаследованными и сохраняют порядок peer comparison.
+
+Старые PostgreSQL snapshots без `conversation_window` читаются без миграции:
+при первом обращении materializer создаёт один совместимый frame из active или
+last successful scope. После commit snapshot уже содержит штатное окно.
+
+Окно и pgvector решают разные задачи. Ledger является источником состояния для
+5–7 последовательных запросов. pgvector хранит более старые результаты для
+bounded retrieval, но не может изменить canonical intent или восстановить его
+в обход reducer.
 
 ## Deterministic binding
 

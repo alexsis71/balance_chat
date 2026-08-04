@@ -151,6 +151,7 @@ class BalanceChatService:
             session_id=session_id,
             expected_revision=expected_revision,
             execute_db=execute_db,
+            user_message=message,
             user_message_sha256=hashlib.sha256(message.encode("utf-8")).hexdigest(),
             user_message_length=len(message),
             clarification=(

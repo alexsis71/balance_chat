@@ -12,9 +12,11 @@
 3. **Unified interpretation — завершён.** Один typed LLM contract возвращает
    нормализованный turn, mutation draft, `clarify` или настоящий `unsupported`.
    Canonical IDs принимает только deterministic binder следующего этапа.
-4. **Context memory policy — завершён.** Явные правила наследования/очистки
-   GEO, периодов, статей, grain и operation; deterministic metadata binding;
-   result references без передачи полной истории.
+4. **Context memory policy — завершён и усилен seven-turn ledger.** Явные
+   правила наследования/очистки GEO, периодов, статей, grain и operation;
+   deterministic metadata binding; последние семь исходных запросов и их
+   resolved typed frames передаются модели через стабильные handles. Полные
+   таблицы не передаются: используются bounded facts и result references.
 5. **Native multi-operand planner — завершён.** Сравнения entity/entity,
    metric/metric и period/period с фиксированной baseline/target семантикой.
 6. **Native executor — завершён.** Выполнение операндов через существующий
@@ -42,6 +44,13 @@
     contextual grouping проверены с реальной БД. Invalid interpretation contract
     отображается как HTTP 422. Найденные degradation cases не имеют скрытого
     fallback.
+
+11. **Seven-turn unified context — завершён.** Для активной сессии Qwen получает
+    полное authoritative окно последних семи turn. `ContextIntentGraph`
+    ссылается на operand/entity/period handles; deterministic compiler запрещает
+    неизвестные и неоднозначные ссылки, сохраняет GEO/период после сравнений и
+    поддерживает явную смену либо peer comparison сущностей. Каждый начатый и
+    каждый зафиксированный turn пишется в structured JSONL log.
 
 Финальный checkpoint выполнен 2026-08-03. Полный V2 regression: `84 passed`.
 DB-backed grouping acceptance: 100 физических строк сведены в 63 уникальных
