@@ -9,6 +9,7 @@ from ..contracts import (
     AnalysisOperand,
     CanonicalEntityRef,
     ComparisonSpec,
+    GroupingSpec,
     OperandEntityRef,
     Operation,
     PeriodRef,
@@ -42,7 +43,12 @@ class PipelineEnvelopeTranslator:
             Operation.COMPARE_PERIODS,
         }:
             raise EnvelopeTranslationError("resolved_comparison_degraded")
-        periods = _periods(plan, raw_intent)
+        status = str(envelope.get("status") or "error").strip().lower()
+        periods = _periods(
+            plan,
+            raw_intent,
+            required=status in {"ok", "partial"},
+        )
         expressions = [
             item for item in (plan.get("expressions") or []) if isinstance(item, Mapping)
         ]
@@ -54,8 +60,13 @@ class PipelineEnvelopeTranslator:
                     expanded.append({**expression, "geo": [geo]})
             else:
                 expanded.append(expression)
+        logical_operation = operation
+        if plan.get("group_by"):
+            logical_operation = Operation.GROUP
+        elif operation == Operation.COMPARE_PERIODS and len(periods) > 2:
+            logical_operation = Operation.MULTI_STEP
         logical_period_operand = self._logical_period_operand(
-            operation,
+            logical_operation,
             raw_intent,
             expanded,
             canonical_geos or [],
@@ -72,11 +83,33 @@ class PipelineEnvelopeTranslator:
             operands = [AnalysisOperand(operand_id="operand_1", metric=metric)]
         if operation == Operation.COMPARE and len(operands) < 2:
             raise EnvelopeTranslationError("resolved_comparison_degraded")
+        if requested_operation == Operation.MULTI_STEP:
+            operation = Operation.MULTI_STEP
+        elif operation == Operation.COMPARE and len(operands) > 2:
+            # The pipeline can execute an N-way comparison, while the V2
+            # compare contract is deliberately binary. Preserve every
+            # canonical operand and mark the shape as composite instead of
+            # failing Pydantic validation or silently dropping operands.
+            operation = Operation.MULTI_STEP
+        elif operation == Operation.COMPARE_PERIODS and (
+            len(operands) != 1 or len(periods) != 2
+        ):
+            # More than two periods/operands is a valid composite pipeline
+            # result but cannot be represented as binary compare_periods.
+            if len(operands) > 1 or len(periods) > 2:
+                operation = Operation.MULTI_STEP
+            else:
+                raise EnvelopeTranslationError("resolved_comparison_degraded")
+
+        grouping = _grouping(plan, operation, expanded)
+        if grouping:
+            operation = Operation.GROUP
         return AnalysisIntent(
             operation=operation,
             operands=operands,
             periods=periods,
-            grain=raw_intent.get("period_grain") or None,
+            grouping=grouping,
+            grain=raw_intent.get("period_grain") or plan.get("period_grain") or None,
         )
 
     def _logical_period_operand(
@@ -319,6 +352,7 @@ def _operation(value: Any) -> Operation:
     aliases = {
         "comparison": "compare",
         "multi_step": "multi_step",
+        "multi_query": "multi_step",
         "rank": "aggregate",
     }
     try:
@@ -327,7 +361,12 @@ def _operation(value: Any) -> Operation:
         raise EnvelopeTranslationError(f"unsupported resolved operation: {normalized}") from exc
 
 
-def _periods(plan: Mapping[str, Any], raw_intent: Mapping[str, Any]) -> list[PeriodRef]:
+def _periods(
+    plan: Mapping[str, Any],
+    raw_intent: Mapping[str, Any],
+    *,
+    required: bool = True,
+) -> list[PeriodRef]:
     output: list[PeriodRef] = []
     for item in plan.get("periods") or raw_intent.get("periods") or []:
         if isinstance(item, (list, tuple)) and len(item) == 2:
@@ -338,9 +377,45 @@ def _periods(plan: Mapping[str, Any], raw_intent: Mapping[str, Any]) -> list[Per
         output.append(
             PeriodRef(date_from=raw_intent["date_from"], date_to=raw_intent["date_to"])
         )
-    if not output:
+    if not output and required:
         raise EnvelopeTranslationError("resolved plan has no canonical period")
     return output
+
+
+def _grouping(
+    plan: Mapping[str, Any],
+    operation: Operation,
+    expressions: list[Mapping[str, Any]],
+) -> list[GroupingSpec]:
+    dimensions = list(dict.fromkeys(str(item).strip() for item in (plan.get("group_by") or [])))
+    dimensions = [item for item in dimensions if item]
+    if not dimensions:
+        return []
+    if operation not in {Operation.SHOW, Operation.AGGREGATE}:
+        raise EnvelopeTranslationError(
+            "resolved grouping cannot be combined with comparison in AnalysisIntent v2"
+        )
+    supported = {"geo", "balance", "article"}
+    unknown = sorted(set(dimensions) - supported)
+    if unknown:
+        raise EnvelopeTranslationError(f"unsupported resolved grouping dimensions: {unknown}")
+    aggregates = {
+        str(item.get("aggregate_type") or "sum").strip().lower()
+        for item in expressions
+    }
+    if len(aggregates) > 1:
+        raise EnvelopeTranslationError("resolved grouping uses inconsistent aggregate types")
+    aggregate_type = next(iter(aggregates), "sum")
+    contract = plan.get("grouping") if isinstance(plan.get("grouping"), Mapping) else {}
+    canonical_group_id = str(contract.get("geo_group") or "").strip() or None
+    return [
+        GroupingSpec(
+            dimension=dimension,
+            canonical_group_id=canonical_group_id if dimension == "geo" else None,
+            aggregate_type=aggregate_type,
+        )
+        for dimension in dimensions
+    ]
 
 
 def _resolved_plan(envelope: Mapping[str, Any]) -> dict[str, Any]:

@@ -28,6 +28,7 @@ from balance_chat.processor import (
     _deterministic_period_mutation,
     _distribution_own_consumers_mentions,
     _peer_destination_mentions,
+    _standalone_translation_error,
     _standalone_facts,
 )
 from balance_chat.reducer import apply_context_transition
@@ -111,6 +112,128 @@ def test_rank_extremum_is_translated_to_typed_aggregate() -> None:
     assert intent.operands[0].entities[-1].entity.display_name == "ТГ Москва"
     assert intent.periods[0].date_from.isoformat() == "2025-04-01"
     assert intent.periods[0].date_to.isoformat() == "2025-07-01"
+
+
+def test_multi_query_is_preserved_as_explicit_composite_attempt() -> None:
+    envelope = _envelope()
+    envelope["status"] = "no_data"
+    plan = envelope["debug"]["resolved_plan"]
+    plan["_intent"].update({"intent": "multi_query", "metric": "composite"})
+    plan["operation"] = "show"
+    plan["expressions"] = []
+
+    intent = PipelineEnvelopeTranslator().intent(envelope)
+
+    assert intent.operation == Operation.MULTI_STEP
+    assert intent.operands[0].metric == "composite"
+    assert intent.periods[0].date_from.isoformat() == "2025-05-01"
+
+
+def test_failed_plan_without_period_remains_a_typed_attempt() -> None:
+    envelope = _envelope()
+    envelope["status"] = "no_data"
+    plan = envelope["debug"]["resolved_plan"]
+    plan["_intent"].pop("date_from")
+    plan["_intent"].pop("date_to")
+
+    intent = PipelineEnvelopeTranslator().intent(envelope)
+
+    assert intent.operation == Operation.SHOW
+    assert intent.periods == []
+
+
+def test_successful_plan_without_period_is_rejected() -> None:
+    envelope = _envelope()
+    plan = envelope["debug"]["resolved_plan"]
+    plan["_intent"].pop("date_from")
+    plan["_intent"].pop("date_to")
+
+    with pytest.raises(EnvelopeTranslationError, match="canonical period"):
+        PipelineEnvelopeTranslator().intent(envelope)
+
+
+def test_missing_period_translation_has_specific_public_error_mapping() -> None:
+    error = _standalone_translation_error(
+        EnvelopeTranslationError("resolved plan has no canonical period")
+    )
+
+    assert error.code == "period_required"
+    assert str(error) == "period not detected"
+
+
+def test_n_way_comparison_is_preserved_as_multi_step() -> None:
+    envelope = _envelope()
+    plan = envelope["debug"]["resolved_plan"]
+    plan["_intent"]["intent"] = "compare"
+    plan["operation"] = "compare"
+    plan["expressions"][0]["geo"] = [
+        {"id": "geo:kazan", "label": "Казань"},
+        {"id": "geo:samara", "label": "Самара"},
+        {"id": "geo:yaroslavl", "label": "Ярославль"},
+    ]
+
+    intent = PipelineEnvelopeTranslator().intent(envelope)
+
+    assert intent.operation == Operation.MULTI_STEP
+    assert len(intent.operands) == 3
+
+
+def test_multi_period_multi_source_comparison_is_preserved_as_multi_step() -> None:
+    envelope = _envelope()
+    plan = envelope["debug"]["resolved_plan"]
+    plan["_intent"].update(
+        {
+            "intent": "compare",
+            "periods": [
+                {"date_from": "2025-01-01", "date_to": "2025-02-01"},
+                {"date_from": "2025-02-01", "date_to": "2025-03-01"},
+                {"date_from": "2025-03-01", "date_to": "2025-04-01"},
+            ],
+        }
+    )
+    plan["operation"] = "compare_periods"
+    plan["periods"] = [
+        ["2025-01-01", "2025-02-01"],
+        ["2025-02-01", "2025-03-01"],
+        ["2025-03-01", "2025-04-01"],
+    ]
+    base = {**plan["expressions"][0], "geo": [{"label": "Самарская область"}]}
+    plan["expressions"] = [
+        {**base, "balance": {"id": "BAL:1", "label": "Баланс 1"}},
+        {**base, "balance": {"id": "BAL:2", "label": "Баланс 2"}},
+    ]
+
+    intent = PipelineEnvelopeTranslator().intent(envelope)
+
+    assert intent.operation == Operation.MULTI_STEP
+    assert len(intent.operands) == 2
+    assert len(intent.periods) == 3
+
+
+def test_pipeline_grouping_contract_is_preserved() -> None:
+    envelope = _envelope()
+    plan = envelope["debug"]["resolved_plan"]
+    plan["group_by"] = ["geo"]
+    plan["grouping"] = {
+        "dimensions": ["geo"],
+        "geo_group": "GGRP:russian-regions",
+    }
+
+    intent = PipelineEnvelopeTranslator().intent(envelope)
+
+    assert intent.operation == Operation.GROUP
+    assert intent.grouping[0].dimension == "geo"
+    assert intent.grouping[0].canonical_group_id == "GGRP:russian-regions"
+    assert intent.grouping[0].aggregate_type == "sum"
+    assert len(intent.operands) == 2
+
+
+def test_unknown_pipeline_grouping_dimension_is_rejected() -> None:
+    envelope = _envelope()
+    envelope["debug"]["resolved_plan"]["group_by"] = ["organization"]
+
+    with pytest.raises(EnvelopeTranslationError, match="grouping dimensions"):
+        PipelineEnvelopeTranslator().intent(envelope)
 
 
 def test_multi_source_geo_period_comparison_becomes_one_canonical_operand() -> None:

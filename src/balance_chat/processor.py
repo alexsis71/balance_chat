@@ -687,14 +687,7 @@ class PipelineV2TurnProcessor:
                 canonical_geos=self._matched_geo_objects(user_message or message),
             )
         except Exception as exc:
-            code = (
-                "resolved_comparison_degraded"
-                if str(exc) == "resolved_comparison_degraded"
-                else "resolved_plan_translation_failed"
-            )
-            raise TurnProcessingError(
-                "standalone resolved plan translation failed", code=code
-            ) from exc
+            raise _standalone_translation_error(exc) from exc
         mutation = ContextMutation(
             turn_id=turn_id,
             user_message=user_message or message,
@@ -794,6 +787,22 @@ def _outcome(status: str) -> TransitionOutcome:
     if status == "no_data":
         return TransitionOutcome.NO_DATA
     return TransitionOutcome.ERROR
+
+
+def _standalone_translation_error(exc: Exception) -> TurnProcessingError:
+    reason = str(exc)
+    if reason == "resolved_comparison_degraded":
+        return TurnProcessingError(reason, code="resolved_comparison_degraded")
+    if reason == "resolved plan has no canonical period":
+        return TurnProcessingError("period not detected", code="period_required")
+    if reason.startswith("unsupported resolved operation:"):
+        return TurnProcessingError(reason, code="resolved_operation_unsupported")
+    if "grouping" in reason:
+        return TurnProcessingError(reason, code="resolved_grouping_unsupported")
+    return TurnProcessingError(
+        "standalone resolved plan translation failed",
+        code="resolved_plan_translation_failed",
+    )
 
 
 def _result_reference(turn_id, native, intent) -> ResultReference:
