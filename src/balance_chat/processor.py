@@ -4,13 +4,18 @@ import hashlib
 import json
 import logging
 import re
+from difflib import SequenceMatcher
 from datetime import date, timedelta
 from decimal import Decimal, ROUND_HALF_UP
 from time import perf_counter
 from typing import Any
 from uuid import uuid4
 
-from .binding import ContextBindingError, InterpretationMutationCompiler
+from .binding import (
+    CanonicalRelationNotFound,
+    ContextBindingError,
+    InterpretationMutationCompiler,
+)
 from .compat.envelope_translation import PipelineEnvelopeTranslator
 from .contracts import (
     AnalysisIntent,
@@ -20,6 +25,7 @@ from .contracts import (
     ComparisonSpec,
     ContextContractV2,
     ContextMutation,
+    EntityMention,
     GroupingSpec,
     InterpretationMode,
     MetadataVersionRef,
@@ -96,6 +102,16 @@ class PipelineV2TurnProcessor:
         turn_id = str(uuid4())
         if clarification is not None:
             _validate_clarification_answer(state, clarification)
+        if state.active_dialog_scope is not None:
+            return self._process_contextual(
+                state,
+                message=message,
+                execute_db=execute_db,
+                clarification=clarification,
+                request_id=request_id,
+                turn_id=turn_id,
+                started=started,
+            )
         reverse = self._deterministic_reverse_mutation(state, message, turn_id)
         if reverse is not None:
             mutation, relation_found = reverse
@@ -131,7 +147,7 @@ class PipelineV2TurnProcessor:
                 interpretation_mode="deterministic_extremum_comparison",
                 memory_chunks=[],
             )
-        explicit_geos = self._matched_geo_objects(message)
+        explicit_geos = self._tagged_geo_objects(message)
         mixed_metric_operands = self._matched_distribution_own_consumers(message)
         if mixed_metric_operands:
             return self._canonical_entity_comparison(
@@ -231,6 +247,15 @@ class PipelineV2TurnProcessor:
                     *_domain_hints(self.registry),
                 ],
                 metadata_bundle_version=self.registry.manifest.bundle_version,
+                current_message_tags=[
+                    {
+                        "tag": "GEO",
+                        "text": item.canonical_name,
+                        "canonical_name": item.canonical_name,
+                        "role_hint": "destination",
+                    }
+                    for item in explicit_geos
+                ],
                 result_references=(
                     self.result_memory.for_interpretation(memory_chunks)
                     if self.result_memory
@@ -271,6 +296,29 @@ class PipelineV2TurnProcessor:
                 state,
                 turn_id=turn_id,
                 user_message=message,
+                current_entity_mentions=[
+                    EntityMention(text=item.canonical_name, role="destination")
+                    for item in explicit_geos
+                ],
+            )
+        except CanonicalRelationNotFound as exc:
+            base = state.active_dialog_scope.intent
+            attempted = base.model_copy(
+                update={"operands": [exc.operand], "comparison": None},
+                deep=True,
+            )
+            mutation = ContextMutation(
+                turn_id=turn_id,
+                user_message=message,
+                normalized_message=decision.normalized_message,
+                replace_intent=attempted,
+            )
+            return self._reverse_no_data(
+                mutation,
+                request_id=request_id,
+                started=started,
+                interpretation_mode="conversation_graph",
+                interpretation_source="qwen",
             )
         except ContextBindingError as exc:
             raise TurnProcessingError(
@@ -296,6 +344,144 @@ class PipelineV2TurnProcessor:
             request_id=request_id,
             started=started,
             interpretation_mode=decision.mode.value,
+            memory_chunks=memory_chunks,
+            decision=decision,
+        )
+
+    def _process_contextual(
+        self,
+        state: ContextContractV2,
+        *,
+        message: str,
+        execute_db: bool,
+        clarification: ClarificationAnswer | None,
+        request_id: str,
+        turn_id: str,
+        started: float,
+    ) -> TurnProcessResult:
+        """Interpret every active-session turn against the seven-turn ledger."""
+        explicit_geos = self._tagged_geo_objects(message)
+        memory_chunks = []
+        if self.result_memory and state.metadata and state.result_references:
+            memory_chunks = self.result_memory.retrieve(
+                session_id=state.session_id,
+                query=message,
+                metadata_bundle_version=state.metadata.bundle_version,
+                intent=state.active_dialog_scope.intent,
+            )
+        try:
+            decision = self.interpreter.interpret(
+                message=message,
+                state=state,
+                capabilities=_capabilities(),
+                domain_hints=[
+                    *(f"explicit_geo:{item.canonical_name}" for item in explicit_geos),
+                    *_domain_hints(self.registry),
+                ],
+                metadata_bundle_version=self.registry.manifest.bundle_version,
+                current_message_tags=[
+                    {
+                        "tag": "GEO",
+                        "text": item.canonical_name,
+                        "canonical_name": item.canonical_name,
+                        "role_hint": "destination",
+                    }
+                    for item in explicit_geos
+                ],
+                result_references=(
+                    self.result_memory.for_interpretation(memory_chunks)
+                    if self.result_memory else []
+                ),
+                clarification_answer=(
+                    clarification.model_dump(mode="json")
+                    if clarification is not None else None
+                ),
+                request_id=request_id,
+            )
+        except InterpretationError as exc:
+            raise TurnProcessingError(
+                "interpretation contract validation failed",
+                code="interpretation_contract_invalid",
+            ) from exc
+        if decision.mode == InterpretationMode.CLARIFY:
+            if decision.clarification is None:
+                raise TurnProcessingError("clarification contract is missing")
+            return TurnProcessResult(
+                mutation=ContextMutation(
+                    turn_id=turn_id,
+                    user_message=message,
+                    normalized_message=decision.normalized_message,
+                    replace_intent=state.active_dialog_scope.intent,
+                ),
+                outcome=TransitionOutcome.CLARIFICATION,
+                clarification_questions=[decision.clarification.model_dump(mode="json")],
+                diagnostics=_diagnostics(decision, memory_chunks, 0, started),
+            )
+        if decision.mode == InterpretationMode.UNSUPPORTED:
+            raise TurnProcessingError(
+                f"unsupported capability: {decision.unsupported_capability}"
+            )
+        try:
+            mutation = self.compiler.compile(
+                decision,
+                state,
+                turn_id=turn_id,
+                user_message=message,
+                current_entity_mentions=[
+                    EntityMention(text=item.canonical_name, role="destination")
+                    for item in explicit_geos
+                ],
+            )
+        except CanonicalRelationNotFound as exc:
+            base = state.active_dialog_scope.intent
+            attempted = base.model_copy(
+                update={"operands": [exc.operand], "comparison": None},
+                deep=True,
+            )
+            return self._reverse_no_data(
+                ContextMutation(
+                    turn_id=turn_id,
+                    user_message=message,
+                    normalized_message=decision.normalized_message,
+                    replace_intent=attempted,
+                ),
+                request_id=request_id,
+                started=started,
+                interpretation_mode="conversation_graph",
+                interpretation_source="qwen",
+            )
+        except ContextBindingError as exc:
+            log_event(
+                LOGGER,
+                logging.WARNING,
+                "context_graph_binding_failed",
+                request_id=request_id,
+                error=str(exc),
+                normalized_message=decision.normalized_message,
+            )
+            raise TurnProcessingError(
+                "interpretation could not be bound to canonical metadata",
+                code="interpretation_binding_failed",
+            ) from exc
+        if mutation.replace_intent.grouping or mutation.replace_intent.operation == Operation.GROUP:
+            return self._execute_grouping_mutation(
+                state,
+                mutation,
+                normalized_message=decision.normalized_message,
+                execute_db=execute_db,
+                request_id=request_id,
+                started=started,
+                interpretation_mode="conversation_graph",
+                decision=decision,
+            )
+        return self._execute_mutation(
+            state,
+            mutation,
+            normalized_message=decision.normalized_message,
+            execute_db=execute_db,
+            request_id=request_id,
+            started=started,
+            interpretation_mode="conversation_graph",
             memory_chunks=memory_chunks,
             decision=decision,
         )
@@ -586,7 +772,14 @@ class PipelineV2TurnProcessor:
         )
 
     @staticmethod
-    def _reverse_no_data(mutation, *, request_id, started):
+    def _reverse_no_data(
+        mutation,
+        *,
+        request_id,
+        started,
+        interpretation_mode="deterministic_reverse",
+        interpretation_source="deterministic",
+    ):
         log_event(
             LOGGER,
             logging.INFO,
@@ -610,8 +803,8 @@ class PipelineV2TurnProcessor:
             },
             diagnostics={
                 "interpretation": {
-                    "mode": "deterministic_reverse",
-                    "source": "deterministic",
+                    "mode": interpretation_mode,
+                    "source": interpretation_source,
                     "confidence": 1.0,
                 },
                 "execution": {
@@ -641,6 +834,53 @@ class PipelineV2TurnProcessor:
                 if current is None or candidate[:2] < current[:2]:
                     matches[str(geo.geo_id)] = candidate
         return [item[2] for item in sorted(matches.values(), key=lambda item: item[:2])]
+
+    def _tagged_geo_objects(self, message: str) -> list[Any]:
+        """Extract ordered current-turn GEO tags, including safe inflections."""
+        if self._normalize_lemmas is None:
+            return self._matched_geo_objects(message)
+        query_tokens = self._normalize_lemmas(message).split()
+        candidates: list[tuple[int, int, float, Any]] = []
+        for geo in self.registry.geo_objects:
+            best: tuple[int, int, float, Any] | None = None
+            for label in (geo.canonical_name, *geo.aliases):
+                label_tokens = self._normalize_lemmas(label).split()
+                if not label_tokens or any(len(item) < 3 for item in label_tokens):
+                    continue
+                width = len(label_tokens)
+                for start in range(0, len(query_tokens) - width + 1):
+                    window = query_tokens[start:start + width]
+                    scores = [
+                        SequenceMatcher(None, left, right).ratio()
+                        for left, right in zip(window, label_tokens)
+                    ]
+                    threshold = 0.84 if width == 1 else 0.76
+                    if min(scores) < threshold:
+                        continue
+                    candidate = (start, start + width, sum(scores) / width, geo)
+                    if best is None or candidate[2] > best[2]:
+                        best = candidate
+            if best is not None:
+                candidates.append(best)
+        by_span: dict[tuple[int, int], list[tuple[int, int, float, Any]]] = {}
+        for item in candidates:
+            by_span.setdefault((item[0], item[1]), []).append(item)
+        selected: list[tuple[int, int, float, Any]] = []
+        for values in by_span.values():
+            ranked = sorted(values, key=lambda item: item[2], reverse=True)
+            if len(ranked) > 1 and ranked[0][2] - ranked[1][2] < 0.03:
+                continue
+            selected.append(ranked[0])
+        selected.sort(key=lambda item: (item[0], -item[2]))
+        output: list[Any] = []
+        occupied: set[int] = set()
+        for start, end, _score, geo in selected:
+            span = set(range(start, end))
+            if span & occupied:
+                continue
+            occupied.update(span)
+            output.append(geo)
+        return output
 
     def _canonical_entity_comparison(
         self,

@@ -19,7 +19,7 @@ class PipelineInterpretationBackend:
             "context",
             payload["messages"],
             models.OutputContract.json_schema(
-                "balance_chat_interpretation_v1",
+                "balance_chat_interpretation_v2",
                 interpretation_decision_json_schema(
                     list(payload.get("allowed_modes") or [])
                 ),

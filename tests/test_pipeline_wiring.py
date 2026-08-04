@@ -5,6 +5,7 @@ from types import SimpleNamespace
 
 import pytest
 
+from balance_chat.binding import InterpretationMutationCompiler, RegistryEntityBinder
 from balance_chat.compat.envelope_translation import (
     EnvelopeTranslationError,
     PipelineEnvelopeTranslator,
@@ -15,6 +16,7 @@ from balance_chat.contracts import (
     CanonicalEntityRef,
     ContextContractV2,
     ContextMutation,
+    InterpretationDecision,
     MetadataVersionRef,
     OperandEntityRef,
     Operation,
@@ -650,6 +652,47 @@ class _NoInterpretationRuntime:
         raise ImportError
 
 
+class _GraphInterpreter:
+    def __init__(self, kind: str) -> None:
+        self.kind = kind
+
+    def interpret(self, *, state, message, metadata_bundle_version, **_kwargs):
+        frame = state.conversation_window[-1]
+        source = frame.operands[0].handle
+        period = frame.periods[0].handle
+        if self.kind == "reverse":
+            graph = {
+                "operation": state.active_dialog_scope.intent.operation.value,
+                "operands": [{
+                    "operand_id": "reversed",
+                    "source_operand_handle": source,
+                    "reverse_direction": True,
+                }],
+                "period_handles": [period],
+            }
+        else:
+            graph = {
+                "operation": "group",
+                "operands": [{
+                    "operand_id": "grouped",
+                    "source_operand_handle": source,
+                }],
+                "period_handles": [period],
+                "grouping": [{"dimension": "geo_group"}],
+            }
+        return InterpretationDecision.model_validate({
+            "mode": "mutation",
+            "normalized_message": message,
+            "confidence": 0.99,
+            "draft": None,
+            "intent_graph": graph,
+            "clarification": None,
+            "unsupported_capability": None,
+            "assumptions": [],
+            "metadata_bundle_version": metadata_bundle_version,
+        })
+
+
 class _ReverseExecutor:
     def __init__(self):
         self.calls = 0
@@ -716,14 +759,15 @@ def _route_state():
     "message",
     ["и наоборот", "и наоборот из ТГ Москва в ТГ Н. Новгород"],
 )
-def test_reverse_followup_resolves_opposite_balance_article_without_qwen(message) -> None:
+def test_reverse_followup_resolves_opposite_balance_article_from_context_graph(message) -> None:
     registry = _ReverseRegistry()
+    registry.manifest = SimpleNamespace(bundle_version="2026.07.7")
     executor = _ReverseExecutor()
     processor = PipelineV2TurnProcessor(
         runtime=_NoInterpretationRuntime(),
         registry=registry,
-        interpreter=object(),
-        compiler=object(),
+        interpreter=_GraphInterpreter("reverse"),
+        compiler=InterpretationMutationCompiler(RegistryEntityBinder(registry)),
         executor=executor,
     )
 
@@ -737,7 +781,8 @@ def test_reverse_followup_resolves_opposite_balance_article_without_qwen(message
 
     assert processed.outcome == TransitionOutcome.SUCCESS
     assert executor.calls == 1
-    assert processed.diagnostics["interpretation"]["mode"] == "deterministic_reverse"
+    assert processed.diagnostics["interpretation"]["mode"] == "mutation"
+    assert processed.diagnostics["interpretation"]["source"] == "qwen"
     entities = {
         item.role: item.entity.display_name
         for item in processed.mutation.replace_intent.operands[0].entities
@@ -751,11 +796,13 @@ def test_reverse_followup_resolves_opposite_balance_article_without_qwen(message
 
 def test_reverse_without_curated_relation_is_no_data_before_execution() -> None:
     executor = _ReverseExecutor()
+    registry = _ReverseRegistry(reverse_exists=False)
+    registry.manifest = SimpleNamespace(bundle_version="2026.07.7")
     processor = PipelineV2TurnProcessor(
         runtime=_NoInterpretationRuntime(),
-        registry=_ReverseRegistry(reverse_exists=False),
-        interpreter=object(),
-        compiler=object(),
+        registry=registry,
+        interpreter=_GraphInterpreter("reverse"),
+        compiler=InterpretationMutationCompiler(RegistryEntityBinder(registry)),
         executor=executor,
     )
 
@@ -1061,12 +1108,15 @@ def test_context_grouping_executes_canonical_group_contract() -> None:
                 ],
             }
 
-    registry = SimpleNamespace(geo_objects=(), geo_groups=(), routes=())
+    registry = SimpleNamespace(
+        geo_objects=(), geo_groups=(), routes=(),
+        manifest=SimpleNamespace(bundle_version="2026.07.7"),
+    )
     processor = PipelineV2TurnProcessor(
         runtime=GroupedRuntime(),
         registry=registry,
-        interpreter=object(),
-        compiler=object(),
+        interpreter=_GraphInterpreter("group"),
+        compiler=InterpretationMutationCompiler(RegistryEntityBinder(registry)),
         executor=object(),
         policy=NeverCalled(),
     )
@@ -1126,12 +1176,15 @@ def test_context_grouping_reuses_current_successful_result_reference() -> None:
         canonical_name="Ульяновская область",
         aliases=("Ульяновская обл.", "Ульяновская"),
     )
-    registry = SimpleNamespace(geo_objects=(geo,), geo_groups=(), routes=())
+    registry = SimpleNamespace(
+        geo_objects=(geo,), geo_groups=(), routes=(),
+        manifest=SimpleNamespace(bundle_version="2026.07.7"),
+    )
     processor = PipelineV2TurnProcessor(
         runtime=NoRepeatRuntime(),
         registry=registry,
-        interpreter=object(),
-        compiler=object(),
+        interpreter=_GraphInterpreter("group"),
+        compiler=InterpretationMutationCompiler(RegistryEntityBinder(registry)),
         executor=object(),
         policy=NeverCalled(),
     )
@@ -1276,3 +1329,30 @@ def test_mixed_metric_articles_are_bound_to_separate_operands() -> None:
         "Казань",
         "Собственные потребители",
     ]
+
+
+def test_current_geo_tagger_handles_inflection_and_preserves_mention_order() -> None:
+    processor = object.__new__(PipelineV2TurnProcessor)
+    processor._normalize_lemmas = lambda value: (
+        str(value).casefold()
+        .replace("самару", "самар")
+        .replace("сравни", "")
+        .replace(" и ", " ")
+        .replace(" за лето 2025", "")
+        .strip()
+    )
+    processor.registry = SimpleNamespace(
+        geo_objects=(
+            SimpleNamespace(geo_id="samara", canonical_name="самара", aliases=()),
+            SimpleNamespace(geo_id="kazan", canonical_name="казань", aliases=()),
+            SimpleNamespace(
+                geo_id="samara-region",
+                canonical_name="самарская обл",
+                aliases=("самарская",),
+            ),
+        )
+    )
+
+    tagged = processor._tagged_geo_objects("Сравни Самару и Казань за лето 2025")
+
+    assert [item.geo_id for item in tagged] == ["samara", "kazan"]

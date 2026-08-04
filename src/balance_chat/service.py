@@ -178,6 +178,9 @@ class BalanceChatService:
                     clarification=clarification,
                     request_id=trace_id,
                 )
+                processed.mutation.assistant_summary = _compact_assistant_summary(
+                    processed.response
+                )
                 committed = self.store.commit(
                     session_id,
                     expected_revision,
@@ -280,6 +283,54 @@ class BalanceChatService:
                 result_memory=processed.diagnostics.get("result_memory"),
                 elapsed_ms=int((perf_counter() - started) * 1000),
             )
+            frame = (
+                committed.conversation_window[-1]
+                if committed.conversation_window else None
+            )
+            if frame is not None:
+                log_event(
+                    LOGGER,
+                    logging.INFO,
+                    "conversation_turn_committed",
+                    request_id=trace_id,
+                    session_id=session_id,
+                    revision=committed.revision,
+                    turn_handle=frame.turn_handle,
+                    turn_id=frame.turn_id,
+                    outcome=frame.outcome.value,
+                    user_message=frame.user_message,
+                    normalized_message=frame.normalized_message,
+                    operation=frame.intent.operation.value,
+                    operand_handles=[item.handle for item in frame.operands],
+                    entity_tags=[
+                        {
+                            "handle": item.handle,
+                            "operand_handle": item.operand_handle,
+                            "type": item.entity.entity_type,
+                            "role": item.role,
+                            "canonical_id": item.entity.entity_id,
+                            "label": item.entity.display_name,
+                        }
+                        for item in frame.entities
+                    ],
+                    period_tags=[
+                        {
+                            "handle": item.handle,
+                            "owner_handle": item.owner_handle,
+                            **item.period.model_dump(mode="json"),
+                        }
+                        for item in frame.periods
+                    ],
+                    result=(
+                        {
+                            "handle": frame.result.handle,
+                            "row_count": frame.result.row_count,
+                            "fact_count": len(frame.result.facts),
+                        }
+                        if frame.result else None
+                    ),
+                    conversation_window_size=len(committed.conversation_window),
+                )
             return response
         except RevisionConflict as exc:
             log_event(
@@ -401,3 +452,25 @@ def _safe_diagnostics(value: dict[str, Any]) -> dict[str, Any]:
         if isinstance(raw, dict):
             safe[section] = {key: raw[key] for key in keys if key in raw}
     return safe
+
+
+def _compact_assistant_summary(response: dict[str, Any]) -> str | None:
+    parts: list[str] = []
+    title = response.get("title")
+    if title:
+        parts.append(str(title).strip())
+    summary = response.get("summary")
+    if isinstance(summary, dict):
+        for key in ("title", "text"):
+            value = str(summary.get(key) or "").strip()
+            if value and value not in parts:
+                parts.append(value)
+    elif summary:
+        parts.append(str(summary).strip())
+    if not parts:
+        status = str(response.get("status") or "").strip()
+        operation = str(response.get("operation") or "").strip()
+        if status or operation:
+            parts.append(" ".join(item for item in (operation, status) if item))
+    compact = "\n".join(item for item in parts if item).strip()
+    return compact[:4000] or None

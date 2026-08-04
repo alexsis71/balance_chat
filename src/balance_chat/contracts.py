@@ -191,6 +191,52 @@ class TurnReference(ContractModel):
     outcome: TransitionOutcome
 
 
+class ResolvedEntityTag(ContractModel):
+    """Canonical entity occurrence exposed to the conversational model by handle."""
+
+    handle: str = Field(pattern=r"^e_[0-9a-f]{16}$")
+    operand_handle: str
+    role: Literal["balance", "source", "destination", "route", "article", "subject"]
+    entity: CanonicalEntityRef
+
+
+class ResolvedPeriodTag(ContractModel):
+    """Canonical exclusive-end period exposed to the model by handle."""
+
+    handle: str = Field(pattern=r"^p_[0-9a-f]{16}$")
+    owner_handle: str
+    period: PeriodRef
+
+
+class ResolvedOperandSnapshot(ContractModel):
+    handle: str
+    operand: AnalysisOperand
+
+
+class ResolvedResultSnapshot(ContractModel):
+    handle: str
+    result_id: str
+    row_count: int | None = Field(default=None, ge=0)
+    facts: list[dict[str, Any]] = Field(default_factory=list, max_length=24)
+
+
+class ResolvedTurnFrame(ContractModel):
+    """Authoritative, bounded semantic record of one conversational turn."""
+
+    turn_handle: str = Field(pattern=r"^t[0-9]{4,}$")
+    turn_id: str
+    revision: int = Field(ge=1)
+    user_message: str
+    normalized_message: str | None = None
+    assistant_summary: str | None = Field(default=None, max_length=4000)
+    outcome: TransitionOutcome
+    intent: AnalysisIntent
+    operands: list[ResolvedOperandSnapshot] = Field(default_factory=list)
+    entities: list[ResolvedEntityTag] = Field(default_factory=list)
+    periods: list[ResolvedPeriodTag] = Field(default_factory=list)
+    result: ResolvedResultSnapshot | None = None
+
+
 class ClarificationContract(ContractModel):
     clarification_id: str = Field(default_factory=lambda: str(uuid4()))
     question: str = Field(min_length=1, max_length=1000)
@@ -243,6 +289,7 @@ class ContextMutation(ContractModel):
     patch: IntentPatch = Field(default_factory=IntentPatch)
     user_message: str
     normalized_message: str | None = None
+    assistant_summary: str | None = Field(default=None, max_length=4000)
 
 
 class ContextContractV2(ContractModel):
@@ -256,6 +303,7 @@ class ContextContractV2(ContractModel):
     entity_memory: list[EntityMemoryEntry] = Field(default_factory=list)
     result_references: list[ResultReference] = Field(default_factory=list)
     recent_turns: list[TurnReference] = Field(default_factory=list)
+    conversation_window: list[ResolvedTurnFrame] = Field(default_factory=list)
     pending_clarification: PendingClarification | None = None
     created_at: datetime = Field(default_factory=utc_now)
     updated_at: datetime = Field(default_factory=utc_now)
@@ -352,6 +400,35 @@ class EntityDirective(ContractModel):
         return self
 
 
+class ContextOperandDraft(ContractModel):
+    """One operand assembled from an earlier handle and/or new textual mentions."""
+
+    operand_id: str = Field(pattern=r"^[a-z][a-z0-9_]*$")
+    source_operand_handle: str | None = None
+    metric: str | None = None
+    aggregate_type: str | None = None
+    entity_mode: Literal["inherit", "replace", "add", "clear"] = "inherit"
+    entity_handles: list[str] = Field(default_factory=list)
+    entity_mentions: list[EntityMention] = Field(default_factory=list)
+    period_mode: Literal["inherit", "replace", "add", "clear"] = "inherit"
+    period_handles: list[str] = Field(default_factory=list)
+    periods: list[PeriodRef] = Field(default_factory=list)
+    unit: str | None = None
+    reverse_direction: bool = False
+
+
+class ContextIntentGraph(ContractModel):
+    """Handle-based semantic graph returned for a contextual turn."""
+
+    operation: Operation
+    operands: list[ContextOperandDraft] = Field(min_length=1)
+    period_handles: list[str] = Field(default_factory=list)
+    periods: list[PeriodRef] = Field(default_factory=list)
+    grouping: list[GroupingSpec] = Field(default_factory=list)
+    grain: Literal["day", "month", "quarter", "year", "total"] | None = None
+    comparison: ComparisonSpec | None = None
+
+
 class GroupingDirective(ContractModel):
     action: Literal["keep", "set", "add", "remove", "clear", "reference"]
     values: list[GroupingSpec] = Field(default_factory=list)
@@ -391,6 +468,7 @@ class InterpretationDecision(ContractModel):
     normalized_message: str = Field(min_length=1)
     confidence: float = Field(ge=0, le=1)
     draft: InterpretationDraft | None = None
+    intent_graph: ContextIntentGraph | None = None
     clarification: ClarificationContract | None = None
     unsupported_capability: str | None = None
     assumptions: list[str] = Field(default_factory=list)
@@ -399,10 +477,14 @@ class InterpretationDecision(ContractModel):
     @model_validator(mode="after")
     def validate_mode_payload(self) -> "InterpretationDecision":
         if self.mode in {InterpretationMode.STANDALONE, InterpretationMode.MUTATION}:
-            if self.draft is None:
-                raise ValueError(f"{self.mode.value} requires a mutation draft")
-        elif self.draft is not None:
-            raise ValueError(f"{self.mode.value} cannot carry a mutation draft")
+            if (self.draft is None) == (self.intent_graph is None):
+                raise ValueError(
+                    f"{self.mode.value} requires exactly one of draft or intent_graph"
+                )
+        elif self.draft is not None or self.intent_graph is not None:
+            raise ValueError(
+                f"{self.mode.value} cannot carry a draft or intent_graph"
+            )
         if self.mode == InterpretationMode.CLARIFY:
             if self.clarification is None:
                 raise ValueError("clarify requires clarification contract")

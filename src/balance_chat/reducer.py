@@ -18,6 +18,7 @@ from .contracts import (
     TurnReference,
     utc_now,
 )
+from .conversation import DEFAULT_WINDOW_SIZE, build_turn_frame
 
 
 class ContextReductionError(ValueError):
@@ -146,6 +147,7 @@ def apply_context_transition(
     clarification_questions: list[ClarificationContract | dict[str, Any]] | None = None,
     recent_turn_limit: int = 20,
     result_limit: int = 50,
+    conversation_window_limit: int = DEFAULT_WINDOW_SIZE,
 ) -> ContextContractV2:
     intent = reduce_intent(state, mutation)
     now = utc_now()
@@ -174,6 +176,16 @@ def apply_context_transition(
             raise ContextReductionError("result reference must match transition turn and outcome")
         updated.result_references.append(result)
         updated.result_references = updated.result_references[-result_limit:]
+    updated.conversation_window.append(
+        build_turn_frame(
+            revision=updated.revision,
+            mutation=mutation,
+            intent=intent,
+            outcome=outcome,
+            result=result,
+        )
+    )
+    updated.conversation_window = updated.conversation_window[-conversation_window_limit:]
     if outcome == TransitionOutcome.CLARIFICATION:
         if not clarification_questions:
             raise ContextReductionError("clarification outcome requires questions")

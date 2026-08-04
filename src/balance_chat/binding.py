@@ -18,6 +18,7 @@ from .contracts import (
     Operation,
     PeriodRef,
 )
+from .conversation import handle_indexes
 
 
 class ContextBindingError(ValueError):
@@ -30,6 +31,12 @@ class EntityNotFound(ContextBindingError):
 
 class AmbiguousEntityMention(ContextBindingError):
     pass
+
+
+class CanonicalRelationNotFound(ContextBindingError):
+    def __init__(self, message: str, operand: AnalysisOperand) -> None:
+        super().__init__(message)
+        self.operand = operand
 
 
 class RegistryEntityBinder:
@@ -108,12 +115,23 @@ class InterpretationMutationCompiler:
         *,
         turn_id: str,
         user_message: str,
+        current_entity_mentions: Sequence[EntityMention] = (),
     ) -> ContextMutation:
         if decision.mode not in {
             InterpretationMode.STANDALONE,
             InterpretationMode.MUTATION,
-        } or decision.draft is None:
+        }:
             raise ContextBindingError("interpretation mode is not executable")
+        if decision.intent_graph is not None:
+            return self._compile_graph(
+                decision,
+                state,
+                turn_id=turn_id,
+                user_message=user_message,
+                current_entity_mentions=current_entity_mentions,
+            )
+        if decision.draft is None:
+            raise ContextBindingError("executable interpretation lacks a draft")
         draft = decision.draft
         base = (
             state.active_dialog_scope.intent.model_copy(deep=True)
@@ -182,6 +200,334 @@ class InterpretationMutationCompiler:
             normalized_message=decision.normalized_message,
             replace_intent=intent,
         )
+
+    def _compile_graph(
+        self,
+        decision: InterpretationDecision,
+        state: ContextContractV2,
+        *,
+        turn_id: str,
+        user_message: str,
+        current_entity_mentions: Sequence[EntityMention] = (),
+    ) -> ContextMutation:
+        graph = decision.intent_graph
+        if graph is None:
+            raise ContextBindingError("context intent graph is missing")
+        operand_index, entity_index, period_index = handle_indexes(state)
+        active_operands = (
+            state.active_dialog_scope.intent.operands
+            if state.active_dialog_scope is not None else []
+        )
+        operands: list[AnalysisOperand] = []
+        graph_specs = [item.model_copy(deep=True) for item in graph.operands]
+        self._reconcile_current_mentions(
+            graph_specs, current_entity_mentions, entity_index
+        )
+        for spec in graph_specs:
+            source = None
+            if spec.source_operand_handle:
+                source = operand_index.get(spec.source_operand_handle)
+                if source is None:
+                    raise ContextBindingError(
+                        f"unknown source operand handle: {spec.source_operand_handle}"
+                    )
+                source = source.model_copy(deep=True)
+            elif decision.mode == InterpretationMode.MUTATION and len(active_operands) == 1:
+                # A mutation is defined over the active operand unless the model
+                # explicitly selects another historical operand. This is generic
+                # inherit semantics, not language-specific recovery.
+                source = active_operands[0].model_copy(deep=True)
+            metric = spec.metric or (source.metric if source is not None else None)
+            if not metric:
+                raise ContextBindingError(
+                    f"operand {spec.operand_id} has no metric or source handle"
+                )
+            entity_mode = (
+                "replace"
+                if spec.entity_mode == "inherit"
+                and (spec.entity_handles or spec.entity_mentions)
+                else spec.entity_mode
+            )
+            entities = self._graph_entities(
+                entity_mode,
+                source.entities if source is not None else [],
+                spec.entity_handles,
+                spec.entity_mentions,
+                entity_index,
+            )
+            period_mode = (
+                "replace"
+                if spec.period_mode == "inherit"
+                and (spec.period_handles or spec.periods)
+                else spec.period_mode
+            )
+            periods = self._graph_periods(
+                period_mode,
+                source.periods if source is not None else [],
+                spec.period_handles,
+                spec.periods,
+                period_index,
+            )
+            operand = AnalysisOperand(
+                operand_id=spec.operand_id,
+                metric=metric,
+                aggregate_type=(
+                    spec.aggregate_type
+                    or (source.aggregate_type if source is not None else "sum")
+                ),
+                entities=entities,
+                periods=periods,
+                unit=spec.unit if spec.unit is not None else (source.unit if source else None),
+            )
+            if spec.reverse_direction:
+                operand = self._resolve_reverse_operand(operand)
+            operands.append(operand)
+        periods = self._referenced_periods(
+            graph.period_handles, graph.periods, period_index
+        )
+        if not periods and state.active_dialog_scope is not None:
+            periods = deepcopy(state.active_dialog_scope.intent.periods)
+        operation = graph.operation
+        if len(operands) == 2 and operation in {Operation.SHOW, Operation.AGGREGATE}:
+            operation = Operation.COMPARE
+        if (
+            operation == Operation.SHOW
+            and any(item.aggregate_type in {"min", "max", "avg"} for item in operands)
+        ):
+            operation = Operation.AGGREGATE
+        comparison = graph.comparison
+        if operation == Operation.COMPARE and comparison is None:
+            if len(operands) != 2:
+                raise ContextBindingError("compare graph requires exactly two operands")
+            comparison = ComparisonSpec(
+                baseline_operand_id=operands[0].operand_id,
+                target_operand_id=operands[1].operand_id,
+            )
+        try:
+            intent = AnalysisIntent(
+                operation=operation,
+                operands=operands,
+                periods=periods,
+                grouping=deepcopy(graph.grouping),
+                grain=graph.grain,
+                comparison=comparison,
+            )
+        except Exception as exc:
+            raise ContextBindingError(f"context intent graph is invalid: {exc}") from exc
+        return ContextMutation(
+            turn_id=turn_id,
+            user_message=user_message,
+            normalized_message=decision.normalized_message,
+            replace_intent=intent,
+        )
+
+    @staticmethod
+    def _reconcile_current_mentions(
+        specs,
+        mentions: Sequence[EntityMention],
+        entity_index: dict[str, OperandEntityRef],
+    ) -> None:
+        """Attach deterministic current-message tags when the graph omitted them."""
+        if not mentions or not specs:
+            return
+        if len(mentions) == len(specs) and len(specs) > 1:
+            for spec, mention in zip(specs, mentions):
+                spec.entity_mode = "replace"
+                spec.entity_handles = []
+                spec.entity_mentions = [mention]
+            return
+        normalized = {
+            (item.text.strip().casefold(), item.role) for spec in specs
+            for item in spec.entity_mentions
+        }
+        normalized.update(
+            (
+                reference.entity.display_name.strip().casefold(),
+                reference.role,
+            )
+            for spec in specs
+            for handle in spec.entity_handles
+            if (reference := entity_index.get(handle)) is not None
+        )
+        missing = [
+            item for item in mentions
+            if (item.text.strip().casefold(), item.role) not in normalized
+        ]
+        if not missing:
+            return
+        if len(specs) == 1:
+            specs[0].entity_mode = "replace"
+            specs[0].entity_mentions.extend(missing)
+            return
+        if len(missing) == len(specs):
+            for spec, mention in zip(specs, missing):
+                spec.entity_mode = "replace"
+                spec.entity_mentions = [mention]
+            return
+        # A single newly mentioned entity in a comparison is the target operand;
+        # the baseline remains the explicitly referenced historical operand.
+        if len(missing) == 1:
+            specs[-1].entity_mode = "replace"
+            specs[-1].entity_mentions.append(missing[0])
+
+    def _resolve_reverse_operand(self, operand: AnalysisOperand) -> AnalysisOperand:
+        by_role = {item.role: item for item in operand.entities}
+        balance_ref = by_role.get("balance")
+        article_ref = by_role.get("article")
+        if balance_ref is None or article_ref is None:
+            reversed_operand = self._reverse_operand(operand)
+            reversed_roles = {item.role for item in reversed_operand.entities}
+            if {"source", "destination"}.issubset(reversed_roles):
+                return reversed_operand
+            raise CanonicalRelationNotFound(
+                "reverse operand has no canonical source and destination",
+                reversed_operand,
+            )
+        registry = self.binder.registry
+        source_balance = registry.balance(_metadata_id(balance_ref.entity.entity_id))
+        current_article = registry.article(_metadata_id(article_ref.entity.entity_id))
+        if source_balance is None or current_article is None:
+            raise CanonicalRelationNotFound(
+                "reverse source metadata is unavailable", operand
+            )
+        destination_balance = next(
+            (
+                registry.balance(value)
+                for value in (
+                    current_article.canonical_name,
+                    *current_article.aliases,
+                    article_ref.entity.display_name,
+                )
+                if registry.balance(value) is not None
+            ),
+            None,
+        )
+        candidates: dict[Any, Any] = {}
+        if destination_balance is not None:
+            for value in (source_balance.canonical_name, *source_balance.aliases):
+                for candidate in registry.find_article_candidates(
+                    value,
+                    balance_id=destination_balance.balance_id,
+                ):
+                    if (
+                        str(candidate.section).strip().casefold() == "распределение"
+                        and any(
+                            str(part).strip().casefold() == "за пределы"
+                            for part in candidate.path
+                        )
+                    ):
+                        candidates[candidate.article_id] = candidate
+        if destination_balance is None or len(candidates) != 1:
+            raise CanonicalRelationNotFound(
+                "reverse canonical relation is absent or ambiguous", operand
+            )
+        article = next(iter(candidates.values()))
+        return operand.model_copy(
+            update={
+                "entities": [
+                    OperandEntityRef(
+                        role="balance",
+                        entity=CanonicalEntityRef(
+                            entity_id=str(destination_balance.balance_id),
+                            entity_type="balance",
+                            display_name=destination_balance.canonical_name,
+                        ),
+                    ),
+                    OperandEntityRef(
+                        role="article",
+                        entity=CanonicalEntityRef(
+                            entity_id=str(article.article_id),
+                            entity_type="article",
+                            display_name=article.canonical_name,
+                        ),
+                    ),
+                ]
+            },
+            deep=True,
+        )
+
+    def _graph_entities(
+        self,
+        mode: str,
+        inherited: Sequence[OperandEntityRef],
+        handles: Sequence[str],
+        mentions: Sequence[EntityMention],
+        index: dict[str, OperandEntityRef],
+    ) -> list[OperandEntityRef]:
+        selected: list[OperandEntityRef] = []
+        for handle in handles:
+            reference = index.get(handle)
+            if reference is None:
+                raise ContextBindingError(f"unknown entity handle: {handle}")
+            selected.append(reference.model_copy(deep=True))
+        selected.extend(self.binder.bind(mentions))
+        if mode == "inherit":
+            if selected:
+                raise ContextBindingError("inherit entity mode cannot select entities")
+            return deepcopy(list(inherited))
+        if mode == "clear":
+            if selected:
+                raise ContextBindingError("clear entity mode cannot select entities")
+            return []
+        if mode == "replace":
+            base: list[OperandEntityRef] = []
+        elif mode == "add":
+            base = deepcopy(list(inherited))
+        else:
+            raise ContextBindingError(f"unknown entity mode: {mode}")
+        by_role = {item.role: item for item in base}
+        for item in selected:
+            by_role[item.role] = item
+        return list(by_role.values())
+
+    @staticmethod
+    def _graph_periods(
+        mode: str,
+        inherited: Sequence[PeriodRef],
+        handles: Sequence[str],
+        values: Sequence[PeriodRef],
+        index: dict[str, PeriodRef],
+    ) -> list[PeriodRef]:
+        selected = InterpretationMutationCompiler._referenced_periods(
+            handles, values, index
+        )
+        if mode == "inherit":
+            if selected:
+                raise ContextBindingError("inherit period mode cannot select periods")
+            return deepcopy(list(inherited))
+        if mode == "clear":
+            if selected:
+                raise ContextBindingError("clear period mode cannot select periods")
+            return []
+        if mode == "replace":
+            return selected
+        if mode == "add":
+            output = deepcopy(list(inherited))
+            output.extend(item for item in selected if item not in output)
+            return output
+        raise ContextBindingError(f"unknown period mode: {mode}")
+
+    @staticmethod
+    def _referenced_periods(
+        handles: Sequence[str],
+        values: Sequence[PeriodRef],
+        index: dict[str, PeriodRef],
+    ) -> list[PeriodRef]:
+        output: list[PeriodRef] = []
+        for handle in handles:
+            period = index.get(handle)
+            if period is None:
+                raise ContextBindingError(f"unknown period handle: {handle}")
+            output.append(period.model_copy(deep=True))
+        output.extend(item.model_copy(deep=True) for item in values)
+        unique: list[PeriodRef] = []
+        seen: set[tuple[Any, Any, Any]] = set()
+        for item in output:
+            key = (item.date_from, item.date_to, item.label)
+            if key not in seen:
+                seen.add(key)
+                unique.append(item)
+        return unique
 
     def _metrics(self, directive, operands, state) -> list[str]:
         current = [item.metric for item in operands]
@@ -373,3 +719,9 @@ class InterpretationMutationCompiler:
 def _official_geo_display(value: str) -> str:
     text = str(value).strip()
     return text[:1].upper() + text[1:] if text else text
+
+
+def _metadata_id(value: str) -> int | str:
+    text = str(value).strip()
+    tail = text.rsplit(":", 1)[-1]
+    return int(tail) if tail.isdigit() else text
