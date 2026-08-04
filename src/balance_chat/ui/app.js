@@ -154,7 +154,8 @@ function resultHtml(item) {
   const bullets = Array.isArray(summary.bullets) ? `<ul>${summary.bullets.map((value) => `<li>${escapeHtml(value)}</li>`).join("")}</ul>` : "";
   const comparison = comparisonHtml(result.comparison);
   const table = tableHtml(result);
-  const warnings = (result.warnings || []).length ? `<div class="warnings">${result.warnings.map((value) => `<p>${escapeHtml(typeof value === "string" ? value : value.message || JSON.stringify(value))}</p>`).join("")}</div>` : "";
+  const visibleWarnings = (result.warnings || []).filter((value) => !isTechnicalWarning(value));
+  const warnings = visibleWarnings.length ? `<div class="warnings">${visibleWarnings.map((value) => `<p>${escapeHtml(typeof value === "string" ? value : value.message || JSON.stringify(value))}</p>`).join("")}</div>` : "";
   const clarification = clarificationHtml(item.context?.pending_clarification);
   return `<div class="result-card">
     <div class="result-heading"><div><span class="result-status ${escapeHtml(status)}">${escapeHtml(operationLabel(result.operation || status))}</span><h2>${escapeHtml(title)}</h2></div></div>
@@ -183,10 +184,15 @@ function isTechnicalPlan(rows) {
   const fields = rows.map((row) => String(row?.field || "").toLowerCase());
   return fields.length > 0 && fields.every((field) => ["function", "params", "sql"].includes(field));
 }
+function isTechnicalWarning(value) {
+  const text = String(typeof value === "string" ? value : value?.message || value?.value || value?.raw || "").trim();
+  return /^unified selected .+ over .+ candidate$/i.test(text) || /^unified normalized [a-z0-9_]+ from .+ to .+$/i.test(text);
+}
 function sanitizeResult(result) {
   if (!result) return result;
   const clean = JSON.parse(JSON.stringify(result, (key, value) => key === "provenance" ? undefined : value));
   if (Array.isArray(clean.rows) && isTechnicalPlan(clean.rows)) clean.rows=[];
+  if (Array.isArray(clean.warnings)) clean.warnings=clean.warnings.filter((value) => !isTechnicalWarning(value));
   return clean;
 }
 function hasRows(result) { return rowsFor(result).length > 0; }

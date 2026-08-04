@@ -1220,10 +1220,22 @@ class PipelineV2TurnProcessor:
                     facts,
                     summary,
                 )
+        public_response = _public_pipeline_result(envelope)
+        _, technical_warnings = _partition_public_warnings(
+            envelope.get("warnings") or []
+        )
+        if technical_warnings:
+            log_event(
+                LOGGER,
+                logging.INFO,
+                "technical_result_warnings_suppressed",
+                request_id=request_id,
+                warnings=technical_warnings,
+            )
         return TurnProcessResult(
             mutation=mutation,
             outcome=outcome,
-            response=_public_pipeline_result(envelope),
+            response=public_response,
             result_reference=result_ref,
             memory_write=memory_write,
             diagnostics={
@@ -1583,6 +1595,7 @@ def _summary_diagnostics(
 
 
 def _public_pipeline_result(envelope: dict[str, Any]) -> dict[str, Any]:
+    public_warnings, _ = _partition_public_warnings(envelope.get("warnings") or [])
     return {
         "status": envelope.get("status"),
         "rows": [
@@ -1591,8 +1604,31 @@ def _public_pipeline_result(envelope: dict[str, Any]) -> dict[str, Any]:
             if isinstance(item, dict)
         ],
         "summary": _public_summary(envelope.get("summary")),
-        "warnings": envelope.get("warnings") or [],
+        "warnings": public_warnings,
     }
+
+
+_TECHNICAL_WARNING_PATTERNS = (
+    re.compile(r"^unified selected .+ over .+ candidate$", re.I),
+    re.compile(r"^unified normalized [a-z0-9_]+ from .+ to .+$", re.I),
+)
+
+
+def _partition_public_warnings(values: Any) -> tuple[list[Any], list[str]]:
+    public: list[Any] = []
+    technical: list[str] = []
+    for value in values if isinstance(values, list) else []:
+        if isinstance(value, dict):
+            text = str(
+                value.get("message") or value.get("value") or value.get("raw") or ""
+            ).strip()
+        else:
+            text = str(value).strip()
+        if text and any(pattern.fullmatch(text) for pattern in _TECHNICAL_WARNING_PATTERNS):
+            technical.append(text)
+        else:
+            public.append(value)
+    return public, technical
 
 
 _PRIVATE_RESULT_FIELDS = {

@@ -494,6 +494,11 @@ def test_public_result_suppresses_deterministic_execution_phrase() -> None:
                 "title": "Результат готов: 1 строк",
                 "text": "Операция aggregate выполнена через deterministic execution layer.",
             },
+            "warnings": [
+                "unified selected balance-level intent over article-level analyzer candidate",
+                "unified normalized article_policy from empty to balance_only",
+                {"code": "data_quality", "message": "Проверено не за все дни"},
+            ],
         }
     )
 
@@ -503,6 +508,9 @@ def test_public_result_suppresses_deterministic_execution_phrase() -> None:
         "article_name": "ТГ Москва",
         "fact_value": 1,
     }]
+    assert result["warnings"] == [
+        {"code": "data_quality", "message": "Проверено не за все дни"}
+    ]
 
 
 def test_native_summary_receives_exact_extremum_date() -> None:
