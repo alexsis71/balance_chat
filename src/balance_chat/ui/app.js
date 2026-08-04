@@ -170,9 +170,13 @@ function comparisonHtml(comparison) {
     <div><small>Изменение</small><strong>${numberLabel(comparison.delta)}</strong><span>${comparison.percent_change == null ? "" : `${numberLabel(comparison.percent_change)} %`}</span></div>
   </section>`;
 }
+const HIDDEN_RESULT_COLUMNS = new Set(["provenance", "balance_id", "balance_ids", "article_id", "article_ids"]);
+function publicRow(row) {
+  return Object.fromEntries(Object.entries(row || {}).filter(([key]) => !HIDDEN_RESULT_COLUMNS.has(String(key).toLowerCase())));
+}
 function rowsFor(result) {
-  if (Array.isArray(result.rows) && result.rows.length && !isTechnicalPlan(result.rows)) return result.rows;
-  if (Array.isArray(result.facts) && result.facts.length) return result.facts.map((fact) => ({Показатель:fact.label, Значение:fact.value, Единица:fact.unit}));
+  if (Array.isArray(result.rows) && result.rows.length && !isTechnicalPlan(result.rows)) return result.rows.map(publicRow);
+  if (Array.isArray(result.facts) && result.facts.length) return result.facts.map((fact) => publicRow({Показатель:fact.label, Значение:fact.value, Единица:fact.unit}));
   return [];
 }
 function isTechnicalPlan(rows) {
@@ -188,7 +192,7 @@ function sanitizeResult(result) {
 function hasRows(result) { return rowsFor(result).length > 0; }
 function tableHtml(result) {
   const rows = rowsFor(result); if (!rows.length) return "";
-  const columns = [...new Set(rows.flatMap((row) => Object.keys(row)))].filter((key) => key !== "provenance");
+  const columns = [...new Set(rows.flatMap((row) => Object.keys(row)))];
   return `<section class="table-section"><div class="section-title">Основная таблица <span>${rows.length} ${rows.length === 1 ? "строка" : "строк"}</span></div>
     <div class="table-scroll"><table><thead><tr>${columns.map((key) => `<th>${escapeHtml(key)}</th>`).join("")}</tr></thead><tbody>
     ${rows.map((row) => `<tr>${columns.map((key) => `<td>${escapeHtml(formatCell(row[key], key))}</td>`).join("")}</tr>`).join("")}</tbody></table></div></section>`;
@@ -272,7 +276,7 @@ function humanError(error) {
 function resultText(item) {
   const result = item.result || {}; const summary = result.summary || {};
   const lines = [summary.title || result.title || "Результат", summary.text || summary.answer || ""];
-  rowsFor(result).forEach((row) => lines.push(Object.entries(row).filter(([key]) => key !== "provenance").map(([key,value]) => `${key}: ${formatCell(value,key)}`).join("; ")));
+  rowsFor(result).forEach((row) => lines.push(Object.entries(row).map(([key,value]) => `${key}: ${formatCell(value,key)}`).join("; ")));
   return lines.filter(Boolean).join("\n");
 }
 async function copyResult(id) {
@@ -281,7 +285,7 @@ async function copyResult(id) {
 }
 function exportCsv(id) {
   const item = activeHistory()?.messages?.find((entry) => entry.id === id); const rows = rowsFor(item?.result || {}); if (!rows.length) return;
-  const columns = [...new Set(rows.flatMap((row) => Object.keys(row)))].filter((key) => key !== "provenance");
+  const columns = [...new Set(rows.flatMap((row) => Object.keys(row)))];
   const quote = (value) => `"${String(value ?? "").replaceAll('"','""')}"`;
   const csv = "\uFEFF" + [columns.map(quote).join(";"), ...rows.map((row) => columns.map((key) => quote(formatCell(row[key],key))).join(";"))].join("\r\n");
   download(new Blob([csv], {type:"text/csv;charset=utf-8"}), `ai-balances-${Date.now()}.csv`);

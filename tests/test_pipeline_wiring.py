@@ -483,7 +483,13 @@ def test_public_result_suppresses_deterministic_execution_phrase() -> None:
     result = _public_pipeline_result(
         {
             "status": "ok",
-            "rows": [{"fact_value": 1}],
+            "rows": [{
+                "balance_id": "2010000040110",
+                "article_id": "2010000039983",
+                "balance": "ГП ТГ Н.Новгород суточный баланс",
+                "article_name": "ТГ Москва",
+                "fact_value": 1,
+            }],
             "summary": {
                 "title": "Результат готов: 1 строк",
                 "text": "Операция aggregate выполнена через deterministic execution layer.",
@@ -492,6 +498,11 @@ def test_public_result_suppresses_deterministic_execution_phrase() -> None:
     )
 
     assert result["summary"] == {"title": "Результат готов: 1 строк"}
+    assert result["rows"] == [{
+        "balance": "ГП ТГ Н.Новгород суточный баланс",
+        "article_name": "ТГ Москва",
+        "fact_value": 1,
+    }]
 
 
 def test_native_summary_receives_exact_extremum_date() -> None:

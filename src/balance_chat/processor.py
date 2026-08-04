@@ -1586,7 +1586,7 @@ def _public_pipeline_result(envelope: dict[str, Any]) -> dict[str, Any]:
     return {
         "status": envelope.get("status"),
         "rows": [
-            _safe_mapping(item)
+            _public_result_row(item)
             for item in (envelope.get("rows") or [])
             if isinstance(item, dict)
         ],
@@ -1598,6 +1598,18 @@ def _public_pipeline_result(envelope: dict[str, Any]) -> dict[str, Any]:
 _PRIVATE_RESULT_FIELDS = {
     "provenance", "raw_rows", "raw", "sql", "rendered_sql", "params", "debug"
 }
+
+_PUBLIC_HIDDEN_ROW_FIELDS = {
+    "balance_id", "balance_ids", "article_id", "article_ids"
+}
+
+
+def _public_result_row(value: dict[str, Any]) -> dict[str, Any]:
+    return {
+        key: item
+        for key, item in _safe_mapping(value).items()
+        if key.casefold() not in _PUBLIC_HIDDEN_ROW_FIELDS
+    }
 
 
 def _safe_mapping(value: dict[str, Any]) -> dict[str, Any]:
