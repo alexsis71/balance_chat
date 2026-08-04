@@ -40,5 +40,25 @@ follow-up; окно должно остаться длиной семь с вы�
 
 API keys, DSN, system prompt, SQL и raw PostgreSQL rows в журнал не попадают.
 
-Фактические результаты staging-прогона дополняются после запуска focused и
-полного regression, live DB-backed цепочки и restart recovery.
+## Результат 2026-08-04
+
+Live session: `190ece6f-50c6-41c0-b11f-c65526774997`.
+
+- все семь turn завершились `status=ok`, revisions последовательно выросли от
+  1 до 7;
+- turn 3 сформировал два operand Самарской области с периодами
+  `2025-03-01—2025-06-01` и `2025-06-01—2025-09-01`;
+- turn 4/5 после period comparison сохранили Самарскую область и летний период
+  для `max`/`min` вместо сброса к общему балансу;
+- turn 6 сменил GEO на Казань, не потеряв летний период;
+- turn 7 создал два отдельных operand Самарской области и Казани с одним
+  canonical летним периодом;
+- structured log содержит по семь `turn_started`, `turn_completed` и
+  `conversation_turn_committed`, последнее событие имеет window size 7;
+- после полного рестарта V2 backend snapshot восстановился на revision 7;
+  follow-up «Покажи максимум для Казани за тот же период» завершился на
+  revision 8 с `aggregate=max`, GEO Казань и тем же летним периодом;
+- после восьмого turn размер authoritative окна остался равен 7.
+
+Тесты: focused context/binding/interpretation/reducer — `27 passed`; полный V2
+regression — `128 passed`, одно внешнее deprecation warning Starlette/httpx.
