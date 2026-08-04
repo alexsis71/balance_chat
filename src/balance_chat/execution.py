@@ -97,7 +97,28 @@ def _render_scalar_query(task: ExecutionTask) -> str:
         "balance": "баланс газа",
         "flow_balance": "баланс потоков газа",
     }
-    parts = ["Покажи", metric_labels.get(operand.metric, operand.metric)]
+    metric_label = metric_labels.get(operand.metric, operand.metric)
+    aggregate_metric_labels = {
+        "distribution": "распределения газа",
+        "incoming": "поступления газа",
+        "export": "экспорта газа",
+        "stock": "запасов газа",
+        "balance": "баланса газа",
+        "flow_balance": "баланса потоков газа",
+    }
+    aggregate_metric = aggregate_metric_labels.get(operand.metric, metric_label)
+    aggregate_prefixes = {
+        "max": ["Когда был достигнут максимум", aggregate_metric],
+        "min": ["Когда был достигнут минимум", aggregate_metric],
+        "avg": ["Покажи среднее значение", aggregate_metric],
+        "sum": ["Покажи суммарное значение", aggregate_metric],
+        "first": ["Покажи первое значение", aggregate_metric],
+        "last": ["Покажи последнее значение", aggregate_metric],
+    }
+    parts = aggregate_prefixes.get(
+        operand.aggregate_type,
+        ["Покажи", metric_label],
+    )
     by_role = {item.role: item.entity.display_name for item in operand.entities}
     if by_role.get("balance"):
         parts.extend(["по балансу", by_role["balance"]])

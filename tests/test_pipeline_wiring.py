@@ -409,6 +409,48 @@ def test_scalar_fact_uses_business_label_instead_of_operand_id() -> None:
     assert fact.label != "operand_1"
 
 
+def test_daily_balance_unit_overrides_generic_result_envelope_unit() -> None:
+    from balance_chat.planning import NativeMultiOperandPlanner
+
+    intent = AnalysisIntent(
+        operation=Operation.AGGREGATE,
+        operands=[AnalysisOperand(
+            operand_id="route",
+            metric="distribution",
+            aggregate_type="max",
+            entities=[
+                OperandEntityRef(
+                    role="balance",
+                    entity=CanonicalEntityRef(
+                        entity_id="2010000039953",
+                        entity_type="balance",
+                        display_name="ГП ТГ Москва суточный баланс",
+                    ),
+                ),
+                OperandEntityRef(
+                    role="article",
+                    entity=CanonicalEntityRef(
+                        entity_id="2010000039766",
+                        entity_type="article",
+                        display_name="ТГ Н.-Новгород",
+                    ),
+                ),
+            ],
+        )],
+        periods=[PeriodRef(date_from="2025-04-01", date_to="2025-07-01")],
+    )
+    task = NativeMultiOperandPlanner().plan(intent).tasks[0]
+
+    fact = PipelineEnvelopeTranslator().fact(task, {
+        "status": "ok",
+        "interpretation": {"unit": "млн м3"},
+        "rows": [{"fact_value": "2308.253", "article_name": "ТГ Н.-Новгород"}],
+    })
+
+    assert fact.unit == "тыс. м3"
+    assert fact.value == Decimal("2308.253")
+
+
 def test_public_native_fact_does_not_expose_provenance() -> None:
     from balance_chat.execution import NativeExecutionResult, TaskExecutionResult, ScalarFact
     from balance_chat.processor import _public_native_result
