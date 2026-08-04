@@ -179,6 +179,25 @@ def test_hybrid_policy_skips_unambiguous_standalone_turn() -> None:
     )
 
 
+def test_empty_context_exposes_only_standalone_interpretation_modes() -> None:
+    raw = _decision()
+    raw["mode"] = "standalone"
+    backend = StubBackend(raw)
+    interpreter = UnifiedInterpreter(backend)
+
+    interpreter.interpret(
+        message="покажи распределение за май 2025",
+        state=ContextContractV2(session_id="session-1"),
+        capabilities=["show", "distribution"],
+        domain_hints=[],
+        metadata_bundle_version="2026.07.6",
+    )
+
+    assert backend.payload["allowed_modes"] == [
+        "standalone", "clarify", "unsupported"
+    ]
+
+
 def test_hybrid_policy_invokes_for_context_reference() -> None:
     policy = HybridInterpretationPolicy()
     assert policy.should_invoke("А сравни их", _state())

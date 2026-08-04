@@ -210,10 +210,48 @@ class InterpretationMutationCompiler:
         user_message: str,
         current_entity_mentions: Sequence[EntityMention] = (),
     ) -> ContextMutation:
-        graph = decision.intent_graph
+        graph = (
+            decision.intent_graph.model_copy(deep=True)
+            if decision.intent_graph is not None else None
+        )
         if graph is None:
             raise ContextBindingError("context intent graph is missing")
         operand_index, entity_index, period_index = handle_indexes(state)
+        standalone_empty = (
+            decision.mode == InterpretationMode.STANDALONE
+            and not state.conversation_window
+            and state.active_dialog_scope is None
+        )
+        if standalone_empty:
+            unknown_global_periods = [
+                handle for handle in graph.period_handles
+                if handle not in period_index
+            ]
+            if unknown_global_periods:
+                if not graph.periods:
+                    raise ContextBindingError(
+                        "standalone graph invented period handles without explicit periods"
+                    )
+                graph.period_handles = []
+            for spec in graph.operands:
+                if spec.source_operand_handle is not None:
+                    raise ContextBindingError(
+                        "standalone graph cannot reference a source operand"
+                    )
+                unknown_periods = [
+                    handle for handle in spec.period_handles
+                    if handle not in period_index
+                ]
+                if unknown_periods:
+                    if not spec.periods and not graph.periods:
+                        raise ContextBindingError(
+                            "standalone operand invented period handles without explicit periods"
+                        )
+                    spec.period_handles = []
+                if current_entity_mentions:
+                    # First-turn tags are textual canonical candidates, not
+                    # historical handles. No entity handle is valid yet.
+                    spec.entity_handles = []
         active_operands = (
             state.active_dialog_scope.intent.operands
             if state.active_dialog_scope is not None else []

@@ -148,6 +148,19 @@ class PipelineV2TurnProcessor:
                 memory_chunks=[],
             )
         explicit_geos = self._tagged_geo_objects(message)
+        explicit_businesses = self._tagged_business_balances(message)
+        role_separated = len(explicit_businesses) == 1 and len(explicit_geos) == 1
+        if role_separated:
+            return self._role_separated_standalone(
+                state,
+                message=message,
+                balance=explicit_businesses[0],
+                geos=explicit_geos,
+                execute_db=execute_db,
+                request_id=request_id,
+                turn_id=turn_id,
+                started=started,
+            )
         mixed_metric_operands = self._matched_distribution_own_consumers(message)
         if mixed_metric_operands:
             return self._canonical_entity_comparison(
@@ -243,18 +256,33 @@ class PipelineV2TurnProcessor:
                 state=state,
                 capabilities=_capabilities(),
                 domain_hints=[
+                    *(
+                        f"explicit_business:{item.canonical_name}"
+                        for item in explicit_businesses
+                    ),
                     *(f"explicit_geo:{item.canonical_name}" for item in explicit_geos),
                     *_domain_hints(self.registry),
                 ],
                 metadata_bundle_version=self.registry.manifest.bundle_version,
                 current_message_tags=[
-                    {
-                        "tag": "GEO",
-                        "text": item.canonical_name,
-                        "canonical_name": item.canonical_name,
-                        "role_hint": "destination",
-                    }
-                    for item in explicit_geos
+                    *[
+                        {
+                            "tag": "BUSINESS_ENTITY",
+                            "text": item.canonical_name,
+                            "canonical_name": item.canonical_name,
+                            "role_hint": "balance",
+                        }
+                        for item in explicit_businesses
+                    ],
+                    *[
+                        {
+                            "tag": "GEO",
+                            "text": item.canonical_name,
+                            "canonical_name": item.canonical_name,
+                            "role_hint": "destination",
+                        }
+                        for item in explicit_geos
+                    ],
                 ],
                 result_references=(
                     self.result_memory.for_interpretation(memory_chunks)
@@ -297,8 +325,19 @@ class PipelineV2TurnProcessor:
                 turn_id=turn_id,
                 user_message=message,
                 current_entity_mentions=[
-                    EntityMention(text=item.canonical_name, role="destination")
-                    for item in explicit_geos
+                    *(
+                        [EntityMention(
+                            text=explicit_businesses[0].canonical_name,
+                            role="balance",
+                        )]
+                        if len(explicit_businesses) == 1 else []
+                    ),
+                    *[
+                        EntityMention(
+                            text=item.canonical_name, role="destination"
+                        )
+                        for item in explicit_geos
+                    ],
                 ],
             )
         except CanonicalRelationNotFound as exc:
@@ -361,6 +400,7 @@ class PipelineV2TurnProcessor:
     ) -> TurnProcessResult:
         """Interpret every active-session turn against the seven-turn ledger."""
         explicit_geos = self._tagged_geo_objects(message)
+        explicit_businesses = self._tagged_business_balances(message)
         memory_chunks = []
         if self.result_memory and state.metadata and state.result_references:
             memory_chunks = self.result_memory.retrieve(
@@ -375,18 +415,33 @@ class PipelineV2TurnProcessor:
                 state=state,
                 capabilities=_capabilities(),
                 domain_hints=[
+                    *(
+                        f"explicit_business:{item.canonical_name}"
+                        for item in explicit_businesses
+                    ),
                     *(f"explicit_geo:{item.canonical_name}" for item in explicit_geos),
                     *_domain_hints(self.registry),
                 ],
                 metadata_bundle_version=self.registry.manifest.bundle_version,
                 current_message_tags=[
-                    {
-                        "tag": "GEO",
-                        "text": item.canonical_name,
-                        "canonical_name": item.canonical_name,
-                        "role_hint": "destination",
-                    }
-                    for item in explicit_geos
+                    *[
+                        {
+                            "tag": "BUSINESS_ENTITY",
+                            "text": item.canonical_name,
+                            "canonical_name": item.canonical_name,
+                            "role_hint": "balance",
+                        }
+                        for item in explicit_businesses
+                    ],
+                    *[
+                        {
+                            "tag": "GEO",
+                            "text": item.canonical_name,
+                            "canonical_name": item.canonical_name,
+                            "role_hint": "destination",
+                        }
+                        for item in explicit_geos
+                    ],
                 ],
                 result_references=(
                     self.result_memory.for_interpretation(memory_chunks)
@@ -428,8 +483,19 @@ class PipelineV2TurnProcessor:
                 turn_id=turn_id,
                 user_message=message,
                 current_entity_mentions=[
-                    EntityMention(text=item.canonical_name, role="destination")
-                    for item in explicit_geos
+                    *(
+                        [EntityMention(
+                            text=explicit_businesses[0].canonical_name,
+                            role="balance",
+                        )]
+                        if len(explicit_businesses) == 1 else []
+                    ),
+                    *[
+                        EntityMention(
+                            text=item.canonical_name, role="destination"
+                        )
+                        for item in explicit_geos
+                    ],
                 ],
             )
         except CanonicalRelationNotFound as exc:
@@ -885,6 +951,133 @@ class PipelineV2TurnProcessor:
             occupied.update(span)
             output.append(geo)
         return output
+
+    def _tagged_business_balances(self, message: str) -> list[Any]:
+        """First pass: bind qualified `ГП ТГ` / `ТГ` spans as balances."""
+        if self._normalize_lemmas is None:
+            return []
+        tokens = self._normalize_lemmas(message).split()
+        matches: list[tuple[int, Any]] = []
+        for start, end in _business_entity_token_spans(tokens):
+            name = " ".join(tokens[start:end]).strip()
+            if not name:
+                continue
+            record = next(
+                (
+                    candidate
+                    for value in (f"гп тг {name}", f"тг {name}", name)
+                    if (candidate := self.registry.balance(value)) is not None
+                ),
+                None,
+            )
+            if record is not None:
+                matches.append((start, record))
+        output: list[Any] = []
+        seen: set[str] = set()
+        for _start, record in sorted(matches, key=lambda item: item[0]):
+            key = str(record.balance_id)
+            if key not in seen:
+                seen.add(key)
+                output.append(record)
+        return output
+
+    def _enforce_role_separated_entities(
+        self,
+        mutation: ContextMutation,
+        *,
+        balance: Any,
+        geos: list[Any],
+    ) -> ContextMutation:
+        """Make deterministic first/second-pass roles authoritative for one route."""
+        intent = mutation.replace_intent
+        if intent is None or len(intent.operands) != 1 or len(geos) != 1:
+            raise TurnProcessingError(
+                "role-separated entity interpretation is not scalar",
+                code="interpretation_binding_failed",
+            )
+        entities = self.compiler.binder.bind([
+            EntityMention(text=balance.canonical_name, role="balance"),
+            EntityMention(text=geos[0].canonical_name, role="destination"),
+        ])
+        operand = intent.operands[0].model_copy(
+            update={"entities": entities}, deep=True
+        )
+        canonical_intent = intent.model_copy(
+            update={"operands": [operand]}, deep=True
+        )
+        log_event(
+            LOGGER,
+            logging.INFO,
+            "role_separated_entities_bound",
+            balance_id=str(balance.balance_id),
+            geo_ids=[str(item.geo_id) for item in geos],
+            roles=[item.role for item in entities],
+        )
+        return mutation.model_copy(
+            update={"replace_intent": canonical_intent}, deep=True
+        )
+
+    def _role_separated_standalone(
+        self,
+        state: ContextContractV2,
+        *,
+        message: str,
+        balance: Any,
+        geos: list[Any],
+        execute_db: bool,
+        request_id: str,
+        turn_id: str,
+        started: float,
+    ) -> TurnProcessResult:
+        """Resolve non-entity semantics, then apply authoritative typed roles."""
+        semantic_envelope = self.runtime.execute_raw(
+            message,
+            execute_db=False,
+            request_id=f"{request_id}:semantics",
+        )
+        try:
+            intent = self.translator.intent(semantic_envelope, canonical_geos=[])
+        except Exception as exc:
+            raise _standalone_translation_error(exc) from exc
+        if len(intent.operands) != 1 or intent.grouping:
+            raise TurnProcessingError(
+                "role-separated entity semantics are not scalar",
+                code="resolved_plan_translation_failed",
+            )
+        mutation = ContextMutation(
+            turn_id=turn_id,
+            user_message=message,
+            normalized_message=message,
+            replace_intent=intent,
+        )
+        mutation = self._enforce_role_separated_entities(
+            mutation,
+            balance=balance,
+            geos=geos,
+        )
+        log_event(
+            LOGGER,
+            logging.INFO,
+            "role_separated_standalone_resolved",
+            request_id=request_id,
+            balance_id=str(balance.balance_id),
+            geo_ids=[str(item.geo_id) for item in geos],
+            operation=mutation.replace_intent.operation.value,
+            periods=[
+                item.model_dump(mode="json")
+                for item in mutation.replace_intent.periods
+            ],
+        )
+        return self._execute_mutation(
+            state,
+            mutation,
+            normalized_message=message,
+            execute_db=execute_db,
+            request_id=request_id,
+            started=started,
+            interpretation_mode="deterministic_role_separated",
+            memory_chunks=[],
+        )
 
     def _canonical_entity_comparison(
         self,

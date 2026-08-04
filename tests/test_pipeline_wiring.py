@@ -1409,6 +1409,111 @@ def test_current_geo_tagger_does_not_replace_qualified_balance_and_article() -> 
     assert [item.geo_id for item in mixed_roles] == ["novgorod"]
 
 
+def test_business_first_geo_second_contract_is_used_on_first_turn() -> None:
+    balance = SimpleNamespace(
+        balance_id="balance-nn",
+        canonical_name="ГП ТГ Н.Новгород суточный баланс",
+        aliases=("гп тг нижний новгород",),
+    )
+    geo = SimpleNamespace(
+        geo_id="geo-nn",
+        canonical_name="нижний новгород",
+        aliases=(),
+    )
+
+    class Registry:
+        def __init__(self):
+            self.manifest = SimpleNamespace(bundle_version="2026.08.1")
+            self.geo_objects = (geo,)
+            self.geo_groups = ()
+            self.routes = ()
+
+        @staticmethod
+        def balance(value):
+            normalized = _test_normalize(value)
+            return balance if normalized in {
+                "гп тг нижний новгород",
+                "гп тг н новгород суточный баланс",
+            } else None
+
+        @staticmethod
+        def geo(value):
+            return geo if _test_normalize(value) == "нижний новгород" else None
+
+        @staticmethod
+        def geo_group(_value):
+            return None
+
+        @staticmethod
+        def find_article_candidates(_value, **_kwargs):
+            return ()
+
+    class Runtime(_NoInterpretationRuntime):
+        semantic_calls = 0
+
+        def execute_raw(self, *_args, **_kwargs):
+            self.semantic_calls += 1
+            envelope = _envelope()
+            envelope["debug"]["resolved_plan"]["expressions"][0]["geo"] = []
+            envelope["debug"]["resolved_plan"]["expressions"][0]["aggregate_type"] = "sum"
+            return envelope
+
+    class Interpreter:
+        def interpret(self, **_kwargs):
+            raise AssertionError("role-separated standalone must not use context interpretation")
+
+    class Executor:
+        plan = None
+
+        def execute(self, plan, **_kwargs):
+            self.plan = plan
+            return NativeExecutionResult(
+                operation=plan.operation,
+                status="no_data",
+                task_results=[TaskExecutionResult(
+                    task_id=plan.tasks[0].task_id,
+                    status="no_data",
+                    envelope={"status": "no_data"},
+                )],
+            )
+
+    registry = Registry()
+    runtime = Runtime()
+    interpreter = Interpreter()
+    executor = Executor()
+    processor = PipelineV2TurnProcessor(
+        runtime=runtime,
+        registry=registry,
+        interpreter=interpreter,
+        compiler=InterpretationMutationCompiler(RegistryEntityBinder(registry)),
+        executor=executor,
+        policy=NeverCalled(),
+    )
+    processor._normalize_lemmas = _test_normalize
+
+    processed = processor.process(
+        ContextContractV2(session_id="session"),
+        message=(
+            "Суммарное распределение из ТГ Нижний Новгород "
+            "в Нижний Новгород за 2 квартал 2025"
+        ),
+        execute_db=False,
+        clarification=None,
+        request_id="request",
+    )
+
+    assert runtime.semantic_calls == 1
+    assert processed.diagnostics["interpretation"]["mode"] == (
+        "deterministic_role_separated"
+    )
+    entities = processed.mutation.replace_intent.operands[0].entities
+    assert [(item.role, item.entity.entity_type) for item in entities] == [
+        ("balance", "balance"),
+        ("destination", "geo_object"),
+    ]
+    assert all(item.entity.display_name != "в т.ч. Бишня" for item in entities)
+
+
 def test_daily_balance_row_overrides_generic_unit_without_balance_entity() -> None:
     from balance_chat.planning import NativeMultiOperandPlanner
 

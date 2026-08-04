@@ -29,6 +29,10 @@
   неизвестный или неоднозначный handle останавливает запрос явно.
 - deterministic binder разрешает mentions через ready metadata registry и
   компилирует их в валидный `ContextMutation`.
+- entity extraction выполняется business-first/GEO-second: spans после
+  `ГП ТГ`/`ТГ` резервируются как business balance, а GEO ищется только в
+  оставшемся тексте. Поэтому одинаковое имя может одновременно быть source
+  business object и destination GEO без случайной подстановки статьи.
 - result memory переиспользует существующий pgvector store, сохраняя только
   успешные deterministic facts после authoritative commit; durable outbox
   повторяет незавершённую запись после рестарта.

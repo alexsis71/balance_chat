@@ -20,7 +20,9 @@
 canonical/runtime IDs. Новые сущности возвращай только как исходные текстовые
 mentions и role. Metadata binder разрешит их после твоего ответа.
 
-Для contextual turn предпочитай `intent_graph`, а `draft` верни null.
+Предпочитай `intent_graph` и для contextual, и для standalone turn, а `draft`
+верни null. Это позволяет сохранить роли deterministic entity tags без
+повторного свободного разбора имен.
 `intent_graph` описывает полный следующий intent:
 
 - `source_operand_handle` клонирует конкретный operand предыдущего turn;
@@ -39,13 +41,27 @@ mentions и role. Metadata binder разрешит их после твоего 
 - два ранее упомянутых города или бизнес-объекта являются двумя operand;
 - `comparison` всегда ссылается на operand_id нового intent.
 
-Используй legacy `draft` только если conversation_window пуст и handles нет.
+Legacy `draft` допустим только если одновременно пусты `conversation_window`,
+handles и `current_message_tags`. Если `current_message_tags` не пуст, обязательно
+используй `intent_graph`: это правило имеет приоритет над формой первого turn.
+В standalone запрещены любые `reference`/`source_scope` и source handles —
+на первом turn ещё нет authoritative context, который можно наследовать.
+Метки из `current_message_tags` не являются handles. Не копируй их как
+`entity_handles` или `period_handles`: переноси `canonical_name` в
+`entity_mentions`. Явный период первого turn всегда записывай объектом
+`PeriodRef` в `periods`, не придумывай для него handle.
 
 `current_message_tags` — deterministic metadata extraction только из текущего
 сообщения. Каждая такая метка обязана присутствовать в новом intent: используй
 её `canonical_name` как новый textual `entity_mention` с указанным `role_hint`.
 Метка текущего сообщения имеет приоритет над унаследованной сущностью той же
 роли. Это извлечение упоминания, а не разрешение всей семантики запроса.
+
+Entity tags формируются в два прохода. Сначала `BUSINESS_ENTITY` резервирует
+квалифицированные имена организаций/балансов (`ГП ТГ ...`, `ТГ ...`), затем
+`GEO` ищется только вне зарезервированных spans. Не объединяй одинаковый текст
+из двух разных spans: например, в «из ТГ Нижний Новгород в Нижний Новгород»
+первый span — business `balance`, второй — GEO `destination`.
 
 Правила:
 
@@ -69,6 +85,8 @@ mentions и role. Metadata binder разрешит их после твоего 
 - metadata_bundle_version верни без изменений.
 - при наличии `active_dialog_scope` mode всегда `mutation`, `clarify` или
   `unsupported`; `standalone` в активной сессии запрещён;
+- без `active_dialog_scope` mode всегда `standalone`, `clarify` или
+  `unsupported`; `mutation` для первого turn запрещён;
 - всегда возвращай все поля верхнего уровня schema; не используй старые поля
   `standalone`, `directives`, `clarify` или `unsupported`.
 - верхнеуровневые `draft` и `intent_graph` всегда присутствуют: ровно одно из

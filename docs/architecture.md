@@ -137,6 +137,21 @@ bounded retrieval, но не может изменить canonical intent или
 binding явно. Для source/destination сначала проверяется GEO, затем curated
 GEO group и только затем единственная article candidate.
 
+До этого binding действует двухпроходный role tagger. Первый проход резервирует
+квалифицированные spans `ГП ТГ ...` / `ТГ ...` и связывает их с business
+balance. Второй проход ищет GEO только вне этих spans. Поэтому в запросе
+«распределение из ТГ Нижний Новгород в Нижний Новгород» первое упоминание имеет
+роль `balance`, второе — `destination` с типом `geo_object`, несмотря на полное
+совпадение текста.
+
+Для первого standalone turn с таким пересечением compatibility semantic pass
+определяет только operation, metric, aggregate и canonical exclusive-end
+period. Его ошибочные entity candidates не исполняются: typed business/GEO
+роли полностью заменяют их до native planning, после чего PostgreSQL вызывается
+один раз с canonical context override. Этот путь явно журналируется как
+`deterministic_role_separated`; невалидная или несводимая к одному operand
+semantic форма завершается ошибкой, а не fallback на случайную статью.
+
 Смена GEO сохраняет canonical период через scope reference. Обратное направление
 переставляет source/destination и удаляет direction-bound article до нового
 resolution. Несколько явно выбранных сущностей сохраняются отдельными

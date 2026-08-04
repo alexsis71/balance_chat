@@ -58,6 +58,7 @@ class UnifiedInterpreter:
         clean_message = str(message).strip()
         if not clean_message:
             raise InterpretationError("message is empty")
+        has_active_context = state.active_dialog_scope is not None
         payload = {
             "messages": [
                 {"role": "system", "content": self.system_prompt},
@@ -82,7 +83,11 @@ class UnifiedInterpreter:
                 },
             ],
             "request_id": request_id,
-            "allowed_modes": ["mutation", "clarify", "unsupported"],
+            "allowed_modes": (
+                ["mutation", "clarify", "unsupported"]
+                if has_active_context
+                else ["standalone", "clarify", "unsupported"]
+            ),
         }
         raw: Mapping[str, Any] | str | None = None
         try:
@@ -155,6 +160,10 @@ class UnifiedInterpreter:
                     *graph.period_handles,
                     *(handle for item in graph.operands for handle in item.period_handles),
                 ]
+                if graph is not None else []
+            ),
+            explicit_periods=(
+                [item.model_dump(mode="json") for item in graph.periods]
                 if graph is not None else []
             ),
         )
