@@ -316,7 +316,11 @@ def _row_dimension(row: Mapping[str, Any] | None) -> dict[str, Any] | None:
 
 def _operation(value: Any) -> Operation:
     normalized = str(value or "show").strip().lower()
-    aliases = {"comparison": "compare", "multi_step": "multi_step"}
+    aliases = {
+        "comparison": "compare",
+        "multi_step": "multi_step",
+        "rank": "aggregate",
+    }
     try:
         return Operation(aliases.get(normalized, normalized))
     except ValueError as exc:

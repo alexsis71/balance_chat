@@ -84,6 +84,35 @@ def test_degraded_comparison_is_rejected_explicitly() -> None:
         PipelineEnvelopeTranslator().intent(envelope)
 
 
+def test_rank_extremum_is_translated_to_typed_aggregate() -> None:
+    envelope = _envelope()
+    plan = envelope["debug"]["resolved_plan"]
+    plan["_intent"].update(
+        {
+            "intent": "rank",
+            "aggregate_type": "max",
+            "date_from": "2025-04-01",
+            "date_to": "2025-07-01",
+        }
+    )
+    plan["operation"] = "aggregate"
+    plan["expressions"][0].update(
+        {
+            "aggregate_type": "max",
+            "geo": [],
+            "article": {"id": "ART:1", "label": "ТГ Москва"},
+        }
+    )
+
+    intent = PipelineEnvelopeTranslator().intent(envelope)
+
+    assert intent.operation == Operation.AGGREGATE
+    assert intent.operands[0].aggregate_type == "max"
+    assert intent.operands[0].entities[-1].entity.display_name == "ТГ Москва"
+    assert intent.periods[0].date_from.isoformat() == "2025-04-01"
+    assert intent.periods[0].date_to.isoformat() == "2025-07-01"
+
+
 def test_multi_source_geo_period_comparison_becomes_one_canonical_operand() -> None:
     envelope = _envelope()
     plan = envelope["debug"]["resolved_plan"]
