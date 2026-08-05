@@ -124,6 +124,21 @@ override на тестовой БД, а не скопированы из оши�
 Поэтому live `GQ-001` обязан завершиться `FAIL` по слоям `context`, `planning`,
 `SQL`, `result_shape` и `result_data`. Менять эталон под это поведение нельзя.
 
+### Состояние после исправления deterministic full-balance routing
+
+Общий разбор форматов `DD.MM.YYYY`, `DD/MM/YYYY`, `YYYY-MM-DD` и русской
+календарной даты теперь формирует точный exclusive-end день до LLM. Explicit
+full-balance запрос строит canonical intent и выполняется один раз через
+`unified_balance_level`; строки получают публичную единицу `тыс. м3`.
+
+Повторный live-run устранил расхождения `context`, `planning`, `SQL` и
+`result_data`. Остаётся `result_shape`: разрешённая функция
+`api.show_balance_day(bigint, date)` возвращает только `fact_value`. В текущем
+PostgreSQL/MCP API нет источника `plan_value`; подставлять факт вместо плана или
+добавлять фиктивное null-поле запрещено. Для полного прохождения исходного
+контракта требуется отдельно согласованное расширение DB/API с реальными
+плановыми данными.
+
 ## Запуск и merge gate
 
 Проверка структуры и canonical metadata без LLM/DB:

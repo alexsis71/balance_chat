@@ -91,6 +91,12 @@ class PipelineV2TurnProcessor:
             ).normalize_query_lemmas
         except Exception:
             self._normalize_lemmas = None
+        try:
+            self._analyze_query = runtime._import_pipeline_module(
+                "pipeline_v2.query_analyzer"
+            ).analyze_query
+        except Exception:
+            self._analyze_query = None
 
     def process(
         self,
@@ -170,6 +176,23 @@ class PipelineV2TurnProcessor:
             explicit_business_count=routing.explicit_business_count,
             explicit_geo_count=routing.explicit_geo_count,
         )
+        full_balance = self._deterministic_full_balance_mutation(
+            message,
+            explicit_businesses,
+            turn_id,
+        )
+        if full_balance is not None:
+            return self._execute_mutation(
+                state,
+                full_balance,
+                normalized_message=full_balance.normalized_message or message,
+                execute_db=execute_db,
+                request_id=request_id,
+                started=started,
+                interpretation_mode="deterministic_full_balance",
+                memory_chunks=[],
+                evidence_businesses=explicit_businesses,
+            )
         mixed_metric_operands = self._matched_distribution_own_consumers(message)
         if mixed_metric_operands:
             return self._canonical_entity_comparison(
@@ -430,6 +453,23 @@ class PipelineV2TurnProcessor:
         explicit_geos = self._tagged_geo_objects(message)
         explicit_businesses = self._tagged_business_balances(message)
         business_mentions = self._tagged_business_entity_mentions(message)
+        full_balance = self._deterministic_full_balance_mutation(
+            message,
+            explicit_businesses,
+            turn_id,
+        )
+        if full_balance is not None:
+            return self._execute_mutation(
+                state,
+                full_balance,
+                normalized_message=full_balance.normalized_message or message,
+                execute_db=execute_db,
+                request_id=request_id,
+                started=started,
+                interpretation_mode="deterministic_full_balance",
+                memory_chunks=[],
+                evidence_businesses=explicit_businesses,
+            )
         routing = self.gate.route(
             message,
             state,
@@ -1247,6 +1287,55 @@ class PipelineV2TurnProcessor:
                 output.append(record)
         return output
 
+    def _deterministic_full_balance_mutation(
+        self,
+        message: str,
+        balances: Sequence[Any],
+        turn_id: str,
+    ) -> ContextMutation | None:
+        """Bind an explicit full-balance snapshot without a second LLM pass."""
+
+        period = _explicit_single_day_period(message)
+        if len(balances) != 1 or period is None or self._analyze_query is None:
+            return None
+        try:
+            analyzed = self._analyze_query(message)
+        except Exception:
+            return None
+        if (
+            str(getattr(analyzed, "intent", "")).casefold() != "show"
+            or str(getattr(analyzed, "metric", "")).casefold() != "balance"
+            or str(getattr(analyzed, "article_policy", "") or "").casefold()
+            not in {"", "balance_only"}
+            or getattr(analyzed, "article_text", None)
+        ):
+            return None
+        balance = balances[0]
+        intent = AnalysisIntent(
+            operation=Operation.SHOW,
+            operands=[AnalysisOperand(
+                operand_id="balance_snapshot",
+                metric="balance",
+                aggregate_type="sum",
+                unit="тыс. м3",
+                entities=[OperandEntityRef(
+                    role="balance",
+                    entity=CanonicalEntityRef(
+                        entity_id=f"BAL:{balance.balance_id}",
+                        entity_type="balance",
+                        display_name=balance.canonical_name,
+                    ),
+                )],
+            )],
+            periods=[period],
+        )
+        return ContextMutation(
+            turn_id=turn_id,
+            user_message=message,
+            normalized_message=message,
+            replace_intent=intent,
+        )
+
     def _tagged_business_entity_mentions(self, message: str) -> list[EntityMention]:
         """Preserve every qualified business span and its local routing role."""
         if self._normalize_lemmas is None:
@@ -1834,6 +1923,7 @@ class PipelineV2TurnProcessor:
                 "balance-level execution failed",
                 code="balance_level_execution_failed",
             ) from exc
+        envelope = _normalize_full_balance_envelope(envelope, intent)
         status = str(envelope.get("status") or "error")
         outcome = _outcome(status)
         summary_diagnostics: dict[str, Any] = {
@@ -2547,6 +2637,89 @@ def _normalize_same_scope_period_comparison_intent(
         ],
         grain=intent.grain,
     )
+
+
+_RUSSIAN_MONTHS = {
+    r"январ\w*": 1,
+    r"феврал\w*": 2,
+    r"март\w*": 3,
+    r"апрел\w*": 4,
+    r"ма(?:й|я|е)": 5,
+    r"июн\w*": 6,
+    r"июл\w*": 7,
+    r"август\w*": 8,
+    r"сентябр\w*": 9,
+    r"октябр\w*": 10,
+    r"ноябр\w*": 11,
+    r"декабр\w*": 12,
+}
+
+
+def _explicit_single_day_period(message: str) -> PeriodRef | None:
+    """Parse one explicit calendar day using bounded generic date forms."""
+
+    text = str(message)
+    candidates: list[date] = []
+    occupied: list[tuple[int, int]] = []
+    for match in re.finditer(r"(?<!\d)(20\d{2})-(\d{1,2})-(\d{1,2})(?!\d)", text):
+        try:
+            candidates.append(
+                date(int(match.group(1)), int(match.group(2)), int(match.group(3)))
+            )
+            occupied.append(match.span())
+        except ValueError:
+            return None
+    for match in re.finditer(
+        r"(?<!\d)([0-3]?\d)[./-]([01]?\d)[./-](20\d{2})(?!\d)",
+        text,
+    ):
+        if any(start <= match.start() < end for start, end in occupied):
+            continue
+        try:
+            candidates.append(
+                date(int(match.group(3)), int(match.group(2)), int(match.group(1)))
+            )
+        except ValueError:
+            return None
+    normalized = _normalize_text(text)
+    for month_pattern, month in _RUSSIAN_MONTHS.items():
+        match = re.search(
+            rf"\b([0-3]?\d)\s+{month_pattern}\s+(20\d{{2}})\b",
+            normalized,
+        )
+        if not match:
+            continue
+        try:
+            candidates.append(date(int(match.group(2)), month, int(match.group(1))))
+        except ValueError:
+            return None
+    unique = list(dict.fromkeys(candidates))
+    if len(unique) != 1:
+        return None
+    start = unique[0]
+    return PeriodRef(date_from=start, date_to=start + timedelta(days=1))
+
+
+def _normalize_full_balance_envelope(
+    envelope: dict[str, Any],
+    intent: AnalysisIntent,
+) -> dict[str, Any]:
+    """Attach the canonical daily-balance unit without changing DB facts."""
+
+    if not _is_full_balance_show(intent):
+        return envelope
+    unit = intent.operands[0].unit
+    if not unit:
+        return envelope
+    normalized = dict(envelope)
+    normalized["unit"] = unit
+    normalized["rows"] = [
+        {**row, **({"unit": unit} if row.get("article_name") is not None else {})}
+        if isinstance(row, dict)
+        else row
+        for row in (envelope.get("rows") or [])
+    ]
+    return normalized
 
 
 def _is_full_balance_show(intent: AnalysisIntent) -> bool:

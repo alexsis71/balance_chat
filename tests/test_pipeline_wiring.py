@@ -34,6 +34,7 @@ from balance_chat.processor import (
     _extremum_comparison_summary,
     _deterministic_period_mutation,
     _distribution_own_consumers_mentions,
+    _explicit_single_day_period,
     _native_summary_envelope,
     _normalize_series_reduction_intent,
     _comparison_contract_summary,
@@ -107,6 +108,28 @@ def test_safe_execution_evidence_exposes_contract_without_raw_sql_or_rows() -> N
         "sql_function": "api.show_balance_day",
         "sql_params": {"balance_id": 2010000039953, "day": "2025-06-25"},
     }
+
+
+@pytest.mark.parametrize(
+    ("query", "date_from", "date_to"),
+    [
+        ("за 25.06.2025", "2025-06-25", "2025-06-26"),
+        ("за 25/06/2025", "2025-06-25", "2025-06-26"),
+        ("за 2025-06-25", "2025-06-25", "2025-06-26"),
+        ("за 25 июня 2025 года", "2025-06-25", "2025-06-26"),
+    ],
+)
+def test_explicit_single_day_period_uses_exclusive_end(query, date_from, date_to) -> None:
+    period = _explicit_single_day_period(query)
+
+    assert period is not None
+    assert period.date_from.isoformat() == date_from
+    assert period.date_to.isoformat() == date_to
+
+
+def test_explicit_single_day_period_rejects_invalid_or_multiple_dates() -> None:
+    assert _explicit_single_day_period("за 31.02.2025") is None
+    assert _explicit_single_day_period("с 25.06.2025 по 26.06.2025") is None
 
 
 def test_current_pipeline_multi_region_plan_becomes_separate_operands() -> None:
@@ -579,6 +602,113 @@ def test_public_result_suppresses_deterministic_execution_phrase() -> None:
     }]
     assert result["warnings"] == [
         {"code": "data_quality", "message": "Проверено не за все дни"}
+    ]
+
+
+def test_standalone_full_balance_uses_exact_date_and_dedicated_execution() -> None:
+    balance = SimpleNamespace(
+        balance_id=2010000039953,
+        canonical_name="ГП ТГ Москва суточный баланс",
+        aliases=("гп тг москва", "тг москва"),
+    )
+
+    class FullBalanceRuntime:
+        def __init__(self):
+            self.execute_calls = 0
+
+        def _import_pipeline_module(self, name):
+            if name == "pipeline_v2.nlp_ru":
+                return SimpleNamespace(normalize_query_lemmas=_test_normalize)
+            if name == "pipeline_v2.query_analyzer":
+                return SimpleNamespace(analyze_query=lambda _query: SimpleNamespace(
+                    intent="show",
+                    metric="balance",
+                    article_policy="balance_only",
+                ))
+            raise ImportError(name)
+
+        def execute_raw(self, *_args, **_kwargs):
+            raise AssertionError("full balance must not execute the legacy standalone path")
+
+        def execute(self, _query, intent, **kwargs):
+            self.execute_calls += 1
+            assert kwargs["apply_summary"] is False
+            assert intent.periods == [PeriodRef(
+                date_from="2025-06-25",
+                date_to="2025-06-26",
+            )]
+            return {
+                "status": "ok",
+                "rows": [
+                    {
+                        "article_name": "Ресурсы",
+                        "article_indent": 0,
+                        "gas_day": "2025-06-25",
+                        "fact_value": "323248.059",
+                    },
+                    {
+                        "article_name": "  Поступление",
+                        "article_indent": 2,
+                        "gas_day": "2025-06-25",
+                        "fact_value": "323248.059",
+                    },
+                ],
+                "debug": {
+                    "sql_function": "api.show_balance_day",
+                    "params": {
+                        "balance_id": 2010000039953,
+                        "day": "2025-06-25",
+                    },
+                },
+            }
+
+    class Registry:
+        geo_objects = ()
+        geo_groups = ()
+        routes = ()
+        manifest = SimpleNamespace(bundle_version="2026.08.1")
+
+        @staticmethod
+        def balance(value):
+            return balance if "москва" in _test_normalize(value) else None
+
+    runtime = FullBalanceRuntime()
+    registry = Registry()
+    processor = PipelineV2TurnProcessor(
+        runtime=runtime,
+        registry=registry,
+        interpreter=InvalidInterpreter(),
+        compiler=InterpretationMutationCompiler(RegistryEntityBinder(registry)),
+        executor=object(),
+        policy=NeverCalled(),
+    )
+
+    processed = processor.process(
+        ContextContractV2(session_id="session"),
+        message="Покажи баланс ГП ТГ Москва за 25.06.2025.",
+        execute_db=True,
+        clarification=None,
+        request_id="gq-001-regression",
+    )
+
+    assert runtime.execute_calls == 1
+    assert processed.mutation.replace_intent.periods == [PeriodRef(
+        date_from="2025-06-25",
+        date_to="2025-06-26",
+    )]
+    assert processed.diagnostics["interpretation"]["mode"] == "deterministic_full_balance"
+    assert processed.diagnostics["execution"] == {
+        "status": "ok",
+        "task_count": 1,
+        "layer": "unified_balance_level",
+        "source_execution_count": 1,
+        "row_count": 2,
+        "elapsed_ms": processed.diagnostics["execution"]["elapsed_ms"],
+        "sql_function": "api.show_balance_day",
+        "sql_params": {"balance_id": 2010000039953, "day": "2025-06-25"},
+    }
+    assert [row["unit"] for row in processed.response["rows"]] == [
+        "тыс. м3", "тыс. м3",
     ]
 
 
