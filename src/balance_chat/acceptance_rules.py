@@ -387,10 +387,13 @@ def evaluate_catalog_rule(rule_id: str, context: RuleContext) -> RuleOutcome:
         return _keep_balance_period_metric(current, previous("T2"), "incoming")
     if rule_id == "restore_balance_level_t1":
         source = previous("T1")
+        row_count = len(current.result.get("rows") or [])
         return outcome(
             current.entity_ids("balance") == source.entity_ids("balance")
-            and current.periods == source.periods and not current.entity_ids("article"),
-            current.compact(),
+            and current.periods == source.periods
+            and not current.entity_ids("article")
+            and row_count > 1,
+            {**current.compact(), "public_row_count": row_count},
         )
     if rule_id in {"same_semantic_fingerprint_t1", "same_semantic_result_fingerprint_t1"}:
         source_data = context.history.get("T1") or {}

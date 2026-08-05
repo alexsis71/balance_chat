@@ -46,6 +46,7 @@ from balance_chat.processor import (
     _standalone_translation_error,
     _standalone_facts,
     _single_operand_attempt,
+    _is_full_balance_show,
 )
 from balance_chat.reducer import apply_context_transition
 from balance_chat.service import TurnProcessingError
@@ -558,6 +559,155 @@ def test_public_result_suppresses_deterministic_execution_phrase() -> None:
     assert result["warnings"] == [
         {"code": "data_quality", "message": "Проверено не за все дни"}
     ]
+
+
+def test_contextual_full_balance_preserves_hierarchical_rows() -> None:
+    balance = OperandEntityRef(
+        role="balance",
+        entity=CanonicalEntityRef(
+            entity_id="2010000040765",
+            entity_type="balance",
+            display_name="ГП ТГ Томск суточный баланс",
+        ),
+    )
+    intent = AnalysisIntent(
+        operation=Operation.SHOW,
+        operands=[AnalysisOperand(
+            operand_id="tomsk",
+            metric="balance",
+            aggregate_type="sum",
+            entities=[balance],
+            periods=[PeriodRef(
+                date_from="2025-04-01",
+                date_to="2025-04-02",
+            )],
+        )],
+    )
+    mutation = ContextMutation(
+        turn_id="turn-2",
+        user_message="покажи баланс ТГ Томск за 1 апреля 2025 года",
+        normalized_message="покажи баланс ТГ Томск за 1 апреля 2025 года",
+        replace_intent=intent,
+    )
+
+    class FullBalanceRuntime(_NoInterpretationRuntime):
+        def __init__(self):
+            self.execute_calls = 0
+            self.summary_calls = 0
+
+        def execute(self, query, supplied_intent, **kwargs):
+            self.execute_calls += 1
+            assert supplied_intent == intent
+            assert kwargs["apply_summary"] is False
+            return {
+                "status": "ok",
+                "unit": "тыс. м3",
+                "rows": [
+                    {
+                        "gas_day": "2025-04-01",
+                        "article_name": "Ресурсы",
+                        "article_scope": "Ресурсы",
+                        "article_indent": 0,
+                        "fact_value": "50389.485",
+                    },
+                    {
+                        "gas_day": "2025-04-01",
+                        "article_name": "  Поступление",
+                        "article_scope": "Поступление",
+                        "article_indent": 2,
+                        "fact_value": "49984.825",
+                    },
+                ],
+                "warnings": [
+                    "unified normalized article_policy from empty to balance_only"
+                ],
+            }
+
+        def summarize_envelope(self, envelope, **_kwargs):
+            self.summary_calls += 1
+            return {
+                **envelope,
+                "summary": {
+                    "generated_by": "deterministic_contract",
+                    "title": "Полный баланс",
+                    "text": "Ресурсы и поступление показаны отдельными строками.",
+                },
+            }
+
+    class ScalarExecutorMustNotRun:
+        def execute(self, *_args, **_kwargs):
+            raise AssertionError("full balance must not use scalar execution")
+
+    runtime = FullBalanceRuntime()
+    registry = SimpleNamespace(
+        geo_objects=(),
+        geo_groups=(),
+        routes=(),
+        manifest=SimpleNamespace(bundle_version="2026.08.1"),
+    )
+    processor = PipelineV2TurnProcessor(
+        runtime=runtime,
+        registry=registry,
+        interpreter=InvalidInterpreter(),
+        compiler=InterpretationMutationCompiler(RegistryEntityBinder(registry)),
+        executor=ScalarExecutorMustNotRun(),
+        policy=NeverCalled(),
+    )
+
+    processed = processor._execute_mutation(
+        ContextContractV2(session_id="session"),
+        mutation,
+        normalized_message=mutation.normalized_message,
+        execute_db=True,
+        request_id="request",
+        started=0,
+        interpretation_mode="mutation",
+        memory_chunks=[],
+    )
+
+    assert runtime.execute_calls == 1
+    assert runtime.summary_calls == 1
+    assert processed.outcome == TransitionOutcome.SUCCESS
+    assert len(processed.response["rows"]) == 2
+    assert [row["article_scope"] for row in processed.response["rows"]] == [
+        "Ресурсы",
+        "Поступление",
+    ]
+    assert "facts" not in processed.response
+    assert processed.result_reference.row_count == 2
+    assert len(processed.result_reference.facts) == 2
+    assert processed.diagnostics["execution"]["layer"] == "unified_balance_level"
+    assert processed.response["warnings"] == []
+
+
+def test_full_balance_detection_rejects_article_level_intent() -> None:
+    intent = AnalysisIntent(
+        operation=Operation.SHOW,
+        operands=[AnalysisOperand(
+            operand_id="resources",
+            metric="balance",
+            entities=[
+                OperandEntityRef(
+                    role="balance",
+                    entity=CanonicalEntityRef(
+                        entity_id="balance:tomsk",
+                        entity_type="balance",
+                        display_name="ГП ТГ Томск суточный баланс",
+                    ),
+                ),
+                OperandEntityRef(
+                    role="article",
+                    entity=CanonicalEntityRef(
+                        entity_id="article:resources",
+                        entity_type="article",
+                        display_name="Ресурсы",
+                    ),
+                ),
+            ],
+        )],
+    )
+
+    assert not _is_full_balance_show(intent)
 
 
 def test_native_summary_receives_exact_extremum_date() -> None:

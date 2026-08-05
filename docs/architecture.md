@@ -169,6 +169,13 @@ canonical exclusive-end период. Baseline и target сохраняются 
 только над явными deterministic facts; отсутствие факта, разные единицы и
 ошибка subtask возвращаются явно, без подстановки другого результата.
 
+Balance-level `show` с единственной canonical balance-сущностью является
+не scalar-показателем, а иерархическим снимком полного баланса. Он исполняется
+ровно один раз с canonical context override через отдельный слой
+`unified_balance_level`, сохраняет все строки и `article_indent` и не суммирует
+родительские и дочерние статьи. Наличие article/source/destination исключает
+этот путь и оставляет запрос в обычном scalar planning.
+
 После завершения всех DB/scalar tasks presentation model вызывается ровно один
 раз над уже готовым bounded envelope. Summary не повторяет Planner, MCP или
 PostgreSQL execution и не может менять факты. Для standalone DB-запроса summary

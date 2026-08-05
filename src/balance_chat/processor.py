@@ -1659,6 +1659,19 @@ class PipelineV2TurnProcessor:
             explicit_geo_count=len(evidence_geos),
             pre_database=True,
         )
+        if _is_full_balance_show(intent):
+            return self._execute_full_balance_mutation(
+                state,
+                mutation,
+                intent=intent,
+                normalized_message=normalized_message,
+                execute_db=execute_db,
+                request_id=request_id,
+                started=started,
+                interpretation_mode=interpretation_mode,
+                memory_chunks=memory_chunks,
+                decision=decision,
+            )
         try:
             native = self.executor.execute(
                 plan,
@@ -1782,6 +1795,132 @@ class PipelineV2TurnProcessor:
             mutation=mutation,
             outcome=outcome,
             response=response,
+            result_reference=result_ref,
+            memory_write=memory_write,
+            diagnostics=diagnostics,
+        )
+
+    def _execute_full_balance_mutation(
+        self,
+        state,
+        mutation,
+        *,
+        intent,
+        normalized_message,
+        execute_db,
+        request_id,
+        started,
+        interpretation_mode,
+        memory_chunks,
+        decision=None,
+    ) -> TurnProcessResult:
+        """Preserve the hierarchical rows of an explicit full-balance request."""
+        execute = getattr(self.runtime, "execute", None)
+        if not callable(execute):
+            raise TurnProcessingError(
+                "balance-level execution is unavailable",
+                code="balance_level_execution_unavailable",
+            )
+        try:
+            envelope = execute(
+                normalized_message,
+                intent,
+                execute_db=execute_db,
+                request_id=f"{request_id}:balance",
+                apply_summary=False,
+            )
+        except Exception as exc:
+            raise TurnProcessingError(
+                "balance-level execution failed",
+                code="balance_level_execution_failed",
+            ) from exc
+        status = str(envelope.get("status") or "error")
+        outcome = _outcome(status)
+        summary_diagnostics: dict[str, Any] = {
+            "requested": False,
+            "execution_layer": "unified_balance_level",
+        }
+        summarize = getattr(self.runtime, "summarize_envelope", None)
+        if outcome == TransitionOutcome.SUCCESS and execute_db and callable(summarize):
+            summary_diagnostics["requested"] = True
+            try:
+                envelope = summarize(
+                    envelope,
+                    request_id=f"{request_id}:summary",
+                )
+                summary_diagnostics.update(_summary_diagnostics(envelope))
+            except Exception as exc:
+                summary_diagnostics.update(
+                    {"status": "error", "error_type": type(exc).__name__}
+                )
+                log_event(
+                    LOGGER,
+                    logging.WARNING,
+                    "balance_level_summary_failed",
+                    request_id=request_id,
+                    error_type=type(exc).__name__,
+                    exc_info=True,
+                )
+        facts = _standalone_facts(envelope) if outcome == TransitionOutcome.SUCCESS else []
+        result_ref = (
+            _grouped_result_reference(mutation.turn_id, intent, facts)
+            if outcome == TransitionOutcome.SUCCESS
+            else None
+        )
+        memory_diag: dict[str, Any] = (
+            self.result_memory.safe_diagnostics(memory_chunks)
+            if self.result_memory else {}
+        )
+        summary = envelope.get("summary") if isinstance(envelope.get("summary"), dict) else {}
+        memory_write = (
+            _memory_write(
+                mutation.turn_id,
+                normalized_message,
+                intent,
+                result_ref,
+                facts,
+                summary,
+            )
+            if result_ref is not None and self.result_memory and execute_db and state.metadata
+            else None
+        )
+        _, technical_warnings = _partition_public_warnings(
+            envelope.get("warnings") or []
+        )
+        if technical_warnings:
+            log_event(
+                LOGGER,
+                logging.INFO,
+                "technical_result_warnings_suppressed",
+                request_id=request_id,
+                warnings=technical_warnings,
+            )
+        diagnostics = (
+            _diagnostics(decision, memory_chunks, 1, started)
+            if decision is not None
+            else {
+                "interpretation": {
+                    "mode": interpretation_mode,
+                    "source": "deterministic",
+                    "confidence": 1.0,
+                },
+                "execution": {},
+            }
+        )
+        diagnostics.setdefault("execution", {}).update(
+            status=status,
+            task_count=1,
+            layer="unified_balance_level",
+            source_execution_count=1,
+            row_count=len(envelope.get("rows") or []),
+            elapsed_ms=int((perf_counter() - started) * 1000),
+        )
+        diagnostics["result_memory"] = memory_diag
+        diagnostics["summary"] = summary_diagnostics
+        return TurnProcessResult(
+            mutation=mutation,
+            outcome=outcome,
+            response=_public_pipeline_result(envelope),
             result_reference=result_ref,
             memory_write=memory_write,
             diagnostics=diagnostics,
@@ -2405,6 +2544,25 @@ def _normalize_same_scope_period_comparison_intent(
             second.periods[0].model_copy(deep=True),
         ],
         grain=intent.grain,
+    )
+
+
+def _is_full_balance_show(intent: AnalysisIntent) -> bool:
+    if (
+        intent.operation != Operation.SHOW
+        or len(intent.operands) != 1
+        or intent.operands[0].metric != "balance"
+        or intent.grouping
+        or intent.comparison is not None
+        or intent.formula is not None
+        or intent.ranking is not None
+    ):
+        return False
+    entities = intent.operands[0].entities
+    return (
+        len(entities) == 1
+        and entities[0].role == "balance"
+        and entities[0].entity.entity_type == "balance"
     )
 
 
