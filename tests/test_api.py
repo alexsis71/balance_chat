@@ -281,6 +281,19 @@ def test_delete_session_is_idempotent_and_ui_is_served() -> None:
     assert client.get("/assets/styles.css").status_code == 200
 
 
+def test_ui_history_persistence_is_bounded_and_does_not_block_rendering() -> None:
+    client, _ = _client()
+
+    script = client.get("/assets/app.js").text
+    append_message = script[script.index("function appendMessage"):script.index("function renderStoredMessages")]
+
+    assert "MAX_STORED_MESSAGES" in script
+    assert "MAX_STORED_ROWS" in script
+    assert "QuotaExceededError" in script
+    assert "historySnapshot(historyLimit, messageLimit, rowLimit)" in script
+    assert append_message.index("renderMessage(item, true)") < append_message.index("saveHistory()")
+
+
 def test_health_endpoint_exposes_only_bounded_checks() -> None:
     client, _ = _client()
 

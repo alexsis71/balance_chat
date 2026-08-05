@@ -1,5 +1,7 @@
 const HISTORY_KEY = "ai-balances-context-v2-history";
 const MAX_HISTORY = 30;
+const MAX_STORED_MESSAGES = 40;
+const MAX_STORED_ROWS = 200;
 const APP_BASE = location.pathname === "/v2" || location.pathname.startsWith("/v2/") ? "/v2" : "";
 const state = { sessionId: null, revision: 0, busy: false, histories: loadHistory() };
 const byId = (id) => document.getElementById(id);
@@ -8,8 +10,43 @@ function loadHistory() {
   try { return JSON.parse(localStorage.getItem(HISTORY_KEY) || "[]"); }
   catch { return []; }
 }
+function persistedMessage(item, rowLimit) {
+  const copy = JSON.parse(JSON.stringify(item));
+  if (!copy.result) return copy;
+  for (const field of ["rows", "facts"]) {
+    if (!Array.isArray(copy.result[field]) || copy.result[field].length <= rowLimit) continue;
+    copy.result[`history_total_${field}`] = copy.result[field].length;
+    copy.result[field] = copy.result[field].slice(0, rowLimit);
+    copy.result.history_truncated = true;
+  }
+  return copy;
+}
+function historySnapshot(historyLimit, messageLimit, rowLimit) {
+  return state.histories.slice(0, historyLimit).map((history) => ({
+    ...history,
+    messages: (history.messages || []).slice(-messageLimit).map((item) => persistedMessage(item, rowLimit)),
+  }));
+}
 function saveHistory() {
-  localStorage.setItem(HISTORY_KEY, JSON.stringify(state.histories.slice(0, MAX_HISTORY)));
+  const profiles = [
+    [MAX_HISTORY, MAX_STORED_MESSAGES, MAX_STORED_ROWS],
+    [10, 25, 150],
+    [3, 15, 150],
+    [1, 10, 150],
+  ];
+  for (const [historyLimit, messageLimit, rowLimit] of profiles) {
+    try {
+      localStorage.setItem(HISTORY_KEY, JSON.stringify(historySnapshot(historyLimit, messageLimit, rowLimit)));
+      return true;
+    } catch (error) {
+      if (error?.name !== "QuotaExceededError" && error?.name !== "NS_ERROR_DOM_QUOTA_REACHED") {
+        console.warn("Не удалось сохранить историю чата", error);
+        return false;
+      }
+    }
+  }
+  console.warn("История чата не сохранена: исчерпан лимит localStorage");
+  return false;
 }
 function escapeHtml(value) {
   return String(value ?? "").replace(/[&<>"']/g, (char) => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[char]));
@@ -118,7 +155,7 @@ function appendMessage(kind, payload) {
   const history = touchHistory();
   history.messages = [...(history.messages || []), item].slice(-100);
   if (kind === "user" && history.title === "Новый чат") history.title = payload.text.slice(0, 70);
-  saveHistory(); renderHistory(); renderMessage(item, true);
+  renderHistory(); renderMessage(item, true); saveHistory();
   return item;
 }
 function renderStoredMessages() {
