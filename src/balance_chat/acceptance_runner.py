@@ -917,7 +917,13 @@ def evaluate_check(
         passed = outcome.passed
     else:
         actual = "unsupported check"
-    return CheckResult(check.description, passed, check.expected, actual, source_line)
+    return CheckResult(
+        check.description,
+        passed,
+        _json_report_value(check.expected),
+        _json_report_value(actual),
+        source_line,
+    )
 
 
 def _base_checks(body: dict[str, Any], status_code: int, line: int) -> list[CheckResult]:
@@ -1100,7 +1106,34 @@ def report_to_dict(report: RunReport) -> dict[str, Any]:
             action.pop("audit", None)
             action.pop("response", None)
             action.pop("request_payload", None)
-    return value
+    return _json_report_value(value)
+
+
+def _json_report_value(value: Any) -> Any:
+    """Convert evaluator diagnostics to deterministic JSON-compatible values."""
+    if value is None or isinstance(value, (str, int, float, bool)):
+        return value
+    if isinstance(value, Mapping):
+        return {
+            str(key): _json_report_value(item)
+            for key, item in value.items()
+        }
+    if isinstance(value, (set, frozenset)):
+        items = [_json_report_value(item) for item in value]
+        return sorted(
+            items,
+            key=lambda item: json.dumps(
+                item,
+                ensure_ascii=False,
+                sort_keys=True,
+                default=str,
+            ),
+        )
+    if isinstance(value, (list, tuple)):
+        return [_json_report_value(item) for item in value]
+    if isinstance(value, (datetime, Path)):
+        return value.isoformat() if isinstance(value, datetime) else str(value)
+    return str(value)
 
 
 def render_markdown(report: RunReport) -> str:
@@ -1232,7 +1265,10 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--log-file",
         default="logs/balance_chat.jsonl",
-        help="Structured backend log used for handles, fingerprints and no-repeat evidence",
+        help=(
+            "Existing structured backend log read for handles, fingerprints "
+            "and no-repeat evidence"
+        ),
     )
     parser.add_argument("--list", action="store_true", help="List selected scenarios and exit")
     return parser
@@ -1258,6 +1294,13 @@ def main(argv: Sequence[str] | None = None) -> int:
         return 0
     if not selected:
         print("no scenarios selected", file=sys.stderr)
+        return 2
+    if args.log_file and not args.dry_run and not Path(args.log_file).is_file():
+        print(
+            "acceptance audit log error: --log-file must point to the existing "
+            f"backend JSONL log: {args.log_file}",
+            file=sys.stderr,
+        )
         return 2
 
     api_key = os.environ.get(args.api_key_env) if args.api_key_env else None

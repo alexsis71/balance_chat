@@ -407,7 +407,10 @@ def evaluate_catalog_rule(rule_id: str, context: RuleContext) -> RuleOutcome:
         return outcome(
             current.semantic_fingerprint() == previous("T1").semantic_fingerprint()
             and bool(current_handles) and current_handles == source_handles,
-            {"current": current_handles, "T1": source_handles},
+            {
+                "current": sorted(current_handles),
+                "T1": sorted(source_handles),
+            },
         )
     if rule_id == "same_target_july":
         return outcome(

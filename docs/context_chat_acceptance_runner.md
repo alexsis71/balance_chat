@@ -58,6 +58,12 @@ python .\scripts\run_acceptance.py `
   --log-file .\logs\balance_chat.jsonl
 ```
 
+`--log-file` указывает на уже существующий JSONL-журнал запущенного backend,
+а не задаёт имя отчёта runner. Если backend использует стандартный
+`config.example.json`, параметр можно не указывать: default уже равен
+`.\logs\balance_chat.jsonl`. Несуществующий путь отклоняется до долгого
+DB-backed прогона. Каталог отчётов задаётся отдельно через `--report-dir`.
+
 Если API защищён, runner читает ключ только из переменной
 `AI_BALANCES_API_KEY`. Другое имя задаётся через `--api-key-env`; значение
 ключа не попадает в отчёт.

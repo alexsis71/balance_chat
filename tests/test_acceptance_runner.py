@@ -3,14 +3,20 @@ from __future__ import annotations
 from pathlib import Path
 
 from balance_chat.acceptance_runner import (
+    ActionResult,
     AcceptanceRunner,
     AuditLogReader,
     Catalog,
+    CheckResult,
     Expectation,
     HttpResponse,
+    RunReport,
     Scenario,
+    ScenarioResult,
     compile_expectation,
+    main,
     parse_catalog,
+    report_to_dict,
     render_markdown,
     select_scenarios,
 )
@@ -273,3 +279,72 @@ def test_audit_reader_correlates_only_requested_structured_events(tmp_path: Path
     assert set(events) == {"turn_completed", "conversation_turn_committed"}
     assert events["turn_completed"]["result_fingerprint"] == "sha256:one"
     assert events["conversation_turn_committed"]["turn_handle"] == "t0001"
+
+
+def test_report_serialization_normalizes_nested_evaluator_sets() -> None:
+    report = RunReport(
+        run_id="run",
+        started_at="2026-08-05T00:00:00+00:00",
+        finished_at="2026-08-05T00:00:01+00:00",
+        base_url="http://127.0.0.1:8790",
+        catalog="catalog.feature",
+        execute_db=True,
+        dry_run=False,
+        health={},
+        scenarios=[
+            ScenarioResult(
+                scenario_id="BC-13",
+                name="fingerprints",
+                tags=("current-contract",),
+                actions=[
+                    ActionResult(
+                        turn_id="T2",
+                        kind="query",
+                        message="same meaning",
+                        checks=[
+                            CheckResult(
+                                description="entity handles",
+                                passed=True,
+                                expected={"handles"},
+                                actual={
+                                    "current": {
+                                        ("geo:kazan", "t0001.e.geo-kazan"),
+                                        ("geo:samara", "t0001.e.geo-samara"),
+                                    }
+                                },
+                                source_line=1,
+                            )
+                        ],
+                    )
+                ],
+            )
+        ],
+        summary={},
+    )
+
+    payload = report_to_dict(report)
+    check = payload["scenarios"][0]["actions"][0]["checks"][0]
+
+    assert check["expected"] == ["handles"]
+    assert check["actual"]["current"] == [
+        ["geo:kazan", "t0001.e.geo-kazan"],
+        ["geo:samara", "t0001.e.geo-samara"],
+    ]
+
+
+def test_live_run_rejects_missing_backend_audit_log(
+    tmp_path: Path, capsys
+) -> None:
+    missing = tmp_path / "missing.jsonl"
+
+    code = main([
+        "--catalog",
+        str(CATALOG),
+        "--scenario",
+        "BC-01",
+        "--log-file",
+        str(missing),
+    ])
+
+    assert code == 2
+    assert "must point to the existing backend JSONL log" in capsys.readouterr().err
