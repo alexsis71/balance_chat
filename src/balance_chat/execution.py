@@ -261,6 +261,18 @@ class NativeExecutor:
         ranking = self._rank(plan, results) if plan.operation == Operation.RANK else None
         if ranking is not None:
             results[0].fact = ranking.selected[0]
+        for task, result in zip(plan.tasks, results):
+            if task.series_reduce is not None:
+                result.fact = self._reduce_series(task, result.series)
+        if plan.operation == Operation.GROUP:
+            if len(results) != 1:
+                raise NativeExecutionError("temporal grouping requires one series task")
+            return NativeExecutionResult(
+                operation=plan.operation,
+                status="ok" if results[0].series else "no_data",
+                task_results=results,
+                source_execution_count=source_execution_count,
+            )
         if any(result.fact is None for result in results):
             raise NativeExecutionError("successful scalar task lacks deterministic fact")
         comparison = (
@@ -290,6 +302,64 @@ class NativeExecutor:
             derived=derived,
             ranking=ranking,
             source_execution_count=source_execution_count,
+        )
+
+    @staticmethod
+    def _reduce_series(task: ExecutionTask, series: list[ScalarFact]) -> ScalarFact:
+        if not series:
+            raise NativeExecutionError("series reduction has no buckets")
+        units = {item.unit for item in series}
+        if len(units) != 1:
+            raise NativeExecutionError("series reduction units differ")
+        reduction = task.series_reduce
+        values = [item.value for item in series]
+        selected: ScalarFact | None = None
+        if reduction == "sum":
+            value = sum(values, Decimal("0"))
+        elif reduction == "avg":
+            value = sum(values, Decimal("0")) / Decimal(len(values))
+        elif reduction == "min":
+            value = min(values)
+            selected = series[values.index(value)]
+        elif reduction == "max":
+            value = max(values)
+            selected = series[values.index(value)]
+        elif reduction == "first":
+            selected = series[0]
+            value = selected.value
+        elif reduction == "last":
+            selected = series[-1]
+            value = selected.value
+        else:
+            raise NativeExecutionError(f"unsupported series reduction: {reduction!r}")
+        periods = [
+            period
+            for fact in series
+            for period in fact.periods
+        ]
+        overall_period = (
+            [{
+                "date_from": min(item["date_from"] for item in periods),
+                "date_to": max(item["date_to"] for item in periods),
+            }]
+            if periods else []
+        )
+        return ScalarFact(
+            task_id=task.task_id,
+            value=value,
+            unit=next(iter(units)),
+            label=series[0].label,
+            periods=overall_period,
+            extremum_at=selected.extremum_at if selected is not None else None,
+            dimension=selected.dimension if selected is not None else {
+                "name": "grain",
+                "value": task.series_grain,
+            },
+            source_row_count=len(series),
+            provenance=[
+                fact.model_dump(mode="json")
+                for fact in series
+            ],
         )
 
     @classmethod

@@ -40,7 +40,7 @@ from .execution import NativeExecutor
 from .gating import EvidenceCompletenessError, RoutingEvidenceGate
 from .grouping import CanonicalGroupAggregator, GroupingError, member_facts_from_rows
 from .interpretation import HybridInterpretationPolicy, InterpretationError, UnifiedInterpreter
-from .domain import interpretation_capabilities
+from .domain import interpretation_capabilities, metric_definition
 from .observability import log_event
 from .planning import NativeMultiOperandPlanner, PlanningError
 from .result_memory import PipelineResultMemoryAdapter
@@ -233,6 +233,7 @@ class PipelineV2TurnProcessor:
                 request_id=request_id,
                 started=started,
                 interpretation_mode="deterministic_context_grouping",
+                memory_chunks=[],
             )
         deterministic = _deterministic_period_mutation(state, message, turn_id)
         deterministic_mode = "deterministic_period"
@@ -399,6 +400,7 @@ class PipelineV2TurnProcessor:
                 started=started,
                 interpretation_mode=decision.mode.value,
                 decision=decision,
+                memory_chunks=memory_chunks,
                 evidence_businesses=explicit_businesses,
                 evidence_geos=explicit_geos,
             )
@@ -593,6 +595,7 @@ class PipelineV2TurnProcessor:
                 started=started,
                 interpretation_mode="conversation_graph",
                 decision=decision,
+                memory_chunks=memory_chunks,
                 evidence_businesses=explicit_businesses,
                 evidence_geos=explicit_geos,
             )
@@ -746,10 +749,45 @@ class PipelineV2TurnProcessor:
         started,
         interpretation_mode,
         decision=None,
+        memory_chunks=(),
         evidence_businesses=(),
         evidence_geos=(),
     ):
         intent = mutation.replace_intent
+        normalized_intent = _normalize_temporal_grouping_intent(
+            intent, normalized_message
+        )
+        if normalized_intent is not intent:
+            intent = normalized_intent
+            mutation = mutation.model_copy(
+                update={"replace_intent": intent}, deep=True
+            )
+            log_event(
+                LOGGER,
+                logging.INFO,
+                "temporal_grouping_normalized",
+                request_id=request_id,
+                grain=intent.grain,
+                aggregate_type=intent.grouping[0].aggregate_type,
+                evidence="explicit_query_grain",
+            )
+        if (
+            len(intent.grouping) == 1
+            and intent.grouping[0].dimension == "period"
+        ):
+            return self._execute_mutation(
+                state,
+                mutation,
+                normalized_message=normalized_message,
+                execute_db=execute_db,
+                request_id=request_id,
+                started=started,
+                interpretation_mode=interpretation_mode,
+                memory_chunks=memory_chunks,
+                decision=decision,
+                evidence_businesses=evidence_businesses,
+                evidence_geos=evidence_geos,
+            )
         try:
             self.gate.validate_bound_intent(
                 intent,
@@ -1520,6 +1558,26 @@ class PipelineV2TurnProcessor:
         evidence_geos=(),
     ):
         intent = mutation.replace_intent
+        normalized_intent = _normalize_series_reduction_intent(
+            state, intent, normalized_message
+        )
+        if normalized_intent is not intent:
+            intent = normalized_intent
+            mutation = mutation.model_copy(
+                update={"replace_intent": intent}, deep=True
+            )
+            log_event(
+                LOGGER,
+                logging.INFO,
+                "series_reduction_normalized",
+                request_id=request_id,
+                operation=intent.operation.value,
+                grain=intent.grain,
+                aggregate_type=intent.operands[0].aggregate_type,
+                bucket_aggregate=metric_definition(
+                    intent.operands[0].metric
+                ).default_aggregate,
+            )
         try:
             self.gate.validate_bound_intent(
                 intent,
@@ -1591,6 +1649,7 @@ class PipelineV2TurnProcessor:
         deterministic_summary = (
             _derived_contract_summary(native, intent)
             or _ranking_contract_summary(native, intent)
+            or _series_reduction_contract_summary(native, plan, intent)
             or _extremum_comparison_summary(
                 native,
                 intent,
@@ -1980,14 +2039,21 @@ def _standalone_facts(envelope: dict[str, Any]) -> list[dict[str, Any]]:
 
 
 def _public_native_result(native) -> dict[str, Any]:
+    facts = [
+        _safe_mapping(item.fact.model_dump(mode="json"))
+        for item in native.task_results
+        if item.fact is not None
+    ]
+    if native.operation == Operation.GROUP:
+        facts.extend(
+            _safe_mapping(fact.model_dump(mode="json"))
+            for item in native.task_results
+            for fact in item.series
+        )
     return {
         "operation": native.operation.value,
         "status": native.status,
-        "facts": [
-            _safe_mapping(item.fact.model_dump(mode="json"))
-            for item in native.task_results
-            if item.fact is not None
-        ],
+        "facts": facts,
         "comparison": (
             native.comparison.model_dump(mode="json") if native.comparison else None
         ),
@@ -2005,31 +2071,30 @@ def _native_summary_envelope(native, plan, question: str, intent: AnalysisIntent
     rows: list[dict[str, Any]] = []
     comparison = native.comparison
     for task, result in zip(plan.tasks, native.task_results):
-        fact = result.fact
-        if fact is None:
-            continue
         operand = task.scalar_intent.operands[0]
-        row: dict[str, Any] = {
-            "label": fact.label,
-            "fact_value": str(fact.value),
-            "unit": fact.unit,
-            "aggregate_type": operand.aggregate_type,
-        }
-        if fact.extremum_at is not None:
-            row["gas_day"] = fact.extremum_at.isoformat()
-        if fact.periods:
-            row.update(
-                date_from=fact.periods[0].get("date_from"),
-                date_to=fact.periods[0].get("date_to"),
-            )
-        if task.period_index is not None:
-            row["period_no"] = task.period_index + 1
-        if comparison is not None:
-            if fact.task_id == comparison.baseline_task_id:
-                row["side"] = "left"
-            elif fact.task_id == comparison.target_task_id:
-                row["side"] = "right"
-        rows.append(row)
+        task_facts = result.series or ([result.fact] if result.fact is not None else [])
+        for fact in task_facts:
+            row: dict[str, Any] = {
+                "label": fact.label,
+                "fact_value": str(fact.value),
+                "unit": fact.unit,
+                "aggregate_type": operand.aggregate_type,
+            }
+            if fact.extremum_at is not None:
+                row["gas_day"] = fact.extremum_at.isoformat()
+            if fact.periods:
+                row.update(
+                    date_from=fact.periods[0].get("date_from"),
+                    date_to=fact.periods[0].get("date_to"),
+                )
+            if task.period_index is not None:
+                row["period_no"] = task.period_index + 1
+            if comparison is not None:
+                if fact.task_id == comparison.baseline_task_id:
+                    row["side"] = "left"
+                elif fact.task_id == comparison.target_task_id:
+                    row["side"] = "right"
+            rows.append(row)
     if native.derived is not None:
         rows.append(
             {
@@ -2063,6 +2128,11 @@ def _authoritative_native_facts(native) -> list[dict[str, Any]]:
         for item in native.task_results
         if item.fact is not None
     ]
+    facts.extend(
+        _safe_mapping(fact.model_dump(mode="json"))
+        for item in native.task_results
+        for fact in item.series
+    )
     if native.derived is not None:
         facts.append(
             {
@@ -2101,8 +2171,16 @@ def _derived_contract_summary(native, intent: AnalysisIntent) -> dict[str, Any] 
     }
     numerator_fact = by_task.get(derived.numerator_task_id)
     denominator_fact = by_task.get(derived.denominator_task_id)
-    numerator_label = numerator_fact.label if numerator_fact is not None else "Числитель"
-    denominator_label = denominator_fact.label if denominator_fact is not None else "Знаменатель"
+    numerator_label = _formula_operand_label(
+        intent,
+        intent.formula.numerator_operand_id if intent.formula else None,
+        numerator_fact.label if numerator_fact is not None else "Числитель",
+    )
+    denominator_label = _formula_operand_label(
+        intent,
+        intent.formula.denominator_operand_id if intent.formula else None,
+        denominator_fact.label if denominator_fact is not None else "Знаменатель",
+    )
     numerator_unit = numerator_fact.unit if numerator_fact is not None else ""
     denominator_unit = denominator_fact.unit if denominator_fact is not None else ""
     return {
@@ -2124,6 +2202,220 @@ def _derived_contract_summary(native, intent: AnalysisIntent) -> dict[str, Any] 
             "denominator": str(derived.denominator_value),
             "value": str(derived.value),
             "unit": derived.unit,
+        },
+        "confidence": "high",
+        "generated_by": "deterministic_contract",
+    }
+
+
+def _formula_operand_label(
+    intent: AnalysisIntent, operand_id: str | None, fallback: str
+) -> str:
+    operand = next(
+        (item for item in intent.operands if item.operand_id == operand_id),
+        None,
+    )
+    if operand is None:
+        return fallback
+    balance = next(
+        (
+            item.entity.display_name
+            for item in operand.entities
+            if item.role == "balance"
+        ),
+        None,
+    )
+    if not balance or balance.casefold() in fallback.casefold():
+        return fallback
+    return f"{fallback}; баланс: {balance}"
+
+
+def _normalize_temporal_grouping_intent(
+    intent: AnalysisIntent, message: str
+) -> AnalysisIntent:
+    if (
+        intent.operation != Operation.GROUP
+        or len(intent.grouping) != 1
+        or intent.grouping[0].dimension != "period"
+    ):
+        return intent
+    text = str(message or "").casefold().replace("ё", "е")
+    patterns = (
+        ("day", r"\b(?:по\s+дн(?:ям|ям)|посуточн\w*|ежедневн\w*)\b"),
+        ("month", r"\b(?:по\s+месяц(?:ам|ах)|помесячн\w*|ежемесячн\w*)\b"),
+        ("quarter", r"\b(?:по\s+квартал(?:ам|ах)|поквартальн\w*)\b"),
+        ("year", r"\b(?:по\s+год(?:ам|ах)|ежегодн\w*)\b"),
+    )
+    explicit_grain = next(
+        (candidate for candidate, pattern in patterns if re.search(pattern, text)),
+        None,
+    )
+    grain = explicit_grain or intent.grain
+    aggregate_patterns = (
+        ("avg", r"\b(?:средн\w*|усредн\w*)\b"),
+        ("max", r"\b(?:максим\w*|наибольш\w*)\b"),
+        ("min", r"\b(?:миним\w*|наименьш\w*)\b"),
+        ("first", r"\b(?:перв\w*|начальн\w*)\b"),
+        ("last", r"\b(?:последн\w*|конечн\w*)\b"),
+        ("sum", r"\b(?:сумм\w*|итог\w*|общ(?:ий|ая|ее|ие|ую|его|ему|им)?)\b"),
+    )
+    explicit_aggregate = next(
+        (candidate for candidate, pattern in aggregate_patterns if re.search(pattern, text)),
+        None,
+    )
+    aggregate_type = explicit_aggregate or metric_definition(
+        intent.operands[0].metric
+    ).default_aggregate
+    grouping = intent.grouping[0]
+    if grain == intent.grain and aggregate_type == grouping.aggregate_type:
+        return intent
+    return intent.model_copy(
+        update={
+            "grain": grain,
+            "grouping": [
+                grouping.model_copy(
+                    update={"aggregate_type": aggregate_type}, deep=True
+                )
+            ],
+        },
+        deep=True,
+    )
+
+
+def _normalize_series_reduction_intent(
+    state: ContextContractV2,
+    intent: AnalysisIntent,
+    message: str,
+) -> AnalysisIntent:
+    if intent.operation != Operation.AGGREGATE or len(intent.operands) != 1:
+        return intent
+    operand = intent.operands[0]
+    if operand.aggregate_type not in {"sum", "avg", "min", "max", "first", "last"}:
+        return intent
+    text = str(message or "").casefold().replace("ё", "е")
+    explicit_patterns = (
+        ("day", r"\b(?:средне(?:суточн|дневн)\w*)\b"),
+        ("month", r"\b(?:среднемесячн\w*)\b"),
+        ("quarter", r"\b(?:среднеквартальн\w*)\b"),
+        ("year", r"\b(?:среднегодов\w*)\b"),
+    )
+    grain = next(
+        (candidate for candidate, pattern in explicit_patterns if re.search(pattern, text)),
+        None,
+    )
+    if grain is None and re.search(r"\bсредн\w*\b", text):
+        active = state.active_dialog_scope
+        active_result = next(
+            (
+                item for item in reversed(state.result_references)
+                if active is not None
+                and item.turn_id == active.turn_id
+                and item.status == TransitionOutcome.SUCCESS
+                and (item.row_count or 0) > 1
+            ),
+            None,
+        )
+        if (
+            active is not None
+            and active_result is not None
+            and active.intent.grain in {"day", "month", "quarter", "year"}
+            and len(active.intent.operands) == 1
+            and _same_operand_scope(operand, active.intent.operands[0])
+        ):
+            grain = active.intent.grain
+    if grain is None or grain == intent.grain:
+        return intent
+    return intent.model_copy(update={"grain": grain}, deep=True)
+
+
+def _same_operand_scope(left: AnalysisOperand, right: AnalysisOperand) -> bool:
+    if left.metric != right.metric:
+        return False
+    left_scope = {
+        (item.role, item.entity.entity_type, item.entity.entity_id)
+        for item in left.entities
+    }
+    right_scope = {
+        (item.role, item.entity.entity_type, item.entity.entity_id)
+        for item in right.entities
+    }
+    return left_scope == right_scope
+
+
+def _series_reduction_contract_summary(native, plan, intent: AnalysisIntent):
+    if len(plan.tasks) != 1 or len(native.task_results) != 1:
+        return None
+    task = plan.tasks[0]
+    result = native.task_results[0]
+    fact = result.fact
+    if task.series_reduce is None or fact is None or not result.series:
+        return None
+    grain_names = {
+        "day": ("Среднесуточное", "дневных"),
+        "month": ("Среднемесячное", "месячных"),
+        "quarter": ("Среднеквартальное", "квартальных"),
+        "year": ("Среднегодовое", "годовых"),
+    }
+    prefix, bucket_label = grain_names.get(
+        task.series_grain, ("Среднее", "временных")
+    )
+    metric_label = metric_definition(intent.operands[0].metric).public_label
+    scope = next(
+        (
+            item.entity.display_name
+            for item in intent.operands[0].entities
+            if item.role == "balance"
+        ),
+        fact.label,
+    )
+    value = _format_ru_number(fact.value)
+    reduction_label = {
+        "avg": "среднее",
+        "sum": "сумма",
+        "min": "минимум",
+        "max": "максимум",
+        "first": "первое значение",
+        "last": "последнее значение",
+    }.get(task.series_reduce, task.series_reduce)
+    bucket_aggregate_label = {
+        "avg": "среднее",
+        "sum": "сумма",
+        "min": "минимум",
+        "max": "максимум",
+        "first": "первое значение",
+        "last": "последнее значение",
+    }.get(task.bucket_aggregate, task.bucket_aggregate)
+    minimum = min(result.series, key=lambda item: item.value)
+    maximum = max(result.series, key=lambda item: item.value)
+    min_label = _ranking_dimension_label(task.series_grain, minimum)
+    max_label = _ranking_dimension_label(task.series_grain, maximum)
+    return {
+        "title": f"{prefix} {metric_label}: {value} {fact.unit}",
+        "text": (
+            f"{prefix} {metric_label} по {scope} рассчитано как "
+            f"{reduction_label} по {len(result.series)} {bucket_label} значениям. "
+            f"Внутри каждого периода рассчитана {bucket_aggregate_label}. "
+            f"Результат — {value} {fact.unit}."
+        ),
+        "bullets": [
+            f"Баланс: {scope}",
+            f"Количество {bucket_label} значений: {len(result.series)}",
+            (
+                f"Минимум: {_format_ru_number(minimum.value)} {minimum.unit}"
+                + (f" ({min_label})" if min_label else "")
+            ),
+            (
+                f"Максимум: {_format_ru_number(maximum.value)} {maximum.unit}"
+                + (f" ({max_label})" if max_label else "")
+            ),
+        ],
+        "metrics": {
+            "value": str(fact.value),
+            "unit": fact.unit,
+            "reduction": task.series_reduce,
+            "grain": task.series_grain,
+            "bucket_aggregate": task.bucket_aggregate,
+            "bucket_count": len(result.series),
         },
         "confidence": "high",
         "generated_by": "deterministic_contract",

@@ -25,6 +25,7 @@ class ExecutionTask(ContractModel):
     period_index: int | None = Field(default=None, ge=0)
     series_grain: str | None = None
     bucket_aggregate: str | None = None
+    series_reduce: str | None = None
     scalar_intent: AnalysisIntent
 
     @model_validator(mode="after")
@@ -35,6 +36,8 @@ class ExecutionTask(ContractModel):
             raise ValueError("scalar task cannot contain grouping")
         if self.scalar_intent.comparison is not None:
             raise ValueError("scalar task cannot contain comparison")
+        if self.series_reduce is not None and self.series_grain is None:
+            raise ValueError("series reduction requires a temporal grain")
         return self
 
 
@@ -51,6 +54,8 @@ class NativeMultiOperandPlanner:
     """Deterministically decomposes a bound intent; it never calls an LLM."""
 
     def plan(self, intent: AnalysisIntent) -> NativeExecutionPlan:
+        if intent.operation == Operation.GROUP:
+            return self._period_grouping(intent)
         if intent.grouping:
             raise PlanningError("grouped intent requires the grouping planner")
         if intent.operation == Operation.COMPARE:
@@ -61,6 +66,11 @@ class NativeMultiOperandPlanner:
             return self._calculation(intent)
         if intent.operation == Operation.RANK:
             return self._ranking(intent)
+        if (
+            intent.operation == Operation.AGGREGATE
+            and intent.grain in {"day", "month", "quarter", "year"}
+        ):
+            return self._series_aggregation(intent)
         if len(intent.operands) != 1:
             raise PlanningError(
                 f"{intent.operation.value} requires exactly one operand before execution"
@@ -74,6 +84,74 @@ class NativeMultiOperandPlanner:
         return NativeExecutionPlan(
             source_intent_id=intent.intent_id,
             operation=intent.operation,
+            tasks=[task],
+        )
+
+    def _period_grouping(self, intent: AnalysisIntent) -> NativeExecutionPlan:
+        if (
+            len(intent.operands) != 1
+            or len(intent.grouping) != 1
+            or intent.grouping[0].dimension != "period"
+        ):
+            raise PlanningError(
+                "native grouped execution supports one temporal dimension"
+            )
+        if intent.grain not in {"day", "month", "quarter", "year"}:
+            raise PlanningError("temporal grouping requires an explicit series grain")
+        grouping = intent.grouping[0]
+        definition = metric_definition(intent.operands[0].metric)
+        if grouping.aggregate_type not in definition.allowed_aggregates:
+            raise PlanningError(
+                f"bucket aggregate {grouping.aggregate_type!r} is invalid "
+                f"for metric {intent.operands[0].metric!r}"
+            )
+        operand = intent.operands[0].model_copy(
+            update={"aggregate_type": grouping.aggregate_type},
+            deep=True,
+        )
+        task = self._task(
+            operand,
+            periods=operand.periods or intent.periods,
+            operation=Operation.SHOW,
+            task_id="group_source",
+            series_grain=intent.grain,
+            bucket_aggregate=grouping.aggregate_type,
+        )
+        return NativeExecutionPlan(
+            source_intent_id=intent.intent_id,
+            operation=Operation.GROUP,
+            tasks=[task],
+        )
+
+    def _series_aggregation(self, intent: AnalysisIntent) -> NativeExecutionPlan:
+        if len(intent.operands) != 1:
+            raise PlanningError("series aggregation requires exactly one operand")
+        operand = intent.operands[0]
+        reduction = operand.aggregate_type
+        if reduction not in {"sum", "avg", "min", "max", "first", "last"}:
+            raise PlanningError(f"unsupported series reduction: {reduction!r}")
+        definition = metric_definition(operand.metric)
+        bucket_aggregate = definition.default_aggregate
+        if bucket_aggregate not in definition.allowed_aggregates:
+            raise PlanningError(
+                f"bucket aggregate {bucket_aggregate!r} is invalid "
+                f"for metric {operand.metric!r}"
+            )
+        source_operand = operand.model_copy(
+            update={"aggregate_type": bucket_aggregate}, deep=True
+        )
+        task = self._task(
+            source_operand,
+            periods=operand.periods or intent.periods,
+            operation=Operation.SHOW,
+            task_id="aggregate_source",
+            series_grain=intent.grain,
+            bucket_aggregate=bucket_aggregate,
+            series_reduce=reduction,
+        )
+        return NativeExecutionPlan(
+            source_intent_id=intent.intent_id,
+            operation=Operation.AGGREGATE,
             tasks=[task],
         )
 
@@ -193,6 +271,7 @@ class NativeMultiOperandPlanner:
         period_index: int | None = None,
         series_grain: str | None = None,
         bucket_aggregate: str | None = None,
+        series_reduce: str | None = None,
     ) -> ExecutionTask:
         if not periods:
             raise PlanningError(f"operand {operand.operand_id} has no period")
@@ -209,5 +288,6 @@ class NativeMultiOperandPlanner:
             period_index=period_index,
             series_grain=series_grain,
             bucket_aggregate=bucket_aggregate,
+            series_reduce=series_reduce,
             scalar_intent=scalar_intent,
         )

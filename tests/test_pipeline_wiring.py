@@ -17,6 +17,7 @@ from balance_chat.contracts import (
     CanonicalEntityRef,
     ContextContractV2,
     ContextMutation,
+    GroupingSpec,
     InterpretationDecision,
     MetadataVersionRef,
     OperandEntityRef,
@@ -33,7 +34,9 @@ from balance_chat.processor import (
     _deterministic_period_mutation,
     _distribution_own_consumers_mentions,
     _native_summary_envelope,
+    _normalize_series_reduction_intent,
     _comparison_contract_summary,
+    _derived_contract_summary,
     _period_comparison_contract_summary,
     _ranking_contract_summary,
     _peer_destination_mentions,
@@ -44,7 +47,13 @@ from balance_chat.processor import (
 from balance_chat.reducer import apply_context_transition
 from balance_chat.service import TurnProcessingError
 from balance_chat.interpretation import InterpretationError
-from balance_chat.execution import NativeExecutionResult, ScalarFact, TaskExecutionResult
+from balance_chat.execution import (
+    NativeExecutionResult,
+    NativeExecutor,
+    PipelineScalarTaskRunner,
+    ScalarFact,
+    TaskExecutionResult,
+)
 
 
 def _envelope():
@@ -1013,6 +1022,84 @@ def test_extremum_comparison_fallback_uses_typed_percent_base_and_dates() -> Non
     assert "44,92%" not in summary["text"]
 
 
+def test_percent_summary_names_each_operand_balance() -> None:
+    from balance_chat.execution import DerivedResult
+
+    intent = AnalysisIntent(
+        operation=Operation.CALCULATE,
+        operands=[
+            AnalysisOperand(
+                operand_id="incoming_max",
+                metric="incoming",
+                aggregate_type="max",
+                entities=[OperandEntityRef(
+                    role="balance",
+                    entity=CanonicalEntityRef(
+                        entity_id="tomsk",
+                        entity_type="balance",
+                        display_name="ГП ТГ Томск суточный баланс",
+                    ),
+                )],
+            ),
+            AnalysisOperand(
+                operand_id="distribution_avg",
+                metric="distribution",
+                aggregate_type="avg",
+                entities=[OperandEntityRef(
+                    role="balance",
+                    entity=CanonicalEntityRef(
+                        entity_id="surgut",
+                        entity_type="balance",
+                        display_name="ГП ТГ Сургут суточный баланс",
+                    ),
+                )],
+            ),
+        ],
+        periods=[PeriodRef(date_from="2025-01-01", date_to="2026-01-01")],
+        formula={
+            "operator": "percent_of",
+            "numerator_operand_id": "incoming_max",
+            "denominator_operand_id": "distribution_avg",
+        },
+    )
+    native = NativeExecutionResult(
+        operation=Operation.CALCULATE,
+        status="ok",
+        task_results=[
+            TaskExecutionResult(
+                task_id="task_1",
+                status="ok",
+                fact=ScalarFact(
+                    task_id="task_1", value="10", unit="тыс. м3", label="от ТГ Сургут"
+                ),
+                envelope={"status": "ok"},
+            ),
+            TaskExecutionResult(
+                task_id="task_2",
+                status="ok",
+                fact=ScalarFact(
+                    task_id="task_2", value="20", unit="тыс. м3", label="Распределение"
+                ),
+                envelope={"status": "ok"},
+            ),
+        ],
+        derived=DerivedResult(
+            operator="percent_of",
+            numerator_task_id="task_1",
+            denominator_task_id="task_2",
+            numerator_value="10",
+            denominator_value="20",
+            value="50",
+            unit="%",
+        ),
+    )
+
+    summary = _derived_contract_summary(native, intent)
+
+    assert "от ТГ Сургут; баланс: ГП ТГ Томск суточный баланс" in summary["text"]
+    assert "Распределение; баланс: ГП ТГ Сургут суточный баланс" in summary["text"]
+
+
 def test_comparison_contract_summary_uses_target_minus_baseline_direction() -> None:
     from balance_chat.execution import ComparisonMember, ComparisonSetResult
 
@@ -1443,6 +1530,179 @@ def test_context_grouping_reuses_current_successful_result_reference() -> None:
     assert processed.response["facts"][0]["canonical_name"] == "Ульяновская область"
     assert processed.response["facts"][0]["value"] == "15"
     assert processed.diagnostics["execution"]["grouping_source"] == "result_reference"
+
+
+def test_context_temporal_grouping_requeries_typed_series_instead_of_grouping_scalar() -> None:
+    state = apply_context_transition(
+        ContextContractV2(session_id="session"),
+        ContextMutation(
+            turn_id="turn-1",
+            user_message="покажи среднее распределение за 2025",
+            replace_intent=AnalysisIntent(
+                operation=Operation.AGGREGATE,
+                operands=[AnalysisOperand(
+                    operand_id="distribution",
+                    metric="distribution",
+                    aggregate_type="avg",
+                    unit="тыс. м3",
+                )],
+                periods=[PeriodRef(date_from="2025-01-01", date_to="2026-01-01")],
+            ),
+        ),
+        TransitionOutcome.SUCCESS,
+        result=ResultReference(
+            turn_id="turn-1",
+            status=TransitionOutcome.SUCCESS,
+            row_count=1,
+            facts=[{"value": "416297.83", "unit": "тыс. м3"}],
+        ),
+    )
+
+    class TemporalGroupInterpreter:
+        def interpret(self, *, state, message, metadata_bundle_version, **_kwargs):
+            frame = state.conversation_window[-1]
+            return InterpretationDecision.model_validate({
+                "mode": "mutation",
+                "normalized_message": message,
+                "confidence": 0.99,
+                "draft": None,
+                "intent_graph": {
+                    "operation": "group",
+                    "operands": [{
+                        "operand_id": "distribution",
+                        "source_operand_handle": frame.operands[0].handle,
+                    }],
+                    "period_handles": [frame.periods[0].handle],
+                    # Reproduce the live model leaking the previous scalar avg
+                    # into a new additive monthly series and omitting grain.
+                    "grouping": [{"dimension": "period", "aggregate_type": "avg"}],
+                },
+                "clarification": None,
+                "unsupported_capability": None,
+                "assumptions": [],
+                "metadata_bundle_version": metadata_bundle_version,
+            })
+
+    class TemporalRuntime(RawRuntime):
+        def __init__(self):
+            self.queries = []
+
+        def execute(self, query, _intent, **_kwargs):
+            self.queries.append(query)
+            return {
+                "status": "ok",
+                "unit": "тыс. м3",
+                "rows": [
+                    {
+                        "fact_value": "100",
+                        "date_from": "2025-01-01",
+                        "date_to": "2025-02-01",
+                    },
+                    {
+                        "fact_value": "200",
+                        "date_from": "2025-02-01",
+                        "date_to": "2025-03-01",
+                    },
+                ],
+            }
+
+    runtime = TemporalRuntime()
+    translator = PipelineEnvelopeTranslator()
+    registry = SimpleNamespace(
+        geo_objects=(), geo_groups=(), routes=(),
+        manifest=SimpleNamespace(bundle_version="2026.07.7"),
+    )
+    processor = PipelineV2TurnProcessor(
+        runtime=runtime,
+        registry=registry,
+        interpreter=TemporalGroupInterpreter(),
+        compiler=InterpretationMutationCompiler(RegistryEntityBinder(registry)),
+        executor=NativeExecutor(
+            PipelineScalarTaskRunner(runtime),
+            translator.fact,
+            translator.series,
+        ),
+        policy=NeverCalled(),
+    )
+
+    processed = processor.process(
+        state,
+        message="покажи тот же показатель по месяцам",
+        execute_db=True,
+        clarification=None,
+        request_id="request",
+    )
+
+    assert len(runtime.queries) == 1
+    assert "по месяцам" in runtime.queries[0]
+    assert "Покажи распределение" in runtime.queries[0]
+    assert [item["value"] for item in processed.response["facts"]] == ["100", "200"]
+    assert processed.result_reference.row_count == 2
+    assert processed.mutation.replace_intent.grain == "month"
+    assert processed.mutation.replace_intent.grouping[0].aggregate_type == "sum"
+
+
+def test_average_after_monthly_series_inherits_grain_and_canonical_scope() -> None:
+    entities = [
+        OperandEntityRef(
+            role="balance",
+            entity=CanonicalEntityRef(
+                entity_id="BAL:tomsk",
+                entity_type="balance",
+                display_name="ГП ТГ Томск суточный баланс",
+            ),
+        ),
+        OperandEntityRef(
+            role="article",
+            entity=CanonicalEntityRef(
+                entity_id="ART:distribution",
+                entity_type="article",
+                display_name="Распределение",
+            ),
+        ),
+    ]
+    state = apply_context_transition(
+        ContextContractV2(session_id="session"),
+        ContextMutation(
+            turn_id="turn-1",
+            user_message="покажи распределение ТГ Томск по месяцам",
+            replace_intent=AnalysisIntent(
+                operation=Operation.GROUP,
+                operands=[AnalysisOperand(
+                    operand_id="distribution",
+                    metric="distribution",
+                    entities=entities,
+                )],
+                periods=[PeriodRef(date_from="2025-01-01", date_to="2026-01-01")],
+                grouping=[GroupingSpec(dimension="period")],
+                grain="month",
+            ),
+        ),
+        TransitionOutcome.SUCCESS,
+        result=ResultReference(
+            turn_id="turn-1",
+            status=TransitionOutcome.SUCCESS,
+            row_count=12,
+            facts=[{"value": index} for index in range(12)],
+        ),
+    )
+    current = AnalysisIntent(
+        operation=Operation.AGGREGATE,
+        operands=[AnalysisOperand(
+            operand_id="distribution",
+            metric="distribution",
+            aggregate_type="avg",
+            entities=entities,
+        )],
+        periods=[PeriodRef(date_from="2025-01-01", date_to="2026-01-01")],
+    )
+
+    normalized = _normalize_series_reduction_intent(
+        state, current, "выведи среднее за год"
+    )
+
+    assert normalized.grain == "month"
+    assert normalized.operands[0].entities == entities
 
 
 def test_standalone_result_reference_rows_retain_interpretation_unit() -> None:

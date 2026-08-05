@@ -104,11 +104,21 @@ entities, periods, aggregate_type и unit. Разные GEO, статьи, ме�
 
 - `show` показывает значение или временной ряд;
 - `aggregate` выполняет sum/avg/min/max/first/last;
+- «среднемесячное» не равно `avg` по суточным строкам: верни
+  `operation=aggregate`, `aggregate_type=avg`, `grain=month`; execution сначала
+  суммирует аддитивный поток внутри каждого месяца, затем усредняет месяцы;
+- после временного ряда фраза «выведи среднее за год» сохраняет operand и
+  наследует grain этого ряда, если пользователь явно не задал другой grain;
 - `compare` сравнивает два или больше самостоятельных operand; для матрицы
   «объекты × периоды» создай отдельный operand для каждой ячейки, не теряя
   canonical entity и period каждой ячейки;
 - `compare_periods` применяет один предмет расчёта к двум canonical периодам;
 - `group` агрегирует по явно указанному canonical dimension;
+- `group` по dimension=`period` всегда требует явный `grain` из формулировки
+  (`day`, `month`, `quarter` или `year`) и bucket aggregate; фраза «по месяцам»
+  означает `grain=month`, а не наследование предыдущего scalar aggregate;
+  bucket aggregate определяется текущим turn: для аддитивного потока без слов
+  «среднее/максимум/минимум» используй `sum`, даже если прошлый turn был `avg`;
 - `rank` выбирает максимум/минимум среди временных buckets и требует объект
   `ranking`: direction, grain, bucket_aggregate, limit и return_dimension;
 - `calculate` выполняет производную формулу над двумя operands и требует объект

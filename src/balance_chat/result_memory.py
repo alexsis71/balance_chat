@@ -98,6 +98,11 @@ class PipelineResultMemoryAdapter:
             for task in result.task_results
             if task.fact is not None
         ]
+        facts.extend(
+            fact.model_dump(mode="json")
+            for task in result.task_results
+            for fact in task.series
+        )
         if result.derived is not None:
             facts.append(
                 {
@@ -271,6 +276,12 @@ def _deterministic_summary(result: NativeExecutionResult) -> dict[str, str]:
         return {
             "title": "Сохранённый экстремум",
             "text": f"{result.ranking.direction}={selected.value} {selected.unit}",
+        }
+    if result.operation.value == "group":
+        count = sum(len(item.series) for item in result.task_results)
+        return {
+            "title": "Сохранённый временной ряд",
+            "text": f"Сохранено временных интервалов: {count}",
         }
     if result.comparison is None:
         return {"title": "Сохранённый результат", "text": " ".join(

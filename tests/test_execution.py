@@ -9,6 +9,7 @@ from balance_chat.contracts import (
     AnalysisOperand,
     CanonicalEntityRef,
     FormulaSpec,
+    GroupingSpec,
     OperandEntityRef,
     Operation,
     PeriodRef,
@@ -70,6 +71,94 @@ def test_executor_runs_each_operand_once_and_composes_delta() -> None:
     assert runner.calls == ["task_1", "task_2"]
     assert result.comparison.delta == Decimal("-75")
     assert result.comparison.percent_change == Decimal("-75")
+
+
+def test_executor_returns_complete_temporal_group_series() -> None:
+    intent = AnalysisIntent(
+        operation=Operation.GROUP,
+        operands=[AnalysisOperand(
+            operand_id="distribution",
+            metric="distribution",
+            aggregate_type="avg",
+        )],
+        periods=[PeriodRef(date_from="2025-01-01", date_to="2026-01-01")],
+        grouping=[GroupingSpec(dimension="period", aggregate_type="sum")],
+        grain="month",
+    )
+    runner = FakeRunner({"group_source": "0"})
+
+    def series(task, _envelope):
+        return [
+            ScalarFact(
+                task_id=task.task_id,
+                value=Decimal("100"),
+                unit="тыс. м3",
+                label="Распределение",
+                periods=[{"date_from": "2025-01-01", "date_to": "2025-02-01"}],
+            ),
+            ScalarFact(
+                task_id=task.task_id,
+                value=Decimal("200"),
+                unit="тыс. м3",
+                label="Распределение",
+                periods=[{"date_from": "2025-02-01", "date_to": "2025-03-01"}],
+            ),
+        ]
+
+    result = NativeExecutor(runner, _extract, series).execute(
+        NativeMultiOperandPlanner().plan(intent),
+        original_query="покажи распределение по месяцам",
+        execute_db=True,
+    )
+
+    assert result.status == "ok"
+    assert result.task_results[0].fact is None
+    assert [item.value for item in result.task_results[0].series] == [
+        Decimal("100"),
+        Decimal("200"),
+    ]
+
+
+def test_executor_averages_monthly_sums_instead_of_daily_rows() -> None:
+    intent = AnalysisIntent(
+        operation=Operation.AGGREGATE,
+        operands=[AnalysisOperand(
+            operand_id="distribution",
+            metric="distribution",
+            aggregate_type="avg",
+        )],
+        periods=[PeriodRef(date_from="2025-01-01", date_to="2026-01-01")],
+        grain="month",
+    )
+    runner = FakeRunner({"aggregate_source": "0"})
+
+    def series(task, _envelope):
+        return [
+            ScalarFact(
+                task_id=task.task_id,
+                value=Decimal("120"),
+                unit="тыс. м3",
+                label="Распределение",
+                periods=[{"date_from": "2025-01-01", "date_to": "2025-02-01"}],
+            ),
+            ScalarFact(
+                task_id=task.task_id,
+                value=Decimal("180"),
+                unit="тыс. м3",
+                label="Распределение",
+                periods=[{"date_from": "2025-02-01", "date_to": "2025-03-01"}],
+            ),
+        ]
+
+    result = NativeExecutor(runner, _extract, series).execute(
+        NativeMultiOperandPlanner().plan(intent),
+        original_query="покажи среднемесячное распределение",
+        execute_db=True,
+    )
+
+    assert result.task_results[0].fact.value == Decimal("150")
+    assert result.task_results[0].fact.source_row_count == 2
+    assert len(result.task_results[0].series) == 2
 
 
 def test_executor_composes_n_way_comparison_set_from_one_call_per_operand() -> None:

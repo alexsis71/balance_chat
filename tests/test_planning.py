@@ -5,6 +5,7 @@ from balance_chat.contracts import (
     AnalysisOperand,
     ComparisonSpec,
     FormulaSpec,
+    GroupingSpec,
     Operation,
     PeriodRef,
     RankingSpec,
@@ -121,6 +122,48 @@ def test_month_rank_requests_one_bucket_series() -> None:
     assert plan.tasks[0].series_grain == "month"
     assert plan.tasks[0].bucket_aggregate == "sum"
     assert plan.tasks[0].scalar_intent.operation == Operation.SHOW
+
+
+def test_period_grouping_builds_typed_series_and_replaces_stale_scalar_aggregate() -> None:
+    intent = AnalysisIntent(
+        operation=Operation.GROUP,
+        operands=[AnalysisOperand(
+            operand_id="distribution",
+            metric="distribution",
+            aggregate_type="avg",
+        )],
+        periods=[PeriodRef(date_from="2025-01-01", date_to="2026-01-01")],
+        grouping=[GroupingSpec(dimension="period", aggregate_type="sum")],
+        grain="month",
+    )
+
+    plan = NativeMultiOperandPlanner().plan(intent)
+
+    assert plan.operation == Operation.GROUP
+    assert plan.tasks[0].series_grain == "month"
+    assert plan.tasks[0].bucket_aggregate == "sum"
+    assert plan.tasks[0].scalar_intent.operands[0].aggregate_type == "sum"
+    assert plan.tasks[0].scalar_intent.grouping == []
+
+
+def test_monthly_average_is_planned_as_average_of_monthly_sums() -> None:
+    intent = AnalysisIntent(
+        operation=Operation.AGGREGATE,
+        operands=[AnalysisOperand(
+            operand_id="distribution",
+            metric="distribution",
+            aggregate_type="avg",
+        )],
+        periods=[PeriodRef(date_from="2025-01-01", date_to="2026-01-01")],
+        grain="month",
+    )
+
+    plan = NativeMultiOperandPlanner().plan(intent)
+
+    assert plan.tasks[0].series_grain == "month"
+    assert plan.tasks[0].bucket_aggregate == "sum"
+    assert plan.tasks[0].series_reduce == "avg"
+    assert plan.tasks[0].scalar_intent.operands[0].aggregate_type == "sum"
 
 
 def test_stock_rank_rejects_sum_bucket_semantics() -> None:

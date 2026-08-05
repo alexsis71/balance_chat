@@ -117,6 +117,17 @@ def test_gate_accepts_complete_percent_routing_evidence_and_plan() -> None:
     gate.validate_plan(NativeMultiOperandPlanner().plan(intent))
 
 
+def test_monthly_series_query_uses_semantic_interpreter_on_first_turn() -> None:
+    decision = RoutingEvidenceGate().route(
+        "покажи распределение ТГ Томск в 2025 году по месяцам",
+        ContextContractV2(session_id="session"),
+        explicit_businesses=[_record("ГП ТГ Томск")],
+    )
+
+    assert decision.invoke_interpreter
+    assert decision.reason == "compound_semantics"
+
+
 def test_gate_rejects_dropped_explicit_business_before_database() -> None:
     with pytest.raises(EvidenceCompletenessError) as captured:
         RoutingEvidenceGate().validate_bound_intent(
