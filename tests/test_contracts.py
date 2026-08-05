@@ -60,15 +60,15 @@ def test_compare_supports_two_different_metrics() -> None:
     ]
 
 
-def test_compare_rejects_more_than_two_operands() -> None:
-    with pytest.raises(ValidationError, match="exactly two operands"):
-        AnalysisIntent(
-            operation=Operation.COMPARE,
-            operands=[
-                AnalysisOperand(operand_id=f"item_{index}", metric="distribution")
-                for index in range(3)
-            ],
-        )
+def test_compare_supports_ordered_n_way_operands() -> None:
+    intent = AnalysisIntent(
+        operation=Operation.COMPARE,
+        operands=[
+            AnalysisOperand(operand_id=f"item_{index}", metric="distribution")
+            for index in range(3)
+        ],
+    )
+    assert len(intent.operands) == 3
 
 
 def test_compare_periods_rejects_multiple_operands() -> None:
@@ -98,7 +98,36 @@ def test_scalar_operation_rejects_comparison_semantics() -> None:
         )
 
 
+def test_comparison_rejects_same_baseline_and_target_operand() -> None:
+    with pytest.raises(ValidationError, match="two distinct operands"):
+        AnalysisIntent(
+            operation=Operation.COMPARE,
+            operands=[
+                AnalysisOperand(operand_id="first", metric="distribution"),
+                AnalysisOperand(operand_id="second", metric="distribution"),
+            ],
+            comparison=ComparisonSpec(
+                baseline_operand_id="first",
+                target_operand_id="first",
+            ),
+        )
+
+
 def test_interpretation_schema_expresses_mode_dependent_payloads() -> None:
     schema = interpretation_decision_json_schema(["mutation", "clarify"])
     assert set(schema["required"]) == set(InterpretationDecision.model_fields)
     assert schema["properties"]["mode"]["enum"] == ["mutation", "clarify"]
+
+
+def test_standalone_schema_forbids_history_handles() -> None:
+    schema = interpretation_decision_json_schema(
+        ["standalone", "clarify", "unsupported"]
+    )
+    graph = schema["$defs"]["ContextIntentGraph"]["properties"]
+    operand = schema["$defs"]["ContextOperandDraft"]["properties"]
+
+    assert schema["properties"]["draft"] == {"type": "null"}
+    assert graph["period_handles"]["maxItems"] == 0
+    assert operand["entity_handles"]["maxItems"] == 0
+    assert operand["period_handles"]["maxItems"] == 0
+    assert operand["source_operand_handle"] == {"type": "null"}

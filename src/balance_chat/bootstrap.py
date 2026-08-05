@@ -37,6 +37,7 @@ def build_application(config_path: str | Path):
     executor = NativeExecutor(
         PipelineScalarTaskRunner(runtime),
         translator.fact,
+        translator.series,
     )
     processor = PipelineV2TurnProcessor(
         runtime=runtime,

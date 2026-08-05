@@ -19,6 +19,7 @@ from .contracts import (
     PeriodRef,
 )
 from .conversation import handle_indexes
+from .domain import metric_definition
 
 
 class ContextBindingError(ValueError):
@@ -46,9 +47,106 @@ class RegistryEntityBinder:
         self.registry = registry
 
     def bind(self, mentions: Sequence[EntityMention]) -> list[OperandEntityRef]:
-        return [self._bind_one(mention) for mention in mentions]
+        return self.bind_operand(mentions)
 
-    def _bind_one(self, mention: EntityMention) -> OperandEntityRef:
+    def bind_operand(
+        self,
+        mentions: Sequence[EntityMention],
+        inherited: Sequence[OperandEntityRef] = (),
+        *,
+        metric: str | None = None,
+    ) -> list[OperandEntityRef]:
+        """Bind one operand with balance-scoped article resolution.
+
+        Article aliases are not globally unique. Resolve an explicit balance
+        first and use it as the namespace for the remaining mentions.
+        """
+        viewpoint = self._bind_directed_viewpoint(mentions, metric)
+        if viewpoint is not None:
+            return viewpoint
+        ordered = sorted(mentions, key=lambda item: item.role != "balance")
+        balance_id: int | None = next(
+            (
+                _metadata_id(item.entity.entity_id)
+                for item in inherited
+                if item.role == "balance" and isinstance(_metadata_id(item.entity.entity_id), int)
+            ),
+            None,
+        )
+        output: list[OperandEntityRef] = []
+        for mention in ordered:
+            reference = self._bind_one(mention, balance_id=balance_id)
+            output.append(reference)
+            if reference.role == "balance":
+                value = _metadata_id(reference.entity.entity_id)
+                balance_id = value if isinstance(value, int) else None
+        return output
+
+    def _bind_directed_viewpoint(
+        self,
+        mentions: Sequence[EntityMention],
+        metric: str | None,
+    ) -> list[OperandEntityRef] | None:
+        """Resolve a directional phrase through one explicit accounting viewpoint."""
+        by_role = {item.role: item for item in mentions}
+        if metric == "incoming" and {"source", "destination"}.issubset(by_role):
+            balance_mention = by_role["destination"]
+            article_mention = by_role["source"]
+            section = "ресурсы"
+            path_token = "поступление"
+            article_variants = (
+                article_mention.text,
+                f"от {article_mention.text.removeprefix('от ').strip()}",
+            )
+        elif metric == "distribution" and {"source", "destination"}.issubset(by_role):
+            balance_mention = by_role["source"]
+            article_mention = by_role["destination"]
+            section = "распределение"
+            path_token = None
+            article_variants = (article_mention.text,)
+        else:
+            return None
+        balance = self.registry.balance(balance_mention.text)
+        if balance is None:
+            return None
+        candidates: dict[Any, Any] = {}
+        for value in article_variants:
+            for candidate in self.registry.find_article_candidates(
+                value, balance_id=balance.balance_id
+            ):
+                normalized_path = {
+                    str(item).strip().casefold() for item in candidate.path
+                }
+                if str(candidate.section).strip().casefold() != section:
+                    continue
+                if path_token is not None and path_token not in normalized_path:
+                    continue
+                candidates[candidate.article_id] = candidate
+        if len(candidates) != 1:
+            return None
+        article = next(iter(candidates.values()))
+        return [
+            OperandEntityRef(
+                role="balance",
+                entity=CanonicalEntityRef(
+                    entity_id=str(balance.balance_id),
+                    entity_type="balance",
+                    display_name=balance.canonical_name,
+                ),
+            ),
+            OperandEntityRef(
+                role="article",
+                entity=CanonicalEntityRef(
+                    entity_id=str(article.article_id),
+                    entity_type="article",
+                    display_name=article.canonical_name,
+                ),
+            ),
+        ]
+
+    def _bind_one(
+        self, mention: EntityMention, *, balance_id: int | None = None
+    ) -> OperandEntityRef:
         text = mention.text.strip()
         role = mention.role
         record = None
@@ -60,7 +158,7 @@ class RegistryEntityBinder:
             if record:
                 entity_type, entity_id = "balance", record.balance_id
         elif role == "article":
-            candidates = self.registry.find_article_candidates(text)
+            candidates = self.registry.find_article_candidates(text, balance_id=balance_id)
             if len(candidates) > 1:
                 raise AmbiguousEntityMention(f"ambiguous article mention: {text}")
             record = candidates[0] if candidates else None
@@ -81,7 +179,15 @@ class RegistryEntityBinder:
                     entity_type, entity_id = "geo_group", record.group_id
                     display_name = _official_geo_display(record.canonical_name)
                 else:
-                    candidates = self.registry.find_article_candidates(text)
+                    candidates = self.registry.find_article_candidates(
+                        text, balance_id=balance_id
+                    )
+                    if not candidates and balance_id is not None:
+                        # A destination can be a canonical article in a peer
+                        # balance rather than in the accounting balance that
+                        # was mentioned alongside it. Global lookup is allowed
+                        # only when it is still unique.
+                        candidates = self.registry.find_article_candidates(text)
                     if len(candidates) > 1:
                         raise AmbiguousEntityMention(
                             f"ambiguous destination/source article mention: {text}"
@@ -170,6 +276,10 @@ class InterpretationMutationCompiler:
                 operand.model_copy(update={"aggregate_type": aggregate_type})
                 for operand in operands
             ]
+        for operand in operands:
+            self._validate_metric_aggregate(
+                operand.metric, operand.aggregate_type
+            )
         if draft.reverse_direction:
             operands = [self._reverse_operand(operand) for operand in operands]
 
@@ -216,6 +326,7 @@ class InterpretationMutationCompiler:
         )
         if graph is None:
             raise ContextBindingError("context intent graph is missing")
+        graph = self._normalize_graph_shape(graph, current_entity_mentions)
         operand_index, entity_index, period_index = handle_indexes(state)
         standalone_empty = (
             decision.mode == InterpretationMode.STANDALONE
@@ -319,6 +430,7 @@ class InterpretationMutationCompiler:
                 spec.entity_handles,
                 spec.entity_mentions,
                 entity_index,
+                metric=metric,
             )
             period_mode = (
                 "replace"
@@ -333,17 +445,29 @@ class InterpretationMutationCompiler:
                 spec.periods,
                 period_index,
             )
+            aggregate_type = (
+                spec.aggregate_type
+                or (
+                    source.aggregate_type
+                    if source is not None and source.metric == metric
+                    else metric_definition(metric).default_aggregate
+                )
+            )
+            self._validate_metric_aggregate(metric, aggregate_type)
             operand = AnalysisOperand(
                 operand_id=spec.operand_id,
                 metric=metric,
-                aggregate_type=(
-                    spec.aggregate_type
-                    or (source.aggregate_type if source is not None else "sum")
-                ),
+                aggregate_type=aggregate_type,
                 entities=entities,
                 periods=periods,
                 unit=spec.unit if spec.unit is not None else (source.unit if source else None),
             )
+            operand = self._bind_metric_article(operand)
+            if any(
+                item.entity.entity_type in {"balance", "article"}
+                for item in operand.entities
+            ):
+                operand = operand.model_copy(update={"unit": "тыс. м3"}, deep=True)
             if spec.reverse_direction:
                 operand = self._resolve_reverse_operand(operand)
             operands.append(operand)
@@ -358,8 +482,8 @@ class InterpretationMutationCompiler:
             operation = Operation.AGGREGATE
         comparison = graph.comparison
         if operation == Operation.COMPARE and comparison is None:
-            if len(operands) != 2:
-                raise ContextBindingError("compare graph requires exactly two operands")
+            if len(operands) < 2:
+                raise ContextBindingError("compare graph requires at least two operands")
             comparison = ComparisonSpec(
                 baseline_operand_id=operands[0].operand_id,
                 target_operand_id=operands[1].operand_id,
@@ -372,6 +496,8 @@ class InterpretationMutationCompiler:
                 grouping=deepcopy(graph.grouping),
                 grain=graph.grain,
                 comparison=comparison,
+                formula=graph.formula,
+                ranking=graph.ranking,
             )
         except Exception as exc:
             raise ContextBindingError(f"context intent graph is invalid: {exc}") from exc
@@ -383,6 +509,103 @@ class InterpretationMutationCompiler:
         )
 
     @staticmethod
+    def _normalize_graph_shape(graph, mentions: Sequence[EntityMention]):
+        """Complete only graph shapes proved by ordered current-turn evidence.
+
+        The interpreter describes semantic intent, while the deterministic
+        extractor is authoritative for exact current-message entity spans.  A
+        homogeneous GEO comparison with one model operand and N distinct GEO
+        tags has one unambiguous expansion: the same scalar measure for every
+        GEO in mention order.  No heterogeneous metric or role assignment is
+        guessed here.
+        """
+        if graph.operation == Operation.COMPARE_PERIODS:
+            # Qwen may express the same scalar source twice, one explicit
+            # period per operand, even though the canonical contract is one
+            # operand plus two global periods. Collapse only when the source
+            # and scalar semantics are identical and both periods are exact.
+            if len(graph.operands) == 2:
+                first, second = graph.operands
+                same_source = (
+                    first.source_operand_handle
+                    and first.source_operand_handle == second.source_operand_handle
+                )
+                same_semantics = (
+                    first.metric == second.metric
+                    and first.aggregate_type == second.aggregate_type
+                    and first.entity_handles == second.entity_handles
+                    and first.entity_mentions == second.entity_mentions
+                )
+                if (
+                    same_source
+                    and same_semantics
+                    and len(first.periods) == 1
+                    and len(second.periods) == 1
+                ):
+                    operand = first.model_copy(
+                        update={
+                            "period_mode": "clear",
+                            "period_handles": [],
+                            "periods": [],
+                        },
+                        deep=True,
+                    )
+                    return graph.model_copy(
+                        update={
+                            "operands": [operand],
+                            "period_handles": [],
+                            "periods": [
+                                first.periods[0].model_copy(deep=True),
+                                second.periods[0].model_copy(deep=True),
+                            ],
+                            "comparison": None,
+                        },
+                        deep=True,
+                    )
+            if len(graph.operands) == 1 and len(graph.periods) == 2:
+                return graph.model_copy(update={"comparison": None}, deep=True)
+            return graph
+        if graph.operation != Operation.COMPARE or len(graph.operands) != 1:
+            return graph
+        destinations: list[EntityMention] = []
+        seen: set[tuple[str, str]] = set()
+        for mention in mentions:
+            if mention.role != "destination":
+                continue
+            key = (mention.text.strip().casefold(), mention.role)
+            if key in seen:
+                continue
+            seen.add(key)
+            destinations.append(mention.model_copy(deep=True))
+        if len(destinations) < 2:
+            return graph
+        template = graph.operands[0]
+        base_id = template.operand_id
+        operands = []
+        for index, mention in enumerate(destinations, start=1):
+            operands.append(
+                template.model_copy(
+                    update={
+                        "operand_id": f"{base_id}_{index}",
+                        "entity_mode": "replace",
+                        "entity_handles": [],
+                        "entity_mentions": [mention],
+                    },
+                    deep=True,
+                )
+            )
+        return graph.model_copy(
+            update={
+                "operands": operands,
+                "comparison": ComparisonSpec(
+                    baseline_operand_id=operands[0].operand_id,
+                    target_operand_id=operands[1].operand_id,
+                ),
+            },
+            deep=True,
+        )
+
+    @staticmethod
     def _reconcile_current_mentions(
         specs,
         mentions: Sequence[EntityMention],
@@ -391,6 +614,40 @@ class InterpretationMutationCompiler:
         """Attach deterministic current-message tags when the graph omitted them."""
         if not mentions or not specs:
             return
+        # Current-turn evidence is authoritative. When the model preserves the
+        # operand metrics but omits textual mentions, materialize only a
+        # uniquely determined metric topology from role-tagged spans.
+        role_mentions: dict[str, list[EntityMention]] = {}
+        for mention in mentions:
+            role_mentions.setdefault(mention.role, []).append(mention)
+        for spec in specs:
+            if spec.entity_handles or spec.entity_mentions:
+                continue
+            selected: list[EntityMention] = []
+            if spec.metric == "incoming":
+                if len(role_mentions.get("source", [])) == 1 and len(
+                    role_mentions.get("destination", [])
+                ) == 1:
+                    selected = [
+                        role_mentions["source"][0],
+                        role_mentions["destination"][0],
+                    ]
+            elif spec.metric == "distribution":
+                if len(role_mentions.get("balance", [])) == 1:
+                    selected = [role_mentions["balance"][0]]
+                elif len(role_mentions.get("source", [])) == 1 and len(
+                    role_mentions.get("destination", [])
+                ) == 1:
+                    selected = [
+                        role_mentions["source"][0],
+                        role_mentions["destination"][0],
+                    ]
+            elif len(role_mentions.get("balance", [])) == 1:
+                selected = [role_mentions["balance"][0]]
+            if selected:
+                spec.entity_mode = "replace"
+                spec.entity_handles = []
+                spec.entity_mentions = list(selected)
         if len(mentions) == len(specs) and len(specs) > 1:
             for spec, mention in zip(specs, mentions):
                 spec.entity_mode = "replace"
@@ -530,6 +787,8 @@ class InterpretationMutationCompiler:
         handles: Sequence[str],
         mentions: Sequence[EntityMention],
         index: dict[str, OperandEntityRef],
+        *,
+        metric: str | None = None,
     ) -> list[OperandEntityRef]:
         selected: list[OperandEntityRef] = []
         for handle in handles:
@@ -537,7 +796,10 @@ class InterpretationMutationCompiler:
             if reference is None:
                 raise ContextBindingError(f"unknown entity handle: {handle}")
             selected.append(reference.model_copy(deep=True))
-        selected.extend(self.binder.bind(mentions))
+        inherited_scope = [*inherited, *selected]
+        selected.extend(
+            self.binder.bind_operand(mentions, inherited_scope, metric=metric)
+        )
         if mode == "inherit":
             if selected:
                 raise ContextBindingError("inherit entity mode cannot select entities")
@@ -556,6 +818,61 @@ class InterpretationMutationCompiler:
         for item in selected:
             by_role[item.role] = item
         return list(by_role.values())
+
+    def _bind_metric_article(self, operand: AnalysisOperand) -> AnalysisOperand:
+        """Add only a uniquely curated metric article inside an explicit balance."""
+        definition = metric_definition(operand.metric)
+        if not definition.canonical_articles:
+            return operand
+        by_role = {item.role: item for item in operand.entities}
+        if "article" in by_role or "balance" not in by_role:
+            return operand
+        balance_id = _metadata_id(by_role["balance"].entity.entity_id)
+        if not isinstance(balance_id, int):
+            return operand
+        articles = self.binder.registry.articles_for_balance(balance_id)
+        for canonical_name in definition.canonical_articles:
+            matches = [
+                item
+                for item in articles
+                if str(item.canonical_name).strip().casefold()
+                == canonical_name.casefold()
+            ]
+            root_matches = [
+                item
+                for item in matches
+                if tuple(str(part).strip().casefold() for part in item.path)
+                == (canonical_name.casefold(),)
+            ]
+            if len(root_matches) == 1:
+                matches = root_matches
+            if len(matches) == 1:
+                article = matches[0]
+                return operand.model_copy(
+                    update={
+                        "entities": [
+                            *operand.entities,
+                            OperandEntityRef(
+                                role="article",
+                                entity=CanonicalEntityRef(
+                                    entity_id=str(article.article_id),
+                                    entity_type="article",
+                                    display_name=article.canonical_name,
+                                ),
+                            ),
+                        ]
+                    },
+                    deep=True,
+                )
+        return operand
+
+    @staticmethod
+    def _validate_metric_aggregate(metric: str, aggregate_type: str) -> None:
+        definition = metric_definition(metric)
+        if aggregate_type not in definition.allowed_aggregates:
+            raise ContextBindingError(
+                f"aggregate {aggregate_type!r} is not valid for metric {metric!r}"
+            )
 
     @staticmethod
     def _graph_periods(
@@ -718,6 +1035,11 @@ class InterpretationMutationCompiler:
         output: list[AnalysisOperand] = []
         for index, metric in enumerate(metrics):
             template = existing[min(index, len(existing) - 1)] if existing else None
+            aggregate_type = (
+                template.aggregate_type
+                if template is not None and template.metric == metric
+                else metric_definition(metric).default_aggregate
+            )
             output.append(
                 AnalysisOperand(
                     operand_id=(
@@ -726,7 +1048,7 @@ class InterpretationMutationCompiler:
                         else f"operand_{index + 1}"
                     ),
                     metric=metric,
-                    aggregate_type=template.aggregate_type if template else "sum",
+                    aggregate_type=aggregate_type,
                     entities=deepcopy(entities),
                     periods=deepcopy(template.periods) if template else [],
                     unit=template.unit if template else None,

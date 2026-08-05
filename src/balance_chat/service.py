@@ -103,6 +103,29 @@ class BalanceChatService:
         )
         return state
 
+    def record_feedback(
+        self,
+        *,
+        session_id: str,
+        request_id: str,
+        rating: str,
+        comment: str | None = None,
+    ) -> dict[str, Any]:
+        state = self.store.get(session_id)
+        if rating not in {"helpful", "unhelpful"}:
+            raise ValueError("unsupported feedback rating")
+        log_event(
+            LOGGER,
+            logging.INFO,
+            "turn_feedback_recorded",
+            session_id=session_id,
+            request_id=request_id,
+            revision=state.revision,
+            rating=rating,
+            comment=(str(comment).strip()[:1000] if comment else None),
+        )
+        return {"status": "ok", "accepted": True}
+
     def delete_session(self, session_id: str) -> dict[str, Any]:
         with self._session_lock(session_id):
             deleted = bool(self.store.delete(session_id))
@@ -282,6 +305,11 @@ class BalanceChatService:
                 execution=processed.diagnostics.get("execution"),
                 summary=processed.diagnostics.get("summary"),
                 result_memory=processed.diagnostics.get("result_memory"),
+                result_fingerprint=(
+                    processed.result_reference.resolved_plan_hash
+                    if processed.result_reference is not None
+                    else None
+                ),
                 elapsed_ms=int((perf_counter() - started) * 1000),
             )
             frame = (

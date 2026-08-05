@@ -159,6 +159,28 @@ def test_interpreter_receives_pending_clarification_and_typed_answer() -> None:
     assert model_input["context"]["pending_clarification"]["turn_id"] == "turn-1"
 
 
+def test_interpreter_receives_bounded_evidence_validation_feedback() -> None:
+    backend = StubBackend(_decision())
+
+    UnifiedInterpreter(backend).interpret(
+        message="сравни с летом",
+        state=_state(),
+        capabilities=["compare_periods"],
+        domain_hints=[],
+        metadata_bundle_version="2026.07.6",
+        validation_feedback=[
+            "operand_entity_scope_missing:op1",
+            "explicit_business_not_bound:ТГ Томск",
+        ],
+    )
+
+    model_input = json.loads(backend.payload["messages"][1]["content"])
+    assert model_input["validation_feedback"] == [
+        "operand_entity_scope_missing:op1",
+        "explicit_business_not_bound:ТГ Томск",
+    ]
+
+
 def test_empty_set_directives_are_canonicalized_to_explicit_clear() -> None:
     raw = _decision()
     raw["draft"]["grouping"] = {"action": "set", "values": []}

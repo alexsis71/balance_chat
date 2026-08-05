@@ -22,6 +22,8 @@ class Operation(StrEnum):
     COMPARE = "compare"
     COMPARE_PERIODS = "compare_periods"
     GROUP = "group"
+    RANK = "rank"
+    CALCULATE = "calculate"
     MULTI_STEP = "multi_step"
 
 
@@ -115,6 +117,21 @@ class ComparisonSpec(ContractModel):
     percent_base: Literal["baseline"] = "baseline"
 
 
+class FormulaSpec(ContractModel):
+    operator: Literal["delta", "ratio", "percent_of", "percent_change"]
+    numerator_operand_id: str
+    denominator_operand_id: str
+    zero_division: Literal["no_data"] = "no_data"
+
+
+class RankingSpec(ContractModel):
+    direction: Literal["max", "min"]
+    grain: Literal["day", "month", "quarter", "year"]
+    bucket_aggregate: Literal["sum", "avg", "min", "max", "first", "last"]
+    limit: int = Field(default=1, ge=1, le=100)
+    return_dimension: Literal["period", "date", "entity"] = "period"
+
+
 class AnalysisIntent(ContractModel):
     intent_id: str = Field(default_factory=lambda: str(uuid4()))
     operation: Operation
@@ -123,32 +140,59 @@ class AnalysisIntent(ContractModel):
     grouping: list[GroupingSpec] = Field(default_factory=list)
     grain: Literal["day", "month", "quarter", "year", "total"] | None = None
     comparison: ComparisonSpec | None = None
+    formula: FormulaSpec | None = None
+    ranking: RankingSpec | None = None
 
     @model_validator(mode="after")
     def validate_shape(self) -> "AnalysisIntent":
         operand_ids = [operand.operand_id for operand in self.operands]
         if len(operand_ids) != len(set(operand_ids)):
             raise ValueError("operand_id must be unique within an intent")
+        if self.operation != Operation.COMPARE and self.comparison is not None:
+            raise ValueError("comparison semantics are valid only for compare")
         if self.comparison:
+            if (
+                self.comparison.baseline_operand_id
+                == self.comparison.target_operand_id
+            ):
+                raise ValueError("comparison requires two distinct operands")
             referenced = {
                 self.comparison.baseline_operand_id,
                 self.comparison.target_operand_id,
             }
             if not referenced.issubset(set(operand_ids)):
                 raise ValueError("comparison must reference existing operands")
-        if self.operation == Operation.COMPARE and len(self.operands) != 2:
-            raise ValueError("compare requires exactly two operands")
+        if self.operation == Operation.COMPARE and len(self.operands) < 2:
+            raise ValueError("compare requires at least two operands")
         if self.operation == Operation.COMPARE_PERIODS:
             if len(self.operands) != 1:
                 raise ValueError("compare_periods requires exactly one operand")
             if len(self.periods) != 2:
                 raise ValueError("compare_periods requires exactly two global periods")
-        if self.operation != Operation.COMPARE and self.comparison is not None:
-            raise ValueError("comparison semantics are valid only for compare")
         if self.operation == Operation.GROUP and not self.grouping:
             raise ValueError("group requires a canonical grouping specification")
         if self.operation != Operation.GROUP and self.grouping:
             raise ValueError("grouping specification is valid only for group")
+        if self.operation == Operation.CALCULATE:
+            if self.formula is None:
+                raise ValueError("calculate requires a formula")
+            formula_operands = {
+                self.formula.numerator_operand_id,
+                self.formula.denominator_operand_id,
+            }
+            if not formula_operands.issubset(set(operand_ids)):
+                raise ValueError("formula must reference existing operands")
+            if len(formula_operands) != 2:
+                raise ValueError("formula requires two distinct operands")
+        elif self.formula is not None:
+            raise ValueError("formula semantics are valid only for calculate")
+        if self.operation == Operation.RANK:
+            if self.ranking is None:
+                raise ValueError("rank requires ranking semantics")
+            if len(self.operands) != 1:
+                raise ValueError("rank requires exactly one operand")
+        elif self.ranking is not None:
+            raise ValueError("ranking semantics are valid only for rank")
         return self
 
 
@@ -427,6 +471,8 @@ class ContextIntentGraph(ContractModel):
     grouping: list[GroupingSpec] = Field(default_factory=list)
     grain: Literal["day", "month", "quarter", "year", "total"] | None = None
     comparison: ComparisonSpec | None = None
+    formula: FormulaSpec | None = None
+    ranking: RankingSpec | None = None
 
 
 class GroupingDirective(ContractModel):
@@ -506,4 +552,22 @@ def interpretation_decision_json_schema(
     schema["required"] = list(InterpretationDecision.model_fields)
     if allowed_modes:
         schema["properties"]["mode"] = {"enum": list(allowed_modes), "type": "string"}
+        if "standalone" in allowed_modes and "mutation" not in allowed_modes:
+            # A first turn has no authoritative context to mutate. Keeping the
+            # legacy draft branch in the structured-output schema lets the
+            # model combine mode=standalone with invalid clear/reference
+            # directives even though the runtime contract rejects that pair.
+            schema["properties"]["draft"] = {"type": "null"}
+            graph = schema.get("$defs", {}).get("ContextIntentGraph", {})
+            operand = schema.get("$defs", {}).get("ContextOperandDraft", {})
+            graph_properties = graph.get("properties", {})
+            operand_properties = operand.get("properties", {})
+            for field in ("period_handles",):
+                if isinstance(graph_properties.get(field), dict):
+                    graph_properties[field]["maxItems"] = 0
+            for field in ("entity_handles", "period_handles"):
+                if isinstance(operand_properties.get(field), dict):
+                    operand_properties[field]["maxItems"] = 0
+            if isinstance(operand_properties.get("source_operand_handle"), dict):
+                operand_properties["source_operand_handle"] = {"type": "null"}
     return schema

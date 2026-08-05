@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Any, Callable
+from typing import Any, Callable, Literal
 import hmac
 
 from fastapi import FastAPI, HTTPException, Request
@@ -31,6 +31,13 @@ class ChatTurnRequest(ApiModel):
     execute_db: bool = False
     clarification: ClarificationAnswer | None = None
     request_id: str | None = Field(default=None, max_length=128)
+
+
+class ChatFeedbackRequest(ApiModel):
+    session_id: str = Field(min_length=1, max_length=64)
+    request_id: str = Field(min_length=1, max_length=128)
+    rating: Literal["helpful", "unhelpful"]
+    comment: str | None = Field(default=None, max_length=1000)
 
 
 def create_app(
@@ -120,6 +127,20 @@ def create_app(
             raise HTTPException(404, detail={"code": "session_not_found"}) from exc
         except TurnProcessingError as exc:
             raise HTTPException(422, detail={"code": exc.code, "message": str(exc)}) from exc
+        except ContextStoreError as exc:
+            raise HTTPException(503, detail={"code": "context_store_unavailable"}) from exc
+
+    @app.post("/api/v2/chat/feedback")
+    def record_feedback(request: ChatFeedbackRequest) -> dict[str, Any]:
+        try:
+            return service.record_feedback(
+                session_id=request.session_id,
+                request_id=request.request_id,
+                rating=request.rating,
+                comment=request.comment,
+            )
+        except SessionNotFound as exc:
+            raise HTTPException(404, detail={"code": "session_not_found"}) from exc
         except ContextStoreError as exc:
             raise HTTPException(503, detail={"code": "context_store_unavailable"}) from exc
 

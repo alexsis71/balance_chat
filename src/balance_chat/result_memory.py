@@ -98,6 +98,17 @@ class PipelineResultMemoryAdapter:
             for task in result.task_results
             if task.fact is not None
         ]
+        if result.derived is not None:
+            facts.append(
+                {
+                    "kind": "derived",
+                    "operator": result.derived.operator,
+                    "value": str(result.derived.value),
+                    "unit": result.derived.unit,
+                    "numerator_value": str(result.derived.numerator_value),
+                    "denominator_value": str(result.derived.denominator_value),
+                }
+            )
         if not facts:
             raise ResultMemoryError("successful result has no deterministic facts")
         write = ResultMemoryWrite(
@@ -250,6 +261,17 @@ def _resolved_plan(intent: AnalysisIntent) -> dict[str, Any]:
 
 
 def _deterministic_summary(result: NativeExecutionResult) -> dict[str, str]:
+    if result.derived is not None:
+        return {
+            "title": "Сохранённый производный показатель",
+            "text": f"{result.derived.operator}={result.derived.value} {result.derived.unit}",
+        }
+    if result.ranking is not None and result.ranking.selected:
+        selected = result.ranking.selected[0]
+        return {
+            "title": "Сохранённый экстремум",
+            "text": f"{result.ranking.direction}={selected.value} {selected.unit}",
+        }
     if result.comparison is None:
         return {"title": "Сохранённый результат", "text": " ".join(
             f"{item.fact.label}: {item.fact.value} {item.fact.unit}"

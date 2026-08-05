@@ -31,7 +31,7 @@ class UnifiedInterpreter:
         backend: InterpretationBackend,
         *,
         prompt_path: str | Path | None = None,
-        max_capabilities: int = 32,
+        max_capabilities: int = 64,
         max_domain_hints: int = 24,
         conversation_window_size: int = DEFAULT_WINDOW_SIZE,
     ) -> None:
@@ -52,6 +52,7 @@ class UnifiedInterpreter:
         metadata_bundle_version: str,
         result_references: Sequence[Mapping[str, Any]] = (),
         current_message_tags: Sequence[Mapping[str, Any]] = (),
+        validation_feedback: Sequence[str] = (),
         clarification_answer: Mapping[str, Any] | None = None,
         request_id: str | None = None,
     ) -> InterpretationDecision:
@@ -74,6 +75,7 @@ class UnifiedInterpreter:
                             "domain_hints": list(domain_hints)[: self.max_domain_hints],
                             "result_references": list(result_references)[:8],
                             "current_message_tags": list(current_message_tags)[:16],
+                            "validation_feedback": list(validation_feedback)[:16],
                             "clarification_answer": clarification_answer,
                             "metadata_bundle_version": metadata_bundle_version,
                         },
@@ -124,6 +126,7 @@ class UnifiedInterpreter:
             raise InterpretationError("interpreter changed metadata bundle version")
         _reject_runtime_ids(decision)
         graph = decision.intent_graph
+        graph_payload = graph.model_dump(mode="json") if graph is not None else None
         log_event(
             LOGGER,
             logging.INFO,
@@ -139,6 +142,28 @@ class UnifiedInterpreter:
             confidence=decision.confidence,
             contract_shape="intent_graph" if graph is not None else "legacy_draft",
             operation=(graph.operation.value if graph is not None else None),
+            semantic_graph_sha256=(
+                hashlib.sha256(
+                    json.dumps(
+                        graph_payload,
+                        ensure_ascii=False,
+                        sort_keys=True,
+                        separators=(",", ":"),
+                    ).encode("utf-8")
+                ).hexdigest()
+                if graph_payload is not None
+                else None
+            ),
+            formula=(
+                graph.formula.model_dump(mode="json")
+                if graph is not None and graph.formula is not None
+                else None
+            ),
+            ranking=(
+                graph.ranking.model_dump(mode="json")
+                if graph is not None and graph.ranking is not None
+                else None
+            ),
             source_operand_handles=(
                 [item.source_operand_handle for item in graph.operands]
                 if graph is not None else []
@@ -181,6 +206,13 @@ class HybridInterpretationPolicy:
         r"\b(?:их|это|этот|эта|эти|предыдущ\w*|перв\w*|втор\w*|обратно|наоборот)\b",
         re.IGNORECASE,
     )
+    _DERIVED_OR_RANKING = re.compile(
+        r"\b(?:процент|дол[яию]|отношени\w*|удельн\w*|"
+        r"в\s+ка(?:кой|ком)\s+(?:день|месяц|квартал|год)\w*\s+.*"
+        r"(?:максим|миним|наибольш|наименьш)|"
+        r"(?:максим|миним|наибольш|наименьш)\w*\s+.*\s+по\s+(?:дням|месяцам|кварталам|годам))\b",
+        re.IGNORECASE,
+    )
 
     def should_invoke(
         self,
@@ -190,7 +222,7 @@ class HybridInterpretationPolicy:
         likely_typo: bool = False,
         clarification_answer: bool = False,
     ) -> bool:
-        if likely_typo or clarification_answer:
+        if likely_typo or clarification_answer or self._DERIVED_OR_RANKING.search(message):
             return True
         return state.active_dialog_scope is not None
 

@@ -4,10 +4,14 @@ from balance_chat.contracts import (
     AnalysisIntent,
     AnalysisOperand,
     ComparisonSpec,
+    FormulaSpec,
     Operation,
     PeriodRef,
+    RankingSpec,
 )
 from balance_chat.planning import NativeMultiOperandPlanner
+from balance_chat.planning import PlanningError
+import pytest
 
 
 def _period(month: int) -> PeriodRef:
@@ -75,3 +79,57 @@ def test_operand_specific_period_overrides_global_period() -> None:
 
     assert plan.tasks[0].scalar_intent.periods[0].date_from.isoformat() == "2025-03-01"
     assert plan.tasks[1].scalar_intent.periods[0].date_from.isoformat() == "2025-06-01"
+
+
+def test_percent_formula_becomes_two_scalar_tasks_with_typed_semantics() -> None:
+    intent = AnalysisIntent(
+        operation=Operation.CALCULATE,
+        operands=[
+            AnalysisOperand(operand_id="needs", metric="own_needs"),
+            AnalysisOperand(operand_id="distribution", metric="distribution"),
+        ],
+        periods=[_period(5)],
+        formula=FormulaSpec(
+            operator="percent_of",
+            numerator_operand_id="needs",
+            denominator_operand_id="distribution",
+        ),
+    )
+
+    plan = NativeMultiOperandPlanner().plan(intent)
+
+    assert [task.operand_id for task in plan.tasks] == ["needs", "distribution"]
+    assert all(task.scalar_intent.operation == Operation.AGGREGATE for task in plan.tasks)
+    assert plan.formula.operator == "percent_of"
+
+
+def test_month_rank_requests_one_bucket_series() -> None:
+    intent = AnalysisIntent(
+        operation=Operation.RANK,
+        operands=[AnalysisOperand(operand_id="incoming", metric="incoming")],
+        periods=[PeriodRef(date_from="2025-01-01", date_to="2026-01-01")],
+        ranking=RankingSpec(
+            direction="max",
+            grain="month",
+            bucket_aggregate="sum",
+        ),
+    )
+
+    plan = NativeMultiOperandPlanner().plan(intent)
+
+    assert len(plan.tasks) == 1
+    assert plan.tasks[0].series_grain == "month"
+    assert plan.tasks[0].bucket_aggregate == "sum"
+    assert plan.tasks[0].scalar_intent.operation == Operation.SHOW
+
+
+def test_stock_rank_rejects_sum_bucket_semantics() -> None:
+    intent = AnalysisIntent(
+        operation=Operation.RANK,
+        operands=[AnalysisOperand(operand_id="stock", metric="stock", aggregate_type="last")],
+        periods=[PeriodRef(date_from="2025-01-01", date_to="2026-01-01")],
+        ranking=RankingSpec(direction="max", grain="month", bucket_aggregate="sum"),
+    )
+
+    with pytest.raises(PlanningError, match="invalid for metric"):
+        NativeMultiOperandPlanner().plan(intent)

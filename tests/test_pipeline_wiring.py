@@ -33,6 +33,9 @@ from balance_chat.processor import (
     _deterministic_period_mutation,
     _distribution_own_consumers_mentions,
     _native_summary_envelope,
+    _comparison_contract_summary,
+    _period_comparison_contract_summary,
+    _ranking_contract_summary,
     _peer_destination_mentions,
     _public_pipeline_result,
     _standalone_translation_error,
@@ -120,6 +123,37 @@ def test_rank_extremum_is_translated_to_typed_aggregate() -> None:
     assert intent.operands[0].entities[-1].entity.display_name == "ТГ Москва"
     assert intent.periods[0].date_from.isoformat() == "2025-04-01"
     assert intent.periods[0].date_to.isoformat() == "2025-07-01"
+
+
+def test_month_bucket_rank_is_translated_to_typed_aggregate() -> None:
+    envelope = _envelope()
+    plan = envelope["debug"]["resolved_plan"]
+    plan["_intent"].update(
+        {
+            "query": "в каком месяце был максимум поступления в ТГ Томск от ТГ Сургут в 2025",
+            "intent": "rank",
+            "metric": "incoming",
+            "aggregate_type": "max",
+            "date_from": "2025-01-01",
+            "date_to": "2026-01-01",
+            "period_grain": "month",
+        }
+    )
+    plan["operation"] = "show"
+    plan["expressions"][0].update(
+        {
+            "canonical_metric": "incoming",
+            "aggregate_type": "sum",
+            "geo": [],
+            "article": {"id": "ART:1", "label": "от ТГ Сургут"},
+        }
+    )
+
+    intent = PipelineEnvelopeTranslator().intent(envelope)
+
+    assert intent.operation == Operation.AGGREGATE
+    assert intent.operands[0].aggregate_type == "max"
+    assert intent.grain == "month"
 
 
 def test_multi_query_is_preserved_as_explicit_composite_attempt() -> None:
@@ -581,6 +615,48 @@ def test_extremum_fact_preserves_winning_date() -> None:
     assert fact.periods == [{"date_from": "2025-05-01", "date_to": "2025-06-01"}]
 
 
+def test_public_month_bucket_rank_returns_winning_month_only() -> None:
+    envelope = _envelope()
+    plan = envelope["debug"]["resolved_plan"]
+    plan["_intent"].update(
+        {
+            "query": "в каком месяце был максимум поступления в ТГ Томск от ТГ Сургут в 2025",
+            "intent": "rank",
+            "metric": "incoming",
+            "aggregate_type": "max",
+            "period_grain": "month",
+        }
+    )
+    plan["operation"] = "show"
+    envelope["rows"] = [
+        {
+            "date_from": "2025-01-01",
+            "date_to": "2025-02-01",
+            "fact_value": "10",
+            "article_scope": "от ТГ Сургут",
+        },
+        {
+            "date_from": "2025-12-01",
+            "date_to": "2026-01-01",
+            "fact_value": "25",
+            "article_scope": "от ТГ Сургут",
+        },
+    ]
+    envelope["warnings"] = [
+        "unified normalized additive month ranking to bucket sums",
+        "unified analyzer disagreement detected; canonical intent selected by slot confidence",
+    ]
+
+    result = _public_pipeline_result(envelope)
+
+    assert len(result["rows"]) == 1
+    assert result["rows"][0]["date_from"] == "2025-12-01"
+    assert "декабрь 2025" in result["summary"]["text"]
+    assert "25,00 тыс. м3" in result["summary"]["text"]
+    assert result["summary"]["generated_by"] == "deterministic_contract"
+    assert result["warnings"] == []
+
+
 class RawRuntime:
     def execute_raw(self, *_args, **_kwargs):
         return _envelope()
@@ -935,6 +1011,153 @@ def test_extremum_comparison_fallback_uses_typed_percent_base_and_dates() -> Non
     assert "114\u00a0023,77" in summary["text"]
     assert "31,00%" in summary["text"]
     assert "44,92%" not in summary["text"]
+
+
+def test_comparison_contract_summary_uses_target_minus_baseline_direction() -> None:
+    from balance_chat.execution import ComparisonMember, ComparisonSetResult
+
+    native = NativeExecutionResult(
+        operation=Operation.COMPARE,
+        status="ok",
+        task_results=[],
+        comparison_set=ComparisonSetResult(
+            baseline_task_id="task_1",
+            members=[
+                ComparisonMember(
+                    task_id="task_1",
+                    operand_id="supply",
+                    label="Казань",
+                    value=Decimal("157697"),
+                    delta_from_baseline=Decimal("0"),
+                    percent_change_from_baseline=Decimal("0"),
+                    unit="тыс. м3",
+                ),
+                ComparisonMember(
+                    task_id="task_2",
+                    operand_id="consumption",
+                    label="Собственные потребители",
+                    value=Decimal("1151926"),
+                    delta_from_baseline=Decimal("994229"),
+                    percent_change_from_baseline=Decimal("630.4679"),
+                    unit="тыс. м3",
+                ),
+            ],
+        ),
+    )
+    intent = AnalysisIntent(
+        operation=Operation.COMPARE,
+        operands=[
+            AnalysisOperand(operand_id="supply", metric="distribution"),
+            AnalysisOperand(operand_id="consumption", metric="consumption"),
+        ],
+    )
+
+    summary = _comparison_contract_summary(native, intent)
+
+    assert "выше" in summary["text"]
+    assert "994\u00a0229,00" in summary["text"]
+    assert summary["metrics"]["delta"] == "994229"
+    assert summary["generated_by"] == "deterministic_contract"
+
+
+def test_period_comparison_summary_uses_exclusive_end_and_canonical_delta() -> None:
+    from balance_chat.execution import ComparisonResult
+
+    native = NativeExecutionResult(
+        operation=Operation.COMPARE_PERIODS,
+        status="ok",
+        task_results=[
+            TaskExecutionResult(
+                task_id="period_1",
+                status="ok",
+                fact=ScalarFact(
+                    task_id="period_1",
+                    value=Decimal("3030107.675"),
+                    unit="тыс. м3",
+                    label="Самарская обл",
+                    periods=[{"date_from": "2025-03-01", "date_to": "2025-06-01"}],
+                ),
+                envelope={"status": "ok"},
+            ),
+            TaskExecutionResult(
+                task_id="period_2",
+                status="ok",
+                fact=ScalarFact(
+                    task_id="period_2",
+                    value=Decimal("2052445.503"),
+                    unit="тыс. м3",
+                    label="Самарская обл",
+                    periods=[{"date_from": "2025-06-01", "date_to": "2025-09-01"}],
+                ),
+                envelope={"status": "ok"},
+            ),
+        ],
+        comparison=ComparisonResult(
+            baseline_task_id="period_1",
+            target_task_id="period_2",
+            baseline_value=Decimal("3030107.675"),
+            target_value=Decimal("2052445.503"),
+            delta=Decimal("-977662.172"),
+            percent_change=Decimal("-32.2649"),
+            unit="тыс. м3",
+        ),
+    )
+
+    summary = _period_comparison_contract_summary(
+        native,
+        AnalysisIntent(
+            operation=Operation.COMPARE_PERIODS,
+            operands=[AnalysisOperand(operand_id="supply", metric="distribution")],
+            periods=[
+                PeriodRef(date_from="2025-03-01", date_to="2025-06-01"),
+                PeriodRef(date_from="2025-06-01", date_to="2025-09-01"),
+            ],
+        ),
+    )
+
+    assert "01.03.2025–31.05.2025" in summary["text"]
+    assert "01.06.2025–31.08.2025" in summary["text"]
+    assert "ниже" in summary["text"]
+    assert summary["metrics"]["delta"] == "-977662.172"
+
+
+def test_ranking_summary_formats_day_and_month_for_public_output() -> None:
+    from balance_chat.execution import RankingResult
+
+    def summary(grain: str, day: str):
+        fact = ScalarFact(
+            task_id="rank_source",
+            value=Decimal("12"),
+            unit="тыс. м3",
+            label="Показатель",
+            periods=[{"date_from": day, "date_to": day}],
+        )
+        native = NativeExecutionResult(
+            operation=Operation.RANK,
+            status="ok",
+            task_results=[],
+            ranking=RankingResult(
+                direction="max",
+                grain=grain,
+                selected=[fact],
+                source_row_count=1,
+            ),
+        )
+        return _ranking_contract_summary(
+            native,
+            AnalysisIntent(
+                operation=Operation.RANK,
+                operands=[AnalysisOperand(operand_id="ranked", metric="incoming")],
+                ranking={
+                    "direction": "max",
+                    "grain": grain,
+                    "bucket_aggregate": "sum",
+                },
+            ),
+        )
+
+    assert "26.08.2025" in summary("day", "2025-08-26")["text"]
+    assert "декабрь 2025" in summary("month", "2025-12-01")["text"]
 
 
 def test_standalone_processor_uses_current_resolved_plan_without_llm() -> None:
@@ -1407,6 +1630,55 @@ def test_current_geo_tagger_does_not_replace_qualified_balance_and_article() -> 
     assert qualified == []
     assert [item.geo_id for item in standalone] == ["moscow"]
     assert [item.geo_id for item in mixed_roles] == ["novgorod"]
+
+
+def test_single_qualified_business_is_balance_even_after_preposition() -> None:
+    balance = SimpleNamespace(
+        balance_id=10,
+        canonical_name="ГП ТГ Москва суточный баланс",
+    )
+    processor = object.__new__(PipelineV2TurnProcessor)
+    processor._normalize_lemmas = _test_normalize
+    processor.registry = SimpleNamespace(
+        balance=lambda value: balance if "москва" in _test_normalize(value) else None
+    )
+
+    mentions = processor._tagged_business_entity_mentions(
+        "какой процент собственных нужд от распределения в ГП ТГ Москва"
+    )
+
+    assert [(item.text, item.role) for item in mentions] == [
+        ("ГП ТГ Москва суточный баланс", "balance")
+    ]
+
+
+def test_distinct_qualified_businesses_keep_directional_roles() -> None:
+    tomsk = SimpleNamespace(
+        balance_id=10,
+        canonical_name="ГП ТГ Томск суточный баланс",
+    )
+    surgut = SimpleNamespace(
+        balance_id=20,
+        canonical_name="ГП ТГ Сургут суточный баланс",
+    )
+    processor = object.__new__(PipelineV2TurnProcessor)
+    processor._normalize_lemmas = _test_normalize
+    processor.registry = SimpleNamespace(
+        balance=lambda value: (
+            tomsk if "томск" in _test_normalize(value)
+            else surgut if "сургут" in _test_normalize(value)
+            else None
+        )
+    )
+
+    mentions = processor._tagged_business_entity_mentions(
+        "покажи поступление в ТГ Томск от ТГ Сургут в 2025"
+    )
+
+    assert [(item.text, item.role) for item in mentions] == [
+        ("ТГ томск", "destination"),
+        ("ТГ сургут", "source"),
+    ]
 
 
 def test_business_first_geo_second_contract_is_used_on_first_turn() -> None:

@@ -60,7 +60,7 @@ function formatTime(value) {
   return new Intl.DateTimeFormat("ru-RU", {hour:"2-digit", minute:"2-digit"}).format(new Date(value));
 }
 function operationLabel(value) {
-  return ({show:"просмотр", aggregate:"агрегация", compare:"сравнение", compare_periods:"сравнение периодов", group:"группировка", clarification:"уточнение", chat:"чат"})[value] || value;
+  return ({show:"просмотр", aggregate:"агрегация", compare:"сравнение", compare_periods:"сравнение периодов", group:"группировка", rank:"ранжирование", calculate:"расчёт", clarification:"уточнение", chat:"чат"})[value] || value;
 }
 function periodLabel(period) {
   if (!period) return "—";
@@ -153,14 +153,16 @@ function resultHtml(item) {
   const text = summary.text || summary.answer || summary.description || "";
   const bullets = Array.isArray(summary.bullets) ? `<ul>${summary.bullets.map((value) => `<li>${escapeHtml(value)}</li>`).join("")}</ul>` : "";
   const comparison = comparisonHtml(result.comparison);
+  const comparisonSet = comparisonSetHtml(result.comparison_set);
+  const derived = derivedHtml(result.derived);
   const table = tableHtml(result);
   const visibleWarnings = (result.warnings || []).filter((value) => !isTechnicalWarning(value));
   const warnings = visibleWarnings.length ? `<div class="warnings">${visibleWarnings.map((value) => `<p>${escapeHtml(typeof value === "string" ? value : value.message || JSON.stringify(value))}</p>`).join("")}</div>` : "";
   const clarification = clarificationHtml(item.context?.pending_clarification);
   return `<div class="result-card">
     <div class="result-heading"><div><span class="result-status ${escapeHtml(status)}">${escapeHtml(operationLabel(result.operation || status))}</span><h2>${escapeHtml(title)}</h2></div></div>
-    ${text ? `<p class="summary-text">${escapeHtml(text)}</p>` : ""}${bullets}${comparison}${table}${warnings}${clarification}
-    <div class="result-actions"><button type="button" data-copy="${escapeHtml(item.id)}">Копировать</button>${hasRows(result) ? `<button type="button" data-csv="${escapeHtml(item.id)}">CSV</button>` : ""}</div>
+    ${text ? `<p class="summary-text">${escapeHtml(text)}</p>` : ""}${bullets}${derived}${comparisonSet}${comparison}${table}${warnings}${clarification}
+    <div class="result-actions"><button type="button" data-copy="${escapeHtml(item.id)}">Копировать</button>${hasRows(result) ? `<button type="button" data-csv="${escapeHtml(item.id)}">CSV</button>` : ""}${item.requestId ? `<button type="button" data-feedback="helpful" data-request-id="${escapeHtml(item.requestId)}">Полезно</button><button type="button" data-feedback="unhelpful" data-request-id="${escapeHtml(item.requestId)}">Не помогло</button>` : ""}</div>
   </div>`;
 }
 function comparisonHtml(comparison) {
@@ -169,6 +171,31 @@ function comparisonHtml(comparison) {
     <div><small>Базовое значение</small><strong>${numberLabel(comparison.baseline_value)}</strong><span>${escapeHtml(comparison.unit || "")}</span></div>
     <div><small>Сравниваемое</small><strong>${numberLabel(comparison.target_value)}</strong><span>${escapeHtml(comparison.unit || "")}</span></div>
     <div><small>Изменение</small><strong>${numberLabel(comparison.delta)}</strong><span>${comparison.percent_change == null ? "" : `${numberLabel(comparison.percent_change)} %`}</span></div>
+  </section>`;
+}
+function comparisonSetHtml(comparisonSet) {
+  if (!comparisonSet?.members?.length) return "";
+  const rows = comparisonSet.members.map((item) => ({
+    Показатель:item.label,
+    Значение:item.value,
+    Отклонение:item.delta_from_baseline,
+    Изменение:item.percent_change_from_baseline == null ? "—" : `${numberLabel(item.percent_change_from_baseline)} %`,
+    Единица:item.unit,
+  }));
+  return `<section class="table-section"><div class="section-title">Сравнение набора</div>${tableRowsHtml(rows)}</section>`;
+}
+function tableRowsHtml(rows) {
+  if (!rows.length) return "";
+  const columns = [...new Set(rows.flatMap((row) => Object.keys(row)))];
+  return `<div class="table-scroll"><table><thead><tr>${columns.map((key) => `<th>${escapeHtml(key)}</th>`).join("")}</tr></thead><tbody>${rows.map((row) => `<tr>${columns.map((key) => `<td>${escapeHtml(formatCell(row[key], key))}</td>`).join("")}</tr>`).join("")}</tbody></table></div>`;
+}
+function derivedHtml(derived) {
+  if (!derived) return "";
+  const labels = {percent_of:"Доля", percent_change:"Изменение", ratio:"Отношение", delta:"Отклонение"};
+  return `<section class="comparison-grid">
+    <div><small>Числитель</small><strong>${numberLabel(derived.numerator_value)}</strong></div>
+    <div><small>Знаменатель</small><strong>${numberLabel(derived.denominator_value)}</strong></div>
+    <div><small>${escapeHtml(labels[derived.operator] || derived.operator)}</small><strong>${numberLabel(derived.value)}</strong><span>${escapeHtml(derived.unit || "")}</span></div>
   </section>`;
 }
 const HIDDEN_RESULT_COLUMNS = new Set(["provenance", "balance_id", "balance_ids", "article_id", "article_ids"]);
@@ -289,6 +316,18 @@ async function copyResult(id) {
   const item = activeHistory()?.messages?.find((entry) => entry.id === id); if (!item) return;
   await navigator.clipboard.writeText(resultText(item)); setStatus("скопировано", "ready");
 }
+async function sendFeedback(button) {
+  if (!button || button.disabled) return;
+  button.disabled = true;
+  try {
+    await api("/api/v2/chat/feedback", {method:"POST", body:JSON.stringify({session_id:state.sessionId, request_id:button.dataset.requestId, rating:button.dataset.feedback})});
+    button.parentElement?.querySelectorAll("[data-feedback]").forEach((item) => item.disabled=true);
+    setStatus("оценка сохранена", "ready");
+  } catch (error) {
+    button.disabled = false;
+    setStatus("оценка не сохранена", "warning");
+  }
+}
 function exportCsv(id) {
   const item = activeHistory()?.messages?.find((entry) => entry.id === id); const rows = rowsFor(item?.result || {}); if (!rows.length) return;
   const columns = [...new Set(rows.flatMap((row) => Object.keys(row)))];
@@ -312,6 +351,7 @@ byId("historyList").addEventListener("click", async (event) => {
 byId("messages").addEventListener("click", (event) => {
   const suggest=event.target.closest("[data-suggest]"); if(suggest) { byId("message").value=suggest.dataset.suggest; byId("chatForm").requestSubmit(); return; }
   const copy=event.target.closest("[data-copy]"); if(copy) copyResult(copy.dataset.copy); const csv=event.target.closest("[data-csv]"); if(csv) exportCsv(csv.dataset.csv);
+  const feedback=event.target.closest("[data-feedback]"); if(feedback) sendFeedback(feedback);
   const clarify=event.target.closest("[data-clarify]"); if(clarify) send(clarify.dataset.clarify, {source_turn_id:clarify.dataset.sourceTurn, clarification_id:clarify.dataset.clarificationId, selected_option:clarify.dataset.clarify});
 });
 function showStartupError(error) { setStatus("backend недоступен", "error"); byId("messages").innerHTML=""; appendMessage("error", {title:"Не удалось создать сессию", text:humanError(error)}); }

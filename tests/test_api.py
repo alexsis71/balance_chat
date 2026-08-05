@@ -352,3 +352,35 @@ def test_invalid_interpretation_contract_returns_http_422() -> None:
 
     assert response.status_code == 422
     assert response.json()["detail"]["code"] == "interpretation_contract_invalid"
+
+
+def test_helpfulness_feedback_is_bound_to_existing_session_and_request() -> None:
+    client, _ = _client()
+    session_id = client.post("/api/v2/chat/sessions").json()["session"]["session_id"]
+
+    response = client.post("/api/v2/chat/feedback", json={
+        "session_id": session_id,
+        "request_id": "request-42",
+        "rating": "helpful",
+    })
+
+    assert response.status_code == 200
+    assert response.json() == {"status": "ok", "accepted": True}
+
+
+def test_feedback_rejects_unknown_session_and_rating() -> None:
+    client, _ = _client()
+    unknown = client.post("/api/v2/chat/feedback", json={
+        "session_id": "missing",
+        "request_id": "request-42",
+        "rating": "helpful",
+    })
+    assert unknown.status_code == 404
+
+    session_id = client.post("/api/v2/chat/sessions").json()["session"]["session_id"]
+    invalid = client.post("/api/v2/chat/feedback", json={
+        "session_id": session_id,
+        "request_id": "request-42",
+        "rating": "maybe",
+    })
+    assert invalid.status_code == 422

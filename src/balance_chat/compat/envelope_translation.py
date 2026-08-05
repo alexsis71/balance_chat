@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 from decimal import Decimal, InvalidOperation
 from datetime import date, datetime
 from typing import Any, Mapping
@@ -100,6 +101,16 @@ class PipelineEnvelopeTranslator:
                 operation = Operation.MULTI_STEP
             else:
                 raise EnvelopeTranslationError("resolved_comparison_degraded")
+
+        rank_aggregate = _bucket_rank_aggregate(raw_intent)
+        if rank_aggregate and len(operands) == 1 and operation == Operation.SHOW:
+            operation = Operation.AGGREGATE
+            operands = [
+                operands[0].model_copy(
+                    update={"aggregate_type": rank_aggregate},
+                    deep=True,
+                )
+            ]
 
         grouping = _grouping(plan, operation, expanded)
         if grouping:
@@ -302,6 +313,69 @@ class PipelineEnvelopeTranslator:
             provenance=[dict(row) for row in rows],
         )
 
+    def series(
+        self, task: ExecutionTask, envelope: Mapping[str, Any]
+    ) -> list[ScalarFact]:
+        rows = [item for item in (envelope.get("rows") or []) if isinstance(item, Mapping)]
+        if not rows:
+            return []
+        interpretation = (
+            envelope.get("interpretation")
+            if isinstance(envelope.get("interpretation"), Mapping)
+            else {}
+        )
+        canonical_unit = _canonical_task_unit(task, rows)
+        facts: list[ScalarFact] = []
+        for row in rows:
+            value = next(
+                (
+                    row.get(key)
+                    for key in ("fact_value", "fact", "value", "amount", "volume")
+                    if row.get(key) is not None
+                ),
+                None,
+            )
+            if value is None:
+                raise EnvelopeTranslationError("series row has no explicit numeric value")
+            try:
+                number = Decimal(str(value).replace(" ", "").replace(",", "."))
+            except InvalidOperation as exc:
+                raise EnvelopeTranslationError("series row value is not numeric") from exc
+            unit = str(
+                canonical_unit
+                or row.get("unit")
+                or envelope.get("unit")
+                or interpretation.get("unit")
+                or ""
+            ).strip()
+            if not unit:
+                raise EnvelopeTranslationError("series row has no explicit unit")
+            date_from = _row_date(row)
+            raw_date_to = row.get("date_to")
+            try:
+                date_to = date.fromisoformat(str(raw_date_to)[:10]) if raw_date_to else None
+            except ValueError:
+                date_to = None
+            periods = (
+                [{"date_from": date_from.isoformat(), "date_to": date_to.isoformat()}]
+                if date_from is not None and date_to is not None
+                else []
+            )
+            facts.append(
+                ScalarFact(
+                    task_id=task.task_id,
+                    value=number,
+                    unit=unit,
+                    label=_fact_label(task, row),
+                    periods=periods,
+                    extremum_at=date_from,
+                    dimension=_row_dimension(row),
+                    source_row_count=1,
+                    provenance=[dict(row)],
+                )
+            )
+        return facts
+
 
 def _entity(role: str, entity_type: str, value: Mapping[str, Any]) -> OperandEntityRef:
     return OperandEntityRef(
@@ -409,6 +483,27 @@ def _operation(value: Any) -> Operation:
         return Operation(aliases.get(normalized, normalized))
     except ValueError as exc:
         raise EnvelopeTranslationError(f"unsupported resolved operation: {normalized}") from exc
+
+
+def _bucket_rank_aggregate(raw_intent: Mapping[str, Any]) -> str | None:
+    if str(raw_intent.get("intent") or "").strip().lower() != "rank":
+        return None
+    if str(raw_intent.get("period_grain") or "").strip().lower() not in {
+        "day",
+        "month",
+        "quarter",
+        "year",
+    }:
+        return None
+    aggregate = str(raw_intent.get("aggregate_type") or "").strip().lower()
+    if aggregate in {"max", "min"}:
+        return aggregate
+    query = str(raw_intent.get("query") or "").casefold().replace("ё", "е")
+    if re.search(r"\b(максим|наибольш|пик)", query):
+        return "max"
+    if re.search(r"\b(миним|наименьш)", query):
+        return "min"
+    return None
 
 
 def _periods(

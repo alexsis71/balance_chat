@@ -2,11 +2,13 @@ from __future__ import annotations
 
 from decimal import Decimal
 from datetime import date
+import json
 from typing import Any, Callable, Mapping, Protocol
 
 from pydantic import Field
 
-from .contracts import ContractModel, Operation
+from .contracts import ContractModel, FormulaSpec, Operation
+from .domain import metric_definition
 from .planning import ExecutionTask, NativeExecutionPlan
 
 
@@ -30,6 +32,7 @@ class TaskExecutionResult(ContractModel):
     task_id: str
     status: str
     fact: ScalarFact | None = None
+    series: list[ScalarFact] = Field(default_factory=list)
     envelope: dict[str, Any]
 
 
@@ -43,11 +46,47 @@ class ComparisonResult(ContractModel):
     unit: str
 
 
+class ComparisonMember(ContractModel):
+    task_id: str
+    operand_id: str
+    label: str
+    value: Decimal
+    delta_from_baseline: Decimal
+    percent_change_from_baseline: Decimal | None
+    unit: str
+
+
+class ComparisonSetResult(ContractModel):
+    baseline_task_id: str
+    members: list[ComparisonMember] = Field(min_length=2)
+
+
+class DerivedResult(ContractModel):
+    operator: str
+    numerator_task_id: str
+    denominator_task_id: str
+    numerator_value: Decimal
+    denominator_value: Decimal
+    value: Decimal
+    unit: str
+
+
+class RankingResult(ContractModel):
+    direction: str
+    grain: str
+    selected: list[ScalarFact]
+    source_row_count: int = Field(ge=1)
+
+
 class NativeExecutionResult(ContractModel):
     operation: Operation
     status: str
     task_results: list[TaskExecutionResult]
     comparison: ComparisonResult | None = None
+    comparison_set: ComparisonSetResult | None = None
+    derived: DerivedResult | None = None
+    ranking: RankingResult | None = None
+    source_execution_count: int = Field(default=0, ge=0)
 
 
 class ScalarTaskRunner(Protocol):
@@ -62,6 +101,7 @@ class ScalarTaskRunner(Protocol):
 
 
 FactExtractor = Callable[[ExecutionTask, Mapping[str, Any]], ScalarFact | None]
+SeriesExtractor = Callable[[ExecutionTask, Mapping[str, Any]], list[ScalarFact]]
 
 
 class PipelineScalarTaskRunner:
@@ -89,24 +129,9 @@ def _render_scalar_query(task: ExecutionTask) -> str:
     """Render one resolver-safe query from one canonical scalar intent."""
     intent = task.scalar_intent
     operand = intent.operands[0]
-    metric_labels = {
-        "distribution": "распределение газа",
-        "incoming": "поступление газа",
-        "export": "экспорт газа",
-        "stock": "запасы газа",
-        "balance": "баланс газа",
-        "flow_balance": "баланс потоков газа",
-    }
-    metric_label = metric_labels.get(operand.metric, operand.metric)
-    aggregate_metric_labels = {
-        "distribution": "распределения газа",
-        "incoming": "поступления газа",
-        "export": "экспорта газа",
-        "stock": "запасов газа",
-        "balance": "баланса газа",
-        "flow_balance": "баланса потоков газа",
-    }
-    aggregate_metric = aggregate_metric_labels.get(operand.metric, metric_label)
+    definition = metric_definition(operand.metric)
+    metric_label = definition.public_label
+    aggregate_metric = definition.genitive_label
     aggregate_prefixes = {
         "max": ["Когда был достигнут максимум", aggregate_metric],
         "min": ["Когда был достигнут минимум", aggregate_metric],
@@ -115,9 +140,10 @@ def _render_scalar_query(task: ExecutionTask) -> str:
         "first": ["Покажи первое значение", aggregate_metric],
         "last": ["Покажи последнее значение", aggregate_metric],
     }
-    parts = aggregate_prefixes.get(
-        operand.aggregate_type,
-        ["Покажи", metric_label],
+    parts = (
+        ["Покажи", metric_label]
+        if task.series_grain
+        else aggregate_prefixes.get(operand.aggregate_type, ["Покажи", metric_label])
     )
     by_role = {item.role: item.entity.display_name for item in operand.entities}
     if by_role.get("balance"):
@@ -141,15 +167,30 @@ def _render_scalar_query(task: ExecutionTask) -> str:
                 period.date_to.isoformat(),
             ]
         )
+    if task.series_grain:
+        grain_label = {
+            "day": "по дням",
+            "month": "по месяцам",
+            "quarter": "по кварталам",
+            "year": "по годам",
+        }.get(task.series_grain)
+        if grain_label:
+            parts.append(grain_label)
     return " ".join(parts)
 
 
 class NativeExecutor:
     """Execute every planned scalar exactly once, then compose deterministic facts."""
 
-    def __init__(self, runner: ScalarTaskRunner, fact_extractor: FactExtractor) -> None:
+    def __init__(
+        self,
+        runner: ScalarTaskRunner,
+        fact_extractor: FactExtractor,
+        series_extractor: SeriesExtractor | None = None,
+    ) -> None:
         self.runner = runner
         self.fact_extractor = fact_extractor
+        self.series_extractor = series_extractor
 
     def execute(
         self,
@@ -160,26 +201,51 @@ class NativeExecutor:
         request_id: str | None = None,
     ) -> NativeExecutionResult:
         results: list[TaskExecutionResult] = []
+        envelope_cache: dict[str, dict[str, Any]] = {}
+        source_execution_count = 0
         for task in plan.tasks:
-            envelope = dict(
-                self.runner.run(
-                    task,
-                    original_query=original_query,
-                    execute_db=execute_db,
-                    request_id=request_id,
+            semantic_payload = task.scalar_intent.model_dump(
+                mode="json", exclude={"intent_id"}
+            )
+            for operand in semantic_payload.get("operands", []):
+                operand.pop("operand_id", None)
+            cache_key = json.dumps(
+                semantic_payload,
+                ensure_ascii=False,
+                sort_keys=True,
+                separators=(",", ":"),
+            )
+            envelope = envelope_cache.get(cache_key)
+            if envelope is None:
+                envelope = dict(
+                    self.runner.run(
+                        task,
+                        original_query=original_query,
+                        execute_db=execute_db,
+                        request_id=request_id,
+                    )
                 )
-            )
+                envelope_cache[cache_key] = envelope
+                source_execution_count += 1
+            else:
+                envelope = dict(envelope)
             status = str(envelope.get("status") or "error")
-            fact = (
-                self.fact_extractor(task, envelope)
-                if status in {"ok", "partial"}
-                else None
+            series = (
+                self.series_extractor(task, envelope)
+                if status in {"ok", "partial"} and task.series_grain and self.series_extractor
+                else []
             )
+            fact = None
+            if status in {"ok", "partial"}:
+                fact = series[0] if len(series) == 1 else (
+                    None if task.series_grain else self.fact_extractor(task, envelope)
+                )
             results.append(
                 TaskExecutionResult(
                     task_id=task.task_id,
                     status=status,
                     fact=fact,
+                    series=series,
                     envelope=envelope,
                 )
             )
@@ -190,7 +256,11 @@ class NativeExecutor:
                 if any(result.status == "no_data" for result in results)
                 else "error",
                 task_results=results,
+                source_execution_count=source_execution_count,
             )
+        ranking = self._rank(plan, results) if plan.operation == Operation.RANK else None
+        if ranking is not None:
+            results[0].fact = ranking.selected[0]
         if any(result.fact is None for result in results):
             raise NativeExecutionError("successful scalar task lacks deterministic fact")
         comparison = (
@@ -198,11 +268,144 @@ class NativeExecutor:
             if plan.operation in {Operation.COMPARE, Operation.COMPARE_PERIODS}
             else None
         )
+        comparison_set = (
+            self._compare_set(plan, results)
+            if plan.operation == Operation.COMPARE
+            else None
+        )
+        derived = self._calculate(plan, results) if plan.operation == Operation.CALCULATE else None
+        if plan.operation == Operation.CALCULATE and derived is None:
+            return NativeExecutionResult(
+                operation=plan.operation,
+                status="no_data",
+                task_results=results,
+                source_execution_count=source_execution_count,
+            )
         return NativeExecutionResult(
             operation=plan.operation,
             status="ok",
             task_results=results,
             comparison=comparison,
+            comparison_set=comparison_set,
+            derived=derived,
+            ranking=ranking,
+            source_execution_count=source_execution_count,
+        )
+
+    @classmethod
+    def _compare_set(
+        cls,
+        plan: NativeExecutionPlan,
+        results: list[TaskExecutionResult],
+    ) -> ComparisonSetResult:
+        if plan.comparison is None:
+            raise NativeExecutionError("comparison plan lacks comparison semantics")
+        baseline = cls._fact_for_operand(
+            plan, results, plan.comparison.baseline_operand_id
+        )
+        members: list[ComparisonMember] = []
+        for task, result in zip(plan.tasks, results):
+            fact = result.fact
+            if fact is None:
+                raise NativeExecutionError("comparison set fact is missing")
+            if fact.unit != baseline.unit:
+                raise NativeExecutionError("comparison set units differ")
+            delta = fact.value - baseline.value
+            percent = (
+                delta / baseline.value * Decimal("100")
+                if baseline.value != 0
+                else None
+            )
+            members.append(
+                ComparisonMember(
+                    task_id=task.task_id,
+                    operand_id=task.operand_id,
+                    label=fact.label,
+                    value=fact.value,
+                    delta_from_baseline=delta,
+                    percent_change_from_baseline=percent,
+                    unit=fact.unit,
+                )
+            )
+        return ComparisonSetResult(
+            baseline_task_id=baseline.task_id,
+            members=members,
+        )
+
+    @staticmethod
+    def _fact_for_operand(
+        plan: NativeExecutionPlan,
+        results: list[TaskExecutionResult],
+        operand_id: str,
+    ) -> ScalarFact:
+        for task, result in zip(plan.tasks, results):
+            if task.operand_id == operand_id and result.fact is not None:
+                return result.fact
+        raise NativeExecutionError(f"calculation operand {operand_id!r} has no fact")
+
+    @classmethod
+    def _calculate(
+        cls,
+        plan: NativeExecutionPlan,
+        results: list[TaskExecutionResult],
+    ) -> DerivedResult | None:
+        formula: FormulaSpec | None = plan.formula
+        if formula is None:
+            raise NativeExecutionError("calculation plan lacks formula semantics")
+        numerator = cls._fact_for_operand(plan, results, formula.numerator_operand_id)
+        denominator = cls._fact_for_operand(plan, results, formula.denominator_operand_id)
+        if numerator.unit != denominator.unit:
+            raise NativeExecutionError("calculation units differ")
+        if formula.operator in {"ratio", "percent_of", "percent_change"} and denominator.value == 0:
+            return None
+        if formula.operator == "delta":
+            value, unit = numerator.value - denominator.value, numerator.unit
+        elif formula.operator == "ratio":
+            value, unit = numerator.value / denominator.value, "ratio"
+        elif formula.operator == "percent_of":
+            value, unit = numerator.value / denominator.value * Decimal("100"), "%"
+        elif formula.operator == "percent_change":
+            value = (numerator.value - denominator.value) / denominator.value * Decimal("100")
+            unit = "%"
+        else:  # pragma: no cover - FormulaSpec prevents it
+            raise NativeExecutionError(f"unsupported formula operator: {formula.operator}")
+        return DerivedResult(
+            operator=formula.operator,
+            numerator_task_id=numerator.task_id,
+            denominator_task_id=denominator.task_id,
+            numerator_value=numerator.value,
+            denominator_value=denominator.value,
+            value=value,
+            unit=unit,
+        )
+
+    @staticmethod
+    def _rank(
+        plan: NativeExecutionPlan,
+        results: list[TaskExecutionResult],
+    ) -> RankingResult:
+        if plan.ranking is None or len(results) != 1:
+            raise NativeExecutionError("ranking plan lacks ranking semantics")
+        series = results[0].series
+        if not series:
+            raise NativeExecutionError("ranking source returned no deterministic series")
+
+        def tie_key(fact: ScalarFact) -> tuple[str, str]:
+            period = fact.periods[0].get("date_from", "") if fact.periods else ""
+            dimension = str((fact.dimension or {}).get("value") or "")
+            return period, dimension
+
+        ordered = sorted(series, key=tie_key)
+        ordered = sorted(
+            ordered,
+            key=lambda fact: fact.value,
+            reverse=plan.ranking.direction == "max",
+        )
+        return RankingResult(
+            direction=plan.ranking.direction,
+            grain=plan.ranking.grain,
+            selected=ordered[: plan.ranking.limit],
+            source_row_count=len(series),
         )
 
     @staticmethod

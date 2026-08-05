@@ -37,8 +37,10 @@ from .contracts import (
     TransitionOutcome,
 )
 from .execution import NativeExecutor
+from .gating import EvidenceCompletenessError, RoutingEvidenceGate
 from .grouping import CanonicalGroupAggregator, GroupingError, member_facts_from_rows
 from .interpretation import HybridInterpretationPolicy, InterpretationError, UnifiedInterpreter
+from .domain import interpretation_capabilities
 from .observability import log_event
 from .planning import NativeMultiOperandPlanner, PlanningError
 from .result_memory import PipelineResultMemoryAdapter
@@ -72,6 +74,7 @@ class PipelineV2TurnProcessor:
         result_memory: PipelineResultMemoryAdapter | None = None,
         planner: NativeMultiOperandPlanner | None = None,
         policy: HybridInterpretationPolicy | None = None,
+        gate: RoutingEvidenceGate | None = None,
     ) -> None:
         self.runtime = runtime
         self.registry = registry
@@ -80,7 +83,7 @@ class PipelineV2TurnProcessor:
         self.executor = executor
         self.result_memory = result_memory
         self.planner = planner or NativeMultiOperandPlanner()
-        self.policy = policy or HybridInterpretationPolicy()
+        self.gate = gate or RoutingEvidenceGate(policy)
         self.translator = PipelineEnvelopeTranslator(registry)
         try:
             self._normalize_lemmas = runtime._import_pipeline_module(
@@ -149,8 +152,39 @@ class PipelineV2TurnProcessor:
             )
         explicit_geos = self._tagged_geo_objects(message)
         explicit_businesses = self._tagged_business_balances(message)
+        business_mentions = self._tagged_business_entity_mentions(message)
+        routing = self.gate.route(
+            message,
+            state,
+            explicit_businesses=explicit_businesses,
+            explicit_geos=explicit_geos,
+            clarification_answer=clarification is not None,
+        )
+        log_event(
+            LOGGER,
+            logging.INFO,
+            "routing_evidence_gate",
+            request_id=request_id,
+            route="interpret" if routing.invoke_interpreter else "legacy_scalar",
+            reason=routing.reason,
+            explicit_business_count=routing.explicit_business_count,
+            explicit_geo_count=routing.explicit_geo_count,
+        )
+        mixed_metric_operands = self._matched_distribution_own_consumers(message)
+        if mixed_metric_operands:
+            return self._canonical_entity_comparison(
+                state,
+                message=message,
+                operand_entities=mixed_metric_operands,
+                operand_metrics=("distribution", "consumption"),
+                execute_db=execute_db,
+                request_id=request_id,
+                turn_id=turn_id,
+                started=started,
+                interpretation_mode="deterministic_distribution_own_consumers",
+            )
         role_separated = len(explicit_businesses) == 1 and len(explicit_geos) == 1
-        if role_separated:
+        if role_separated and routing.reason == "multiple_explicit_entities":
             return self._role_separated_standalone(
                 state,
                 message=message,
@@ -160,18 +194,6 @@ class PipelineV2TurnProcessor:
                 request_id=request_id,
                 turn_id=turn_id,
                 started=started,
-            )
-        mixed_metric_operands = self._matched_distribution_own_consumers(message)
-        if mixed_metric_operands:
-            return self._canonical_entity_comparison(
-                state,
-                message=message,
-                operand_entities=mixed_metric_operands,
-                execute_db=execute_db,
-                request_id=request_id,
-                turn_id=turn_id,
-                started=started,
-                interpretation_mode="deterministic_distribution_own_consumers",
             )
         peer_entities = self._matched_peer_entities(message)
         if peer_entities:
@@ -228,11 +250,7 @@ class PipelineV2TurnProcessor:
                 interpretation_mode=deterministic_mode,
                 memory_chunks=[],
             )
-        if not self.policy.should_invoke(
-            message,
-            state,
-            clarification_answer=clarification is not None,
-        ):
+        if not routing.invoke_interpreter:
             return self._standalone(
                 state,
                 message=message,
@@ -268,11 +286,11 @@ class PipelineV2TurnProcessor:
                     *[
                         {
                             "tag": "BUSINESS_ENTITY",
-                            "text": item.canonical_name,
-                            "canonical_name": item.canonical_name,
-                            "role_hint": "balance",
+                            "text": item.text,
+                            "canonical_name": item.text,
+                            "role_hint": item.role,
                         }
-                        for item in explicit_businesses
+                        for item in business_mentions
                     ],
                     *[
                         {
@@ -325,13 +343,7 @@ class PipelineV2TurnProcessor:
                 turn_id=turn_id,
                 user_message=message,
                 current_entity_mentions=[
-                    *(
-                        [EntityMention(
-                            text=explicit_businesses[0].canonical_name,
-                            role="balance",
-                        )]
-                        if len(explicit_businesses) == 1 else []
-                    ),
+                    *business_mentions,
                     *[
                         EntityMention(
                             text=item.canonical_name, role="destination"
@@ -364,6 +376,19 @@ class PipelineV2TurnProcessor:
                 "interpretation could not be bound to canonical metadata",
                 code="interpretation_binding_failed",
             ) from exc
+        decision, mutation = self._repair_incomplete_evidence(
+            state,
+            message=message,
+            turn_id=turn_id,
+            decision=decision,
+            mutation=mutation,
+            explicit_businesses=explicit_businesses,
+            current_business_mentions=business_mentions,
+            explicit_geos=explicit_geos,
+            memory_chunks=memory_chunks,
+            clarification=clarification,
+            request_id=request_id,
+        )
         if mutation.replace_intent.grouping or mutation.replace_intent.operation == Operation.GROUP:
             return self._execute_grouping_mutation(
                 state,
@@ -374,6 +399,8 @@ class PipelineV2TurnProcessor:
                 started=started,
                 interpretation_mode=decision.mode.value,
                 decision=decision,
+                evidence_businesses=explicit_businesses,
+                evidence_geos=explicit_geos,
             )
         return self._execute_mutation(
             state,
@@ -385,6 +412,8 @@ class PipelineV2TurnProcessor:
             interpretation_mode=decision.mode.value,
             memory_chunks=memory_chunks,
             decision=decision,
+            evidence_businesses=explicit_businesses,
+            evidence_geos=explicit_geos,
         )
 
     def _process_contextual(
@@ -401,6 +430,24 @@ class PipelineV2TurnProcessor:
         """Interpret every active-session turn against the seven-turn ledger."""
         explicit_geos = self._tagged_geo_objects(message)
         explicit_businesses = self._tagged_business_balances(message)
+        business_mentions = self._tagged_business_entity_mentions(message)
+        routing = self.gate.route(
+            message,
+            state,
+            explicit_businesses=explicit_businesses,
+            explicit_geos=explicit_geos,
+            clarification_answer=clarification is not None,
+        )
+        log_event(
+            LOGGER,
+            logging.INFO,
+            "routing_evidence_gate",
+            request_id=request_id,
+            route="interpret",
+            reason=routing.reason,
+            explicit_business_count=routing.explicit_business_count,
+            explicit_geo_count=routing.explicit_geo_count,
+        )
         memory_chunks = []
         if self.result_memory and state.metadata and state.result_references:
             memory_chunks = self.result_memory.retrieve(
@@ -427,11 +474,11 @@ class PipelineV2TurnProcessor:
                     *[
                         {
                             "tag": "BUSINESS_ENTITY",
-                            "text": item.canonical_name,
-                            "canonical_name": item.canonical_name,
-                            "role_hint": "balance",
+                            "text": item.text,
+                            "canonical_name": item.text,
+                            "role_hint": item.role,
                         }
-                        for item in explicit_businesses
+                        for item in business_mentions
                     ],
                     *[
                         {
@@ -483,13 +530,7 @@ class PipelineV2TurnProcessor:
                 turn_id=turn_id,
                 user_message=message,
                 current_entity_mentions=[
-                    *(
-                        [EntityMention(
-                            text=explicit_businesses[0].canonical_name,
-                            role="balance",
-                        )]
-                        if len(explicit_businesses) == 1 else []
-                    ),
+                    *business_mentions,
                     *[
                         EntityMention(
                             text=item.canonical_name, role="destination"
@@ -529,6 +570,19 @@ class PipelineV2TurnProcessor:
                 "interpretation could not be bound to canonical metadata",
                 code="interpretation_binding_failed",
             ) from exc
+        decision, mutation = self._repair_incomplete_evidence(
+            state,
+            message=message,
+            turn_id=turn_id,
+            decision=decision,
+            mutation=mutation,
+            explicit_businesses=explicit_businesses,
+            current_business_mentions=business_mentions,
+            explicit_geos=explicit_geos,
+            memory_chunks=memory_chunks,
+            clarification=clarification,
+            request_id=request_id,
+        )
         if mutation.replace_intent.grouping or mutation.replace_intent.operation == Operation.GROUP:
             return self._execute_grouping_mutation(
                 state,
@@ -539,6 +593,8 @@ class PipelineV2TurnProcessor:
                 started=started,
                 interpretation_mode="conversation_graph",
                 decision=decision,
+                evidence_businesses=explicit_businesses,
+                evidence_geos=explicit_geos,
             )
         return self._execute_mutation(
             state,
@@ -550,7 +606,134 @@ class PipelineV2TurnProcessor:
             interpretation_mode="conversation_graph",
             memory_chunks=memory_chunks,
             decision=decision,
+            evidence_businesses=explicit_businesses,
+            evidence_geos=explicit_geos,
         )
+
+    def _repair_incomplete_evidence(
+        self,
+        state,
+        *,
+        message,
+        turn_id,
+        decision,
+        mutation,
+        explicit_businesses,
+        current_business_mentions,
+        explicit_geos,
+        memory_chunks,
+        clarification,
+        request_id,
+    ):
+        initial_issues: list[str]
+        try:
+            self.gate.validate_bound_intent(
+                mutation.replace_intent,
+                explicit_businesses=explicit_businesses,
+                explicit_geos=explicit_geos,
+            )
+            return decision, mutation
+        except EvidenceCompletenessError as initial_error:
+            initial_issues = list(initial_error.issues)
+            log_event(
+                LOGGER,
+                logging.INFO,
+                "routing_evidence_repair_started",
+                request_id=request_id,
+                issues=initial_issues,
+                pre_database=True,
+            )
+        try:
+            repaired = self.interpreter.interpret(
+                message=message,
+                state=state,
+                capabilities=_capabilities(),
+                domain_hints=[
+                    *(
+                        f"explicit_business:{item.canonical_name}"
+                        for item in explicit_businesses
+                    ),
+                    *(f"explicit_geo:{item.canonical_name}" for item in explicit_geos),
+                    *_domain_hints(self.registry),
+                ],
+                metadata_bundle_version=self.registry.manifest.bundle_version,
+                current_message_tags=[
+                    *[
+                        {
+                            "tag": "BUSINESS_ENTITY",
+                            "text": item.text,
+                            "canonical_name": item.text,
+                            "role_hint": item.role,
+                        }
+                        for item in current_business_mentions
+                    ],
+                    *[
+                        {
+                            "tag": "GEO",
+                            "text": item.canonical_name,
+                            "canonical_name": item.canonical_name,
+                            "role_hint": "destination",
+                        }
+                        for item in explicit_geos
+                    ],
+                ],
+                validation_feedback=initial_issues,
+                result_references=(
+                    self.result_memory.for_interpretation(memory_chunks)
+                    if self.result_memory else []
+                ),
+                clarification_answer=(
+                    clarification.model_dump(mode="json")
+                    if clarification is not None else None
+                ),
+                request_id=f"{request_id}:evidence_repair",
+            )
+            if repaired.mode not in {
+                InterpretationMode.STANDALONE,
+                InterpretationMode.MUTATION,
+            }:
+                raise EvidenceCompletenessError(["repair_not_executable"])
+            repaired_mutation = self.compiler.compile(
+                repaired,
+                state,
+                turn_id=turn_id,
+                user_message=message,
+                current_entity_mentions=[
+                    *current_business_mentions,
+                    *[
+                        EntityMention(text=item.canonical_name, role="destination")
+                        for item in explicit_geos
+                    ],
+                ],
+            )
+            self.gate.validate_bound_intent(
+                repaired_mutation.replace_intent,
+                explicit_businesses=explicit_businesses,
+                explicit_geos=explicit_geos,
+            )
+        except (InterpretationError, ContextBindingError, EvidenceCompletenessError) as exc:
+            issues = list(exc.issues) if isinstance(exc, EvidenceCompletenessError) else [type(exc).__name__]
+            log_event(
+                LOGGER,
+                logging.WARNING,
+                "routing_evidence_repair_rejected",
+                request_id=request_id,
+                issues=issues,
+                pre_database=True,
+            )
+            raise TurnProcessingError(
+                "canonical routing evidence is incomplete",
+                code="routing_evidence_incomplete",
+            ) from exc
+        log_event(
+            LOGGER,
+            logging.INFO,
+            "routing_evidence_repair_accepted",
+            request_id=request_id,
+            operation=repaired_mutation.replace_intent.operation.value,
+            pre_database=True,
+        )
+        return repaired, repaired_mutation
 
     def _execute_grouping_mutation(
         self,
@@ -563,8 +746,44 @@ class PipelineV2TurnProcessor:
         started,
         interpretation_mode,
         decision=None,
+        evidence_businesses=(),
+        evidence_geos=(),
     ):
         intent = mutation.replace_intent
+        try:
+            self.gate.validate_bound_intent(
+                intent,
+                explicit_businesses=evidence_businesses,
+                explicit_geos=evidence_geos,
+            )
+        except EvidenceCompletenessError as exc:
+            log_event(
+                LOGGER,
+                logging.WARNING,
+                "routing_evidence_gate_rejected",
+                request_id=request_id,
+                phase="grouping_intent",
+                issues=list(exc.issues),
+                operation=intent.operation.value,
+                pre_database=True,
+            )
+            raise TurnProcessingError(
+                "canonical routing evidence is incomplete",
+                code="routing_evidence_incomplete",
+            ) from exc
+        log_event(
+            LOGGER,
+            logging.INFO,
+            "routing_evidence_gate_accepted",
+            request_id=request_id,
+            phase="grouping_intent",
+            operation=intent.operation.value,
+            operand_count=len(intent.operands),
+            task_count=1,
+            explicit_business_count=len(evidence_businesses),
+            explicit_geo_count=len(evidence_geos),
+            pre_database=True,
+        )
         if len(intent.operands) != 1 or len(intent.grouping) != 1:
             raise TurnProcessingError(
                 "grouping requires one operand and one canonical dimension",
@@ -981,6 +1200,54 @@ class PipelineV2TurnProcessor:
                 output.append(record)
         return output
 
+    def _tagged_business_entity_mentions(self, message: str) -> list[EntityMention]:
+        """Preserve every qualified business span and its local routing role."""
+        if self._normalize_lemmas is None:
+            return []
+        tokens = self._normalize_lemmas(message).split()
+        resolved: list[tuple[int, int, Any]] = []
+        for start, end in _business_entity_token_spans(tokens):
+            name = " ".join(tokens[start:end]).strip()
+            if not name:
+                continue
+            record = next(
+                (
+                    candidate
+                    for value in (f"гп тг {name}", f"тг {name}", name)
+                    if (candidate := self.registry.balance(value)) is not None
+                ),
+                None,
+            )
+            if record is None:
+                continue
+            resolved.append((start, end, record))
+        output: list[EntityMention] = []
+        unique_balances = {str(record.balance_id) for _start, _end, record in resolved}
+        for start, _end, record in resolved:
+            name = " ".join(tokens[start + 1 if tokens[start] == "тг" else start:_end]).strip()
+            if not name:
+                name = record.canonical_name
+            # A single qualified business namespace is a balance scope even
+            # after a grammatical preposition ("в ГП ТГ Москва"). Directional
+            # roles become authoritative only when distinct business balances
+            # participate in the same phrase.
+            if len(unique_balances) == 1:
+                role = "balance"
+                output.append(EntityMention(text=record.canonical_name, role=role))
+                continue
+            qualifier = start - 1
+            previous = tokens[qualifier - 1] if qualifier > 0 else ""
+            if previous == "гп" and qualifier > 1:
+                previous = tokens[qualifier - 2]
+            if previous in {"от", "из"}:
+                role = "source"
+            elif previous in {"в", "во", "к", "до"}:
+                role = "destination"
+            else:
+                role = "balance"
+            output.append(EntityMention(text=f"ТГ {name}", role=role))
+        return output
+
     def _enforce_role_separated_entities(
         self,
         mutation: ContextMutation,
@@ -1085,6 +1352,7 @@ class PipelineV2TurnProcessor:
         *,
         message: str,
         operand_entities: list[list[OperandEntityRef]],
+        operand_metrics: tuple[str, ...] | None = None,
         execute_db: bool,
         request_id: str,
         turn_id: str,
@@ -1101,6 +1369,18 @@ class PipelineV2TurnProcessor:
                 semantic_envelope,
                 operand_entities,
             )
+            if operand_metrics is not None:
+                if len(operand_metrics) != len(intent.operands):
+                    raise ValueError("operand metric evidence does not match operands")
+                intent = intent.model_copy(
+                    update={
+                        "operands": [
+                            operand.model_copy(update={"metric": metric}, deep=True)
+                            for operand, metric in zip(intent.operands, operand_metrics)
+                        ]
+                    },
+                    deep=True,
+                )
         except Exception as exc:
             raise TurnProcessingError(
                 "explicit peer entity semantics could not be resolved",
@@ -1236,14 +1516,67 @@ class PipelineV2TurnProcessor:
         interpretation_mode,
         memory_chunks,
         decision=None,
+        evidence_businesses=(),
+        evidence_geos=(),
     ):
         intent = mutation.replace_intent
+        try:
+            self.gate.validate_bound_intent(
+                intent,
+                explicit_businesses=evidence_businesses,
+                explicit_geos=evidence_geos,
+            )
+        except EvidenceCompletenessError as exc:
+            log_event(
+                LOGGER,
+                logging.WARNING,
+                "routing_evidence_gate_rejected",
+                request_id=request_id,
+                phase="bound_intent",
+                issues=list(exc.issues),
+                operation=intent.operation.value,
+                pre_database=True,
+            )
+            raise TurnProcessingError(
+                "canonical routing evidence is incomplete",
+                code="routing_evidence_incomplete",
+            ) from exc
         try:
             plan = self.planner.plan(intent)
         except PlanningError as exc:
             raise TurnProcessingError(
                 "native intent planning failed", code="native_planning_failed"
             ) from exc
+        try:
+            self.gate.validate_plan(plan)
+        except EvidenceCompletenessError as exc:
+            log_event(
+                LOGGER,
+                logging.WARNING,
+                "routing_evidence_gate_rejected",
+                request_id=request_id,
+                phase="execution_plan",
+                issues=list(exc.issues),
+                operation=intent.operation.value,
+                pre_database=True,
+            )
+            raise TurnProcessingError(
+                "canonical execution evidence is incomplete",
+                code="routing_evidence_incomplete",
+            ) from exc
+        log_event(
+            LOGGER,
+            logging.INFO,
+            "routing_evidence_gate_accepted",
+            request_id=request_id,
+            phase="execution_plan",
+            operation=intent.operation.value,
+            operand_count=len(intent.operands),
+            task_count=len(plan.tasks),
+            explicit_business_count=len(evidence_businesses),
+            explicit_geo_count=len(evidence_geos),
+            pre_database=True,
+        )
         try:
             native = self.executor.execute(
                 plan,
@@ -1255,6 +1588,19 @@ class PipelineV2TurnProcessor:
             raise TurnProcessingError("native scalar execution failed") from exc
         outcome = _outcome(native.status)
         response = _public_native_result(native)
+        deterministic_summary = (
+            _derived_contract_summary(native, intent)
+            or _ranking_contract_summary(native, intent)
+            or _extremum_comparison_summary(
+                native,
+                intent,
+                upstream_summary=None,
+            )
+            or _period_comparison_contract_summary(native, intent)
+            or _comparison_contract_summary(native, intent)
+        )
+        if deterministic_summary is not None:
+            response["summary"] = deterministic_summary
         summary_diagnostics: dict[str, Any] = {
             "requested": False,
             "execution_layer": "native_deterministic",
@@ -1273,6 +1619,7 @@ class PipelineV2TurnProcessor:
                     intent,
                     upstream_summary=public_summary,
                 )
+                contract_summary = deterministic_summary or contract_summary
                 response["summary"] = contract_summary or public_summary
                 response["warnings"] = summary_envelope.get("warnings") or []
                 summary_diagnostics.update(_summary_diagnostics(summary_envelope))
@@ -1331,6 +1678,21 @@ class PipelineV2TurnProcessor:
             }
         )
         diagnostics.setdefault("execution", {})["layer"] = "native_deterministic"
+        diagnostics["execution"].update(
+            calculation=(
+                native.derived.operator
+                if native.derived is not None
+                else f"rank:{native.ranking.direction}:{native.ranking.grain}"
+                if native.ranking is not None
+                else None
+            ),
+            calculation_node_count=len(plan.tasks)
+            + int(native.comparison is not None)
+            + int(native.comparison_set is not None and len(native.comparison_set.members) > 2)
+            + int(native.derived is not None)
+            + int(native.ranking is not None),
+            source_execution_count=native.source_execution_count,
+        )
         diagnostics["result_memory"] = memory_diag
         diagnostics["summary"] = summary_diagnostics
         return TurnProcessResult(
@@ -1485,11 +1847,7 @@ def _validate_clarification_answer(
 
 
 def _capabilities() -> list[str]:
-    return [
-        "show", "aggregate", "compare", "compare_periods", "group",
-        "distribution", "incoming", "own_needs", "stock", "export",
-        "day", "month", "quarter", "year", "geo_group",
-    ]
+    return interpretation_capabilities()
 
 
 def _domain_hints(registry: Any) -> list[str]:
@@ -1524,11 +1882,7 @@ def _standalone_translation_error(exc: Exception) -> TurnProcessingError:
 
 
 def _result_reference(turn_id, native, intent) -> ResultReference:
-    facts = [
-        _safe_mapping(item.fact.model_dump(mode="json"))
-        for item in native.task_results
-        if item.fact is not None
-    ]
+    facts = _authoritative_native_facts(native)
     digest = hashlib.sha256(
         json.dumps(
             {"intent": intent.model_dump(mode="json"), "facts": facts},
@@ -1576,6 +1930,21 @@ def _memory_write(turn_id, query, intent, result_ref, facts, summary):
 
 
 def _native_memory_summary(native) -> dict[str, Any]:
+    if native.derived is not None:
+        derived = native.derived
+        return {
+            "title": "Сохранённый производный показатель",
+            "text": f"{derived.operator}={derived.value} {derived.unit}",
+        }
+    if native.ranking is not None:
+        selected = native.ranking.selected[0]
+        return {
+            "title": "Сохранённый экстремум временного ряда",
+            "text": (
+                f"{native.ranking.direction}={selected.value} {selected.unit}; "
+                f"grain={native.ranking.grain}"
+            ),
+        }
     if native.comparison is not None:
         comparison = native.comparison
         return {
@@ -1622,6 +1991,13 @@ def _public_native_result(native) -> dict[str, Any]:
         "comparison": (
             native.comparison.model_dump(mode="json") if native.comparison else None
         ),
+        "comparison_set": (
+            native.comparison_set.model_dump(mode="json")
+            if native.comparison_set and len(native.comparison_set.members) > 2
+            else None
+        ),
+        "derived": native.derived.model_dump(mode="json") if native.derived else None,
+        "ranking": native.ranking.model_dump(mode="json") if native.ranking else None,
     }
 
 
@@ -1654,6 +2030,16 @@ def _native_summary_envelope(native, plan, question: str, intent: AnalysisIntent
             elif fact.task_id == comparison.target_task_id:
                 row["side"] = "right"
         rows.append(row)
+    if native.derived is not None:
+        rows.append(
+            {
+                "label": _formula_label(native.derived.operator),
+                "fact_value": str(native.derived.value),
+                "unit": native.derived.unit,
+                "aggregate_type": native.derived.operator,
+                "derived": True,
+            }
+        )
     metrics = list(dict.fromkeys(item.metric for item in intent.operands))
     return {
         "status": native.status,
@@ -1668,6 +2054,250 @@ def _native_summary_envelope(native, plan, question: str, intent: AnalysisIntent
         "summary": {"title": "Результат готов", "text": ""},
         "warnings": [],
         "debug": {"execution_layer": "native_deterministic"},
+    }
+
+
+def _authoritative_native_facts(native) -> list[dict[str, Any]]:
+    facts = [
+        _safe_mapping(item.fact.model_dump(mode="json"))
+        for item in native.task_results
+        if item.fact is not None
+    ]
+    if native.derived is not None:
+        facts.append(
+            {
+                "kind": "derived",
+                "operator": native.derived.operator,
+                "value": str(native.derived.value),
+                "unit": native.derived.unit,
+                "numerator_value": str(native.derived.numerator_value),
+                "denominator_value": str(native.derived.denominator_value),
+            }
+        )
+    return facts
+
+
+def _formula_label(operator: str) -> str:
+    return {
+        "percent_of": "Доля",
+        "percent_change": "Изменение",
+        "ratio": "Отношение",
+        "delta": "Абсолютное отклонение",
+    }.get(operator, operator)
+
+
+def _derived_contract_summary(native, intent: AnalysisIntent) -> dict[str, Any] | None:
+    derived = native.derived
+    if derived is None:
+        return None
+    label = _formula_label(derived.operator)
+    value = _format_ru_number(derived.value)
+    numerator = _format_ru_number(derived.numerator_value)
+    denominator = _format_ru_number(derived.denominator_value)
+    by_task = {
+        item.task_id: item.fact
+        for item in native.task_results
+        if item.fact is not None
+    }
+    numerator_fact = by_task.get(derived.numerator_task_id)
+    denominator_fact = by_task.get(derived.denominator_task_id)
+    numerator_label = numerator_fact.label if numerator_fact is not None else "Числитель"
+    denominator_label = denominator_fact.label if denominator_fact is not None else "Знаменатель"
+    numerator_unit = numerator_fact.unit if numerator_fact is not None else ""
+    denominator_unit = denominator_fact.unit if denominator_fact is not None else ""
+    return {
+        "title": f"{label}: {value} {derived.unit}",
+        "text": (
+            f"Расчёт выполнен по двум каноническим показателям: "
+            f"{numerator_label} — {numerator} {numerator_unit}, "
+            f"{denominator_label} — {denominator} {denominator_unit}. "
+            f"Результат — {value} {derived.unit}."
+        ),
+        "bullets": [
+            f"Числитель ({numerator_label}): {numerator} {numerator_unit}",
+            f"Знаменатель ({denominator_label}): {denominator} {denominator_unit}",
+            f"Результат: {value} {derived.unit}",
+        ],
+        "metrics": {
+            "operator": derived.operator,
+            "numerator": str(derived.numerator_value),
+            "denominator": str(derived.denominator_value),
+            "value": str(derived.value),
+            "unit": derived.unit,
+        },
+        "confidence": "high",
+        "generated_by": "deterministic_contract",
+    }
+
+
+def _ranking_contract_summary(native, intent: AnalysisIntent) -> dict[str, Any] | None:
+    ranking = native.ranking
+    if ranking is None or not ranking.selected:
+        return None
+    selected = ranking.selected[0]
+    label = "Максимум" if ranking.direction == "max" else "Минимум"
+    dimension = _ranking_dimension_label(ranking.grain, selected)
+    value = _format_ru_number(selected.value)
+    return {
+        "title": f"{label} по временным интервалам",
+        "text": (
+            f"{label} при зернистости {ranking.grain}: {value} {selected.unit}"
+            f"{f' ({dimension})' if dimension else ''}."
+        ),
+        "bullets": [
+            f"Период: {dimension}" if dimension else f"Зернистость: {ranking.grain}",
+            f"Значение: {value} {selected.unit}",
+        ],
+        "metrics": {
+            "direction": ranking.direction,
+            "grain": ranking.grain,
+            "value": str(selected.value),
+            "source_row_count": ranking.source_row_count,
+        },
+        "confidence": "high",
+        "generated_by": "deterministic_contract",
+    }
+
+
+def _ranking_dimension_label(grain: str, selected: Any) -> str:
+    raw = ""
+    if selected.periods:
+        raw = str(selected.periods[0].get("date_from") or "")
+    if not raw and selected.dimension:
+        raw = str(selected.dimension.get("value") or "")
+    try:
+        value = date.fromisoformat(raw)
+    except ValueError:
+        return raw
+    if grain == "day":
+        return value.strftime("%d.%m.%Y")
+    if grain == "month":
+        months = (
+            "январь", "февраль", "март", "апрель", "май", "июнь",
+            "июль", "август", "сентябрь", "октябрь", "ноябрь", "декабрь",
+        )
+        return f"{months[value.month - 1]} {value.year}"
+    if grain == "quarter":
+        return f"{(value.month - 1) // 3 + 1} квартал {value.year}"
+    if grain == "year":
+        return str(value.year)
+    return raw
+
+
+def _comparison_contract_summary(native, intent: AnalysisIntent) -> dict[str, Any] | None:
+    """Present canonical comparison math without letting summary reverse it."""
+    comparison_set = native.comparison_set
+    if native.operation != Operation.COMPARE or comparison_set is None:
+        return None
+    members = comparison_set.members
+    if len(members) < 2:
+        return None
+    baseline = members[0]
+    bullets = [
+        f"{item.label}: {_format_ru_number(item.value)} {item.unit}"
+        for item in members
+    ]
+    if len(members) > 2:
+        details = "; ".join(bullets)
+        return {
+            "title": f"Сравнение {len(members)} показателей",
+            "text": (
+                f"Базовый показатель — {baseline.label}: "
+                f"{_format_ru_number(baseline.value)} {baseline.unit}. "
+                f"Все значения: {details}."
+            ),
+            "bullets": bullets,
+            "metrics": {
+                "baseline_operand_id": baseline.operand_id,
+                "members": [item.model_dump(mode="json") for item in members],
+            },
+            "confidence": "high",
+            "generated_by": "deterministic_contract",
+        }
+    target = members[1]
+    delta = target.delta_from_baseline
+    percent = target.percent_change_from_baseline
+    direction = "выше" if delta > 0 else "ниже" if delta < 0 else "равен"
+    delta_text = _format_ru_number(abs(delta))
+    percent_text = (
+        f" ({_format_ru_number(abs(percent))}%)" if percent is not None else ""
+    )
+    return {
+        "title": f"Сравнение: {baseline.label} и {target.label}",
+        "text": (
+            f"{baseline.label}: {_format_ru_number(baseline.value)} {baseline.unit}. "
+            f"{target.label}: {_format_ru_number(target.value)} {target.unit}. "
+            f"Второй показатель {direction} первого на {delta_text} "
+            f"{target.unit}{percent_text}."
+        ),
+        "bullets": [
+            *bullets,
+            f"Отклонение target - baseline: {_format_ru_number(delta)} {target.unit}",
+        ],
+        "metrics": {
+            "baseline_operand_id": baseline.operand_id,
+            "target_operand_id": target.operand_id,
+            "baseline": str(baseline.value),
+            "target": str(target.value),
+            "delta": str(delta),
+            "percent_change": str(percent) if percent is not None else None,
+        },
+        "confidence": "high",
+        "generated_by": "deterministic_contract",
+    }
+
+
+def _period_comparison_contract_summary(
+    native, intent: AnalysisIntent
+) -> dict[str, Any] | None:
+    comparison = native.comparison
+    if native.operation != Operation.COMPARE_PERIODS or comparison is None:
+        return None
+    facts = [item.fact for item in native.task_results if item.fact is not None]
+    if len(facts) != 2:
+        return None
+    baseline, target = facts
+
+    def period_label(fact, index: int) -> str:
+        if not fact.periods:
+            return f"Период {index}"
+        value = fact.periods[0]
+        try:
+            start = date.fromisoformat(str(value.get("date_from")))
+            end = date.fromisoformat(str(value.get("date_to"))) - timedelta(days=1)
+            return f"Период {index} ({start:%d.%m.%Y}–{end:%d.%m.%Y})"
+        except (TypeError, ValueError):
+            return f"Период {index}"
+
+    baseline_label = period_label(baseline, 1)
+    target_label = period_label(target, 2)
+    delta = comparison.delta
+    percent = comparison.percent_change
+    direction = "выше" if delta > 0 else "ниже" if delta < 0 else "равен"
+    percent_text = (
+        f" ({_format_ru_number(abs(percent))}%)" if percent is not None else ""
+    )
+    return {
+        "title": "Сравнение двух периодов",
+        "text": (
+            f"{baseline_label}: {_format_ru_number(baseline.value)} {baseline.unit}. "
+            f"{target_label}: {_format_ru_number(target.value)} {target.unit}. "
+            f"Второй период {direction} первого на "
+            f"{_format_ru_number(abs(delta))} {target.unit}{percent_text}."
+        ),
+        "bullets": [
+            f"{baseline_label}: {_format_ru_number(baseline.value)} {baseline.unit}",
+            f"{target_label}: {_format_ru_number(target.value)} {target.unit}",
+            f"Отклонение target - baseline: {_format_ru_number(delta)} {target.unit}",
+        ],
+        "metrics": {
+            "baseline": str(comparison.baseline_value),
+            "target": str(comparison.target_value),
+            "delta": str(delta),
+            "percent_change": str(percent) if percent is not None else None,
+        },
+        "confidence": "high",
+        "generated_by": "deterministic_contract",
     }
 
 
@@ -1793,6 +2423,10 @@ def _summary_diagnostics(
 
 def _public_pipeline_result(envelope: dict[str, Any]) -> dict[str, Any]:
     public_warnings, _ = _partition_public_warnings(envelope.get("warnings") or [])
+    ranked = _bucket_rank_public_result(envelope)
+    if ranked is not None:
+        ranked["warnings"] = public_warnings
+        return ranked
     return {
         "status": envelope.get("status"),
         "rows": [
@@ -1808,6 +2442,8 @@ def _public_pipeline_result(envelope: dict[str, Any]) -> dict[str, Any]:
 _TECHNICAL_WARNING_PATTERNS = (
     re.compile(r"^unified selected .+ over .+ candidate$", re.I),
     re.compile(r"^unified normalized [a-z0-9_]+ from .+ to .+$", re.I),
+    re.compile(r"^unified normalized additive .+ ranking to bucket sums$", re.I),
+    re.compile(r"^unified analyzer disagreement detected.*$", re.I),
 )
 
 
@@ -1843,6 +2479,159 @@ def _public_result_row(value: dict[str, Any]) -> dict[str, Any]:
         for key, item in _safe_mapping(value).items()
         if key.casefold() not in _PUBLIC_HIDDEN_ROW_FIELDS
     }
+
+
+def _bucket_rank_public_result(envelope: dict[str, Any]) -> dict[str, Any] | None:
+    plan = _resolved_plan_from_public_envelope(envelope)
+    raw_intent = (
+        plan.get("_intent")
+        if isinstance(plan.get("_intent"), dict)
+        else {}
+    )
+    if str(raw_intent.get("intent") or "").strip().lower() != "rank":
+        return None
+    grain = str(
+        raw_intent.get("period_grain") or plan.get("period_grain") or ""
+    ).strip().lower()
+    if grain not in {"day", "month", "quarter", "year"}:
+        return None
+    aggregate = _rank_aggregate(raw_intent)
+    if aggregate is None:
+        return None
+    rows = [item for item in (envelope.get("rows") or []) if isinstance(item, dict)]
+    ranked: list[tuple[Decimal, int, dict[str, Any]]] = []
+    for index, row in enumerate(rows):
+        value = _row_decimal(row)
+        if value is not None:
+            ranked.append((value, index, row))
+    if not ranked:
+        return None
+    selected_value, _index, selected_row = (
+        max(ranked, key=lambda item: item[0])
+        if aggregate == "max"
+        else min(ranked, key=lambda item: item[0])
+    )
+    unit = _result_unit(envelope, selected_row)
+    public_row = _public_result_row({**selected_row, **({"unit": unit} if unit else {})})
+    metric_label = _metric_label(raw_intent.get("metric"))
+    grain_label = _grain_label(grain)
+    aggregate_label = "Максимум" if aggregate == "max" else "Минимум"
+    period_label = _rank_period_label(selected_row, grain)
+    value_text = _format_ru_number(selected_value)
+    text = (
+        f"{aggregate_label} {grain_label} {metric_label}"
+        f"{f' был в {period_label}' if period_label else ' найден'}: "
+        f"{value_text}{f' {unit}' if unit else ''}."
+    )
+    return {
+        "status": envelope.get("status"),
+        "rows": [public_row],
+        "summary": {
+            "title": f"{aggregate_label} по {grain_label} за период",
+            "text": text,
+            "bullets": [
+                f"{period_label}: {value_text}{f' {unit}' if unit else ''}"
+                if period_label else f"{value_text}{f' {unit}' if unit else ''}",
+            ],
+            "metrics": {
+                aggregate: str(selected_value),
+                "source_row_count": len(rows),
+            },
+            "confidence": "high",
+            "generated_by": "deterministic_contract",
+        },
+        "warnings": [],
+    }
+
+
+def _resolved_plan_from_public_envelope(envelope: dict[str, Any]) -> dict[str, Any]:
+    debug = envelope.get("debug") if isinstance(envelope.get("debug"), dict) else {}
+    for key in (
+        "resolved_plan",
+        "pipeline_unified_resolved_plan",
+        "pipeline_v2_resolved_plan",
+    ):
+        if isinstance(debug.get(key), dict):
+            return debug[key]
+    return {}
+
+
+def _rank_aggregate(raw_intent: dict[str, Any]) -> str | None:
+    aggregate = str(raw_intent.get("aggregate_type") or "").strip().lower()
+    if aggregate in {"max", "min"}:
+        return aggregate
+    query = str(raw_intent.get("query") or "").casefold().replace("ё", "е")
+    if re.search(r"\b(максим|наибольш|пик)", query):
+        return "max"
+    if re.search(r"\b(миним|наименьш)", query):
+        return "min"
+    return None
+
+
+def _row_decimal(row: dict[str, Any]) -> Decimal | None:
+    for key in ("fact_value", "fact", "value", "amount", "volume"):
+        value = row.get(key)
+        if value in (None, ""):
+            continue
+        try:
+            return Decimal(str(value).replace(" ", "").replace(",", "."))
+        except Exception:
+            return None
+    return None
+
+
+def _result_unit(envelope: dict[str, Any], row: dict[str, Any]) -> str:
+    interpretation = (
+        envelope.get("interpretation")
+        if isinstance(envelope.get("interpretation"), dict)
+        else {}
+    )
+    return str(row.get("unit") or envelope.get("unit") or interpretation.get("unit") or "").strip()
+
+
+def _metric_label(metric: Any) -> str:
+    labels = {
+        "incoming": "поступления",
+        "distribution": "распределения",
+        "export": "экспорта",
+        "stock": "запаса",
+        "flow_balance": "транспорта газа",
+    }
+    return labels.get(str(metric or "").strip().lower(), "показателя")
+
+
+def _grain_label(grain: str) -> str:
+    return {
+        "day": "по дням",
+        "month": "по месяцам",
+        "quarter": "по кварталам",
+        "year": "по годам",
+    }.get(grain, "по периодам")
+
+
+def _rank_period_label(row: dict[str, Any], grain: str) -> str:
+    start = _parse_iso_date(row.get("date_from"))
+    end = _parse_iso_date(row.get("date_to"))
+    if grain == "month" and start is not None:
+        names = (
+            "январь", "февраль", "март", "апрель", "май", "июнь",
+            "июль", "август", "сентябрь", "октябрь", "ноябрь", "декабрь",
+        )
+        return f"{names[start.month - 1]} {start.year}"
+    if grain == "day" and start is not None:
+        return start.strftime("%d.%m.%Y")
+    if start is not None and end is not None:
+        return f"{start.isoformat()} - {(end - timedelta(days=1)).isoformat()}"
+    return str(row.get("period") or row.get("label") or "").strip()
+
+
+def _parse_iso_date(value: Any) -> date | None:
+    if isinstance(value, date):
+        return value
+    try:
+        return date.fromisoformat(str(value)[:10])
+    except Exception:
+        return None
 
 
 def _safe_mapping(value: dict[str, Any]) -> dict[str, Any]:
@@ -2122,7 +2911,7 @@ def _distribution_own_consumers_mentions(message: str) -> tuple[str, str] | None
     match = re.search(
         r"\bсравн\w*\b.*?\bпостав\w*\b(?:\s+газ\w*)?\s+в\s+"
         r"(?P<destination>.+?)\s+и\s+(?:объем\w*\s+)?"
-        r"собственн\w+\s+(?:потребител\w*|нужд\w*)\s+"
+        r"собственн\w+\s+потребител\w*\s+"
         r"(?P<balance>.+?)(?=\s+\b(?:за|на)\b|[?.!]*$)",
         str(message),
         re.IGNORECASE,

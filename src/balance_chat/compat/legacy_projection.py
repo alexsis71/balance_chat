@@ -3,6 +3,7 @@ from __future__ import annotations
 from typing import Any
 
 from ..contracts import AnalysisIntent, Operation
+from ..domain import execution_metric
 
 
 class UnsupportedLegacyShape(ValueError):
@@ -68,7 +69,10 @@ def project_legacy_context_override(intent: AnalysisIntent) -> dict[str, Any]:
             }
             for period in periods
         ],
-        "metric": operand.metric,
+        # Preserve the richer V2 semantic metric in the intent/result graph,
+        # but project only the execution metric understood by unified_strict.
+        # Article binding keeps consumption/own_needs distinct.
+        "metric": execution_metric(operand.metric),
         "aggregate_type": operand.aggregate_type,
         "balance": roles.get("balance"),
         "source": roles.get("source"),

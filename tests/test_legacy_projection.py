@@ -37,6 +37,22 @@ def test_scalar_intent_projects_to_legacy_override() -> None:
     assert payload["metric"] == "distribution"
 
 
+def test_umbrella_metric_projects_to_supported_execution_metric() -> None:
+    intent = _intent().model_copy(
+        update={
+            "operands": [
+                AnalysisOperand(operand_id="supply", metric="supply")
+            ]
+        },
+        deep=True,
+    )
+
+    payload = project_legacy_context_override(intent)
+
+    assert intent.operands[0].metric == "supply"
+    assert payload["metric"] == "distribution"
+
+
 def test_grouping_is_not_silently_discarded() -> None:
     intent = _intent().model_copy(
         update={"grouping": [GroupingSpec(dimension="geo_group")]}
