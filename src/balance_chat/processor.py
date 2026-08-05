@@ -1914,6 +1914,7 @@ class PipelineV2TurnProcessor:
             source_execution_count=1,
             row_count=len(envelope.get("rows") or []),
             elapsed_ms=int((perf_counter() - started) * 1000),
+            **_safe_execution_evidence(envelope),
         )
         diagnostics["result_memory"] = memory_diag
         diagnostics["summary"] = summary_diagnostics
@@ -2029,6 +2030,7 @@ class PipelineV2TurnProcessor:
                     "task_count": 1,
                     "layer": "unified_strict",
                     "elapsed_ms": int((perf_counter() - started) * 1000),
+                    **_safe_execution_evidence(envelope),
                 },
                 "summary": summary_diagnostics,
             },
@@ -2959,6 +2961,49 @@ def _summary_diagnostics(
             _TECHNICAL_SUMMARY_TEXT.fullmatch(str(summary.get("text") or "").strip())
         ),
     }
+
+
+_SAFE_EXECUTION_PARAM_KEYS = {
+    "aggregate_type",
+    "article_id",
+    "article_ids",
+    "balance_id",
+    "balance_ids",
+    "date_from",
+    "date_to",
+    "day",
+    "group_by",
+    "period_grain",
+}
+
+
+def _safe_execution_evidence(envelope: dict[str, Any]) -> dict[str, Any]:
+    """Return bounded plan evidence suitable for audit and Golden Queries.
+
+    Raw SQL and DB rows remain private. Function name and canonical scalar
+    parameters are enough to prove which execution contract was selected.
+    """
+
+    debug = envelope.get("debug") if isinstance(envelope.get("debug"), dict) else {}
+    function = debug.get("sql_function")
+    params = debug.get("params") if isinstance(debug.get("params"), dict) else {}
+    safe_params: dict[str, Any] = {}
+    for key, value in params.items():
+        if str(key).casefold() not in _SAFE_EXECUTION_PARAM_KEYS:
+            continue
+        if isinstance(value, (str, int, float, bool)) or value is None:
+            safe_params[str(key)] = value
+        elif isinstance(value, list) and len(value) <= 100 and all(
+            isinstance(item, (str, int, float, bool)) or item is None
+            for item in value
+        ):
+            safe_params[str(key)] = value
+    evidence: dict[str, Any] = {}
+    if isinstance(function, str) and function.strip():
+        evidence["sql_function"] = function.strip()
+    if safe_params:
+        evidence["sql_params"] = safe_params
+    return evidence
 
 
 def _public_pipeline_result(envelope: dict[str, Any]) -> dict[str, Any]:

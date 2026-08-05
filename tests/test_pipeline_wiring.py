@@ -40,6 +40,7 @@ from balance_chat.processor import (
     _derived_contract_summary,
     _period_comparison_contract_summary,
     _ranking_contract_summary,
+    _safe_execution_evidence,
     _peer_destination_mentions,
     _public_native_result,
     _public_pipeline_result,
@@ -85,6 +86,26 @@ def _envelope():
                 ],
             }
         },
+    }
+
+
+def test_safe_execution_evidence_exposes_contract_without_raw_sql_or_rows() -> None:
+    evidence = _safe_execution_evidence({
+        "debug": {
+            "sql_function": "api.show_balance_day",
+            "params": {
+                "balance_id": 2010000039953,
+                "day": "2025-06-25",
+                "dsn": "must-not-leak",
+            },
+            "rendered_sql": "select secret",
+            "raw_rows": [{"secret": True}],
+        }
+    })
+
+    assert evidence == {
+        "sql_function": "api.show_balance_day",
+        "sql_params": {"balance_id": 2010000039953, "day": "2025-06-25"},
     }
 
 

@@ -1,0 +1,92 @@
+schema_version = "1.0"
+metadata_manifest = "../../pipeline/data/metadata/manifest.json"
+approved_metadata_bundle_id = "sha256:f8d326b02895779d69a4db81b9a5b7ba9153e04fea5193180c02daabc9d7552c"
+database_fixture = "ai-balances-staging-2025@2026-08-05"
+
+[[queries]]
+id = "GQ-001"
+approval_status = "approved"
+priority = "P0 Core"
+title = "Полный суточный баланс ГП ТГ Москва"
+query = "Покажи баланс ГП ТГ Москва за 25.06.2025."
+result_shape = "balance_snapshot"
+value_mode = "both"
+operation = "show"
+metric = "balance"
+
+[queries.period]
+date_from = "2025-06-25"
+date_to = "2025-06-26"
+
+[[queries.entities]]
+mention = "ГП ТГ Москва"
+role = "balance"
+entity_type = "balance"
+canonical_id = "BAL:2010000039953"
+canonical_name = "ГП ТГ Москва суточный баланс"
+
+[queries.canonical]
+balance_ids = ["BAL:2010000039953"]
+article_ids = []
+geo_ids = []
+relation_ids = []
+
+[queries.execution]
+semantic_sql = '''
+SELECT *
+FROM BALANCE("ГП ТГ Москва суточный баланс")
+WHERE PERIOD('2025-06-25','2025-06-26');
+'''
+allowed_layers = ["unified_balance_level"]
+sql_function = "api.show_balance_day"
+required_params = { balance_id = 2010000039953, day = "2025-06-25" }
+forbidden_params = ["article_id", "article_ids"]
+source_execution_count = 1
+
+[queries.result]
+status = "ok"
+min_rows = 100
+required_columns = ["article_name", "article_indent", "gas_day", "plan_value", "fact_value", "unit"]
+required_sections = ["Ресурсы", "Поступление", "Распределение"]
+unit = "тыс. м3"
+hierarchy_required = true
+source_order_required = true
+
+[[queries.controls]]
+row_index = 0
+canonical_article_id = "ART:2010000039710"
+article_name = "Ресурсы"
+article_indent = 0
+gas_day = "2025-06-25"
+fact_value = 323248.059
+tolerance = 0.001
+
+[[queries.controls]]
+row_index = 1
+canonical_article_id = "ART:2010000039711"
+article_name = "Поступление"
+article_indent = 2
+gas_day = "2025-06-25"
+fact_value = 323248.059
+tolerance = 0.001
+
+[[queries.controls]]
+row_index = 4
+canonical_article_id = "ART:2010000039714"
+article_name = "От ТГ Н.Новгород"
+article_indent = 4
+gas_day = "2025-06-25"
+fact_value = 318349.277
+tolerance = 0.001
+
+[queries.clarification]
+allowed = false
+questions = []
+
+[queries.forbidden]
+article_level = true
+scalar_result = true
+periods = [
+  ["2025-01-01", "2026-01-01"],
+]
+canonical_balance_ids = ["BAL:2010000297416"]
