@@ -223,8 +223,9 @@ function comparisonSetHtml(comparisonSet) {
 }
 function tableRowsHtml(rows) {
   if (!rows.length) return "";
-  const columns = [...new Set(rows.flatMap((row) => Object.keys(row)))];
-  return `<div class="table-scroll"><table><thead><tr>${columns.map((key) => `<th>${escapeHtml(key)}</th>`).join("")}</tr></thead><tbody>${rows.map((row) => `<tr>${columns.map((key) => `<td>${escapeHtml(formatCell(row[key], key))}</td>`).join("")}</tr>`).join("")}</tbody></table></div>`;
+  const columns = resultColumns(rows);
+  const hierarchyKey = hierarchyColumn(columns);
+  return `<div class="table-scroll"><table><thead><tr>${columns.map((key) => `<th>${escapeHtml(key)}</th>`).join("")}</tr></thead><tbody>${rows.map((row) => `<tr>${columns.map((key) => tableCellHtml(row, key, hierarchyKey)).join("")}</tr>`).join("")}</tbody></table></div>`;
 }
 function derivedHtml(derived) {
   if (!derived) return "";
@@ -236,8 +237,23 @@ function derivedHtml(derived) {
   </section>`;
 }
 const HIDDEN_RESULT_COLUMNS = new Set(["provenance", "balance_id", "balance_ids", "article_id", "article_ids"]);
+const STRUCTURAL_RESULT_COLUMNS = new Set(["article_indent"]);
 function publicRow(row) {
   return Object.fromEntries(Object.entries(row || {}).filter(([key]) => !HIDDEN_RESULT_COLUMNS.has(String(key).toLowerCase())));
+}
+function resultColumns(rows) {
+  return [...new Set(rows.flatMap((row) => Object.keys(row)))].filter((key) => !STRUCTURAL_RESULT_COLUMNS.has(String(key).toLowerCase()));
+}
+function hierarchyColumn(columns) {
+  return columns.find((key) => String(key).toLowerCase() === "article_name")
+    || columns.find((key) => ["article_scope", "article", "статья"].includes(String(key).toLowerCase()))
+    || null;
+}
+function tableCellHtml(row, key, hierarchyKey) {
+  const value = formatCell(row[key], key);
+  if (key !== hierarchyKey || row?.article_indent == null) return `<td>${escapeHtml(value)}</td>`;
+  const indent = Math.max(0, Math.min(24, Number(row.article_indent) || 0));
+  return `<td class="hierarchy-cell" data-indent="${indent}" style="padding-left:${10 + indent * 7}px">${escapeHtml(String(value).trimStart())}</td>`;
 }
 function rowsFor(result) {
   if (Array.isArray(result.rows) && result.rows.length && !isTechnicalPlan(result.rows)) return result.rows.map(publicRow);
@@ -262,10 +278,11 @@ function sanitizeResult(result) {
 function hasRows(result) { return rowsFor(result).length > 0; }
 function tableHtml(result) {
   const rows = rowsFor(result); if (!rows.length) return "";
-  const columns = [...new Set(rows.flatMap((row) => Object.keys(row)))];
+  const columns = resultColumns(rows);
+  const hierarchyKey = hierarchyColumn(columns);
   return `<section class="table-section"><div class="section-title">Основная таблица <span>${rows.length} ${rows.length === 1 ? "строка" : "строк"}</span></div>
     <div class="table-scroll"><table><thead><tr>${columns.map((key) => `<th>${escapeHtml(key)}</th>`).join("")}</tr></thead><tbody>
-    ${rows.map((row) => `<tr>${columns.map((key) => `<td>${escapeHtml(formatCell(row[key], key))}</td>`).join("")}</tr>`).join("")}</tbody></table></div></section>`;
+    ${rows.map((row) => `<tr>${columns.map((key) => tableCellHtml(row, key, hierarchyKey)).join("")}</tr>`).join("")}</tbody></table></div></section>`;
 }
 function formatCell(value, key) {
   if (value == null) return "—";
@@ -346,7 +363,8 @@ function humanError(error) {
 function resultText(item) {
   const result = item.result || {}; const summary = result.summary || {};
   const lines = [summary.title || result.title || "Результат", summary.text || summary.answer || ""];
-  rowsFor(result).forEach((row) => lines.push(Object.entries(row).map(([key,value]) => `${key}: ${formatCell(value,key)}`).join("; ")));
+  const rows = rowsFor(result); const columns = resultColumns(rows);
+  rows.forEach((row) => lines.push(columns.map((key) => `${key}: ${formatCell(row[key],key)}`).join("; ")));
   return lines.filter(Boolean).join("\n");
 }
 async function copyResult(id) {
@@ -367,7 +385,7 @@ async function sendFeedback(button) {
 }
 function exportCsv(id) {
   const item = activeHistory()?.messages?.find((entry) => entry.id === id); const rows = rowsFor(item?.result || {}); if (!rows.length) return;
-  const columns = [...new Set(rows.flatMap((row) => Object.keys(row)))];
+  const columns = resultColumns(rows);
   const quote = (value) => `"${String(value ?? "").replaceAll('"','""')}"`;
   const csv = "\uFEFF" + [columns.map(quote).join(";"), ...rows.map((row) => columns.map((key) => quote(formatCell(row[key],key))).join(";"))].join("\r\n");
   download(new Blob([csv], {type:"text/csv;charset=utf-8"}), `ai-balances-${Date.now()}.csv`);

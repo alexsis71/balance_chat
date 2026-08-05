@@ -291,6 +291,8 @@ def test_ui_history_persistence_is_bounded_and_does_not_block_rendering() -> Non
     assert "MAX_STORED_ROWS" in script
     assert "QuotaExceededError" in script
     assert "historySnapshot(historyLimit, messageLimit, rowLimit)" in script
+    assert 'STRUCTURAL_RESULT_COLUMNS = new Set(["article_indent"])' in script
+    assert 'class="hierarchy-cell"' in script
     assert append_message.index("renderMessage(item, true)") < append_message.index("saveHistory()")
 
 
