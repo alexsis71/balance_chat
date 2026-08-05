@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 from decimal import Decimal
 from typing import Any, Callable, Mapping, Sequence
 
@@ -71,6 +72,7 @@ def member_facts_from_rows(
     *,
     dimension: str,
     default_unit: str | None = None,
+    authoritative_unit: str | None = None,
     canonical_resolver: (
         Callable[[Mapping[str, Any], str], CanonicalEntityRef | None] | None
     ) = None,
@@ -89,10 +91,12 @@ def member_facts_from_rows(
     for raw in rows:
         row = dict(raw)
         entity_id = row.get(id_field)
+        if entity_id is None:
+            entity_id = row.get("entity_id")
         if entity_id is None and dimension == "article":
             article_ids = row.get("article_ids") or []
             entity_id = article_ids[0] if len(article_ids) == 1 else None
-        label = str(row.get(label_field) or "").strip()
+        label = str(row.get(label_field) or row.get("canonical_name") or "").strip()
         resolved = None
         if (entity_id is None or not label) and canonical_resolver is not None:
             resolved = canonical_resolver(row, dimension)
@@ -107,7 +111,7 @@ def member_facts_from_rows(
             ),
             None,
         )
-        unit = str(row.get("unit") or default_unit or "").strip()
+        unit = str(authoritative_unit or row.get("unit") or default_unit or "").strip()
         if entity_id is None or not label:
             raise GroupingError("grouped row lacks canonical identity")
         if value is None or not unit:
@@ -116,7 +120,11 @@ def member_facts_from_rows(
             GroupMemberFact(
                 entity=CanonicalEntityRef(
                     entity_id=str(entity_id),
-                    entity_type=(resolved.entity_type if resolved is not None else entity_type),
+                    entity_type=(
+                        resolved.entity_type
+                        if resolved is not None
+                        else str(row.get("entity_type") or entity_type)
+                    ),
                     display_name=label,
                 ),
                 value=Decimal(str(value)),
@@ -129,4 +137,5 @@ def member_facts_from_rows(
 
 def _official_name(value: str) -> str:
     text = str(value).strip()
+    text = re.sub(r"\bобл\.?$", "область", text, flags=re.IGNORECASE)
     return text[:1].upper() + text[1:] if text else text

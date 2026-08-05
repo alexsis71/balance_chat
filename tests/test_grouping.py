@@ -35,7 +35,7 @@ def test_alias_rows_sum_by_canonical_id_and_use_official_name() -> None:
     )
 
     assert len(result) == 1
-    assert result[0].canonical_name == "Ульяновская обл"
+    assert result[0].canonical_name == "Ульяновская область"
     assert result[0].value == Decimal("82220.79")
     assert result[0].source_fact_count == 2
     assert len(result[0].provenance) == 2
@@ -84,3 +84,34 @@ def test_legacy_scope_row_requires_curated_canonical_resolver() -> None:
 
     assert members[0].entity.entity_id == "geo:ulyanovsk"
     assert members[0].entity.display_name == "Ульяновская область"
+
+
+def test_canonical_grouped_facts_can_be_grouped_again_with_authoritative_unit() -> None:
+    rows = [
+        {
+            "entity_id": "GEO:ulyanovsk",
+            "entity_type": "geo_object",
+            "canonical_name": "Ульяновская область",
+            "value": "10",
+            "unit": "млн м3",
+        },
+        {
+            "entity_id": "GEO:ulyanovsk",
+            "entity_type": "geo_object",
+            "canonical_name": "Ульяновская область",
+            "value": "5",
+            "unit": "млн м3",
+        },
+    ]
+
+    members = member_facts_from_rows(
+        rows,
+        dimension="geo_group",
+        authoritative_unit="тыс. м3",
+    )
+    grouped = CanonicalGroupAggregator().aggregate(members)
+
+    assert len(grouped) == 1
+    assert grouped[0].canonical_name == "Ульяновская область"
+    assert grouped[0].value == Decimal("15")
+    assert grouped[0].unit == "тыс. м3"

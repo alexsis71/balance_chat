@@ -51,6 +51,11 @@ $env:PYTHONPATH = "src"
 C:\Users\alexs\miniforge3\envs\ai_env\python.exe -m pytest -q
 ```
 
+Бизнес-каталог имеет стабильные идентификаторы `BC-01`…`BC-18` и исполняется
+через DB-backed acceptance runner. Команды, semantic assertions, режим
+инвентаризации и формат отчётов описаны в
+[`docs/context_chat_acceptance_runner.md`](docs/context_chat_acceptance_runner.md).
+
 ## Staging-запуск V2
 
 Перед запуском должны быть явно заданы настройки текущего vLLM endpoint. Ключи

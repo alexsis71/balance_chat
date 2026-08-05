@@ -15,6 +15,7 @@ from balance_chat.contracts import (
     AnalysisIntent,
     AnalysisOperand,
     CanonicalEntityRef,
+    ComparisonSpec,
     ContextContractV2,
     ContextMutation,
     GroupingSpec,
@@ -40,9 +41,11 @@ from balance_chat.processor import (
     _period_comparison_contract_summary,
     _ranking_contract_summary,
     _peer_destination_mentions,
+    _public_native_result,
     _public_pipeline_result,
     _standalone_translation_error,
     _standalone_facts,
+    _single_operand_attempt,
 )
 from balance_chat.reducer import apply_context_transition
 from balance_chat.service import TurnProcessingError
@@ -1247,6 +1250,42 @@ def test_ranking_summary_formats_day_and_month_for_public_output() -> None:
     assert "декабрь 2025" in summary("month", "2025-12-01")["text"]
 
 
+def test_public_ranking_result_recursively_hides_provenance_and_ids() -> None:
+    from balance_chat.execution import RankingResult
+
+    fact = ScalarFact(
+        task_id="rank_source",
+        value=Decimal("12"),
+        unit="тыс. м3",
+        label="Самарская",
+        periods=[{"date_from": "2025-08-26", "date_to": "2025-08-27"}],
+        extremum_at="2025-08-26",
+        provenance=[{
+            "balance_id": "201",
+            "article_ids": ["301"],
+            "balance": "ГП ТГ Самара суточный баланс",
+        }],
+    )
+    native = NativeExecutionResult(
+        operation=Operation.RANK,
+        status="ok",
+        task_results=[],
+        ranking=RankingResult(
+            direction="max",
+            grain="day",
+            selected=[fact],
+            source_row_count=1,
+        ),
+    )
+
+    public = _public_native_result(native)
+    serialized = str(public)
+
+    assert public["ranking"]["selected"][0].get("provenance") is None
+    assert "balance_id" not in serialized
+    assert "article_ids" not in serialized
+
+
 def test_standalone_processor_uses_current_resolved_plan_without_llm() -> None:
     processor = PipelineV2TurnProcessor(
         runtime=RawRuntime(),
@@ -1431,7 +1470,7 @@ def test_context_grouping_executes_canonical_group_contract() -> None:
         def execute_raw(self, *_args, **_kwargs):
             return {
                 "status": "ok",
-                "interpretation": {"unit": "тыс. м3"},
+                "interpretation": {"unit": "млн м3"},
                 "rows": [
                     {"geo_id": "GEO:ul", "geo": "Ульяновская область", "fact_value": 10},
                     {"geo_id": "GEO:ul", "geo": "ульяновская обл", "fact_value": 5},
@@ -1453,7 +1492,7 @@ def test_context_grouping_executes_canonical_group_contract() -> None:
 
     processed = processor.process(
         state,
-        message="суммируй данные по областям",
+        message="суммируй данные по областям только по суточным балансам",
         execute_db=True,
         clarification=None,
         request_id="request",
@@ -1462,6 +1501,8 @@ def test_context_grouping_executes_canonical_group_contract() -> None:
     assert processed.mutation.replace_intent.operation == Operation.GROUP
     assert processed.response["facts"][0]["entity_id"] == "GEO:ul"
     assert processed.response["facts"][0]["value"] == "15"
+    assert processed.response["facts"][0]["unit"] == "тыс. м3"
+    assert processed.mutation.replace_intent.operands[0].unit == "тыс. м3"
 
 
 def test_context_grouping_reuses_current_successful_result_reference() -> None:
@@ -1703,6 +1744,104 @@ def test_average_after_monthly_series_inherits_grain_and_canonical_scope() -> No
 
     assert normalized.grain == "month"
     assert normalized.operands[0].entities == entities
+
+
+def test_same_scope_two_operand_comparison_is_canonicalized_to_compare_periods() -> None:
+    from balance_chat.processor import _normalize_same_scope_period_comparison_intent
+
+    entity = OperandEntityRef(
+        role="destination",
+        entity=CanonicalEntityRef(
+            entity_id="GEO:samara",
+            entity_type="geo_object",
+            display_name="Самарская область",
+        ),
+    )
+    spring = AnalysisOperand(
+        operand_id="spring",
+        metric="distribution",
+        aggregate_type="sum",
+        entities=[entity],
+        periods=[PeriodRef(date_from="2025-03-01", date_to="2025-06-01")],
+    )
+    summer = spring.model_copy(
+        update={
+            "operand_id": "summer",
+            "periods": [PeriodRef(date_from="2025-06-01", date_to="2025-09-01")],
+        },
+        deep=True,
+    )
+    intent = AnalysisIntent(
+        operation=Operation.COMPARE,
+        operands=[spring, summer],
+        comparison=ComparisonSpec(
+            baseline_operand_id="spring",
+            target_operand_id="summer",
+        ),
+    )
+
+    normalized = _normalize_same_scope_period_comparison_intent(intent)
+
+    assert normalized.operation == Operation.COMPARE_PERIODS
+    assert len(normalized.operands) == 1
+    assert normalized.operands[0].periods == []
+    assert [(item.date_from.isoformat(), item.date_to.isoformat()) for item in normalized.periods] == [
+        ("2025-03-01", "2025-06-01"),
+        ("2025-06-01", "2025-09-01"),
+    ]
+
+
+def test_same_scope_extremum_comparison_is_not_collapsed_to_period_comparison() -> None:
+    from balance_chat.processor import _normalize_same_scope_period_comparison_intent
+
+    first = AnalysisOperand(
+        operand_id="maximum",
+        metric="distribution",
+        aggregate_type="max",
+        periods=[PeriodRef(date_from="2025-03-01", date_to="2025-06-01")],
+    )
+    second = AnalysisOperand(
+        operand_id="minimum",
+        metric="distribution",
+        aggregate_type="min",
+        periods=[PeriodRef(date_from="2025-06-01", date_to="2025-09-01")],
+    )
+    intent = AnalysisIntent(
+        operation=Operation.COMPARE,
+        operands=[first, second],
+        comparison=ComparisonSpec(
+            baseline_operand_id="maximum",
+            target_operand_id="minimum",
+        ),
+    )
+
+    assert _normalize_same_scope_period_comparison_intent(intent) is intent
+
+
+def test_failed_reverse_from_comparison_builds_valid_single_operand_attempt() -> None:
+    first = AnalysisOperand(operand_id="first", metric="distribution")
+    second = AnalysisOperand(operand_id="second", metric="distribution")
+    comparison = AnalysisIntent(
+        operation=Operation.COMPARE,
+        operands=[first, second],
+        comparison=ComparisonSpec(
+            baseline_operand_id="first",
+            target_operand_id="second",
+        ),
+        periods=[PeriodRef(date_from="2025-04-01", date_to="2025-07-01")],
+    )
+    attempted_operand = AnalysisOperand(
+        operand_id="reversed",
+        metric="distribution",
+        aggregate_type="sum",
+        periods=[PeriodRef(date_from="2025-04-01", date_to="2025-07-01")],
+    )
+
+    attempted = _single_operand_attempt(comparison, attempted_operand)
+
+    assert attempted.operation == Operation.SHOW
+    assert attempted.operands == [attempted_operand]
+    assert attempted.comparison is None
 
 
 def test_standalone_result_reference_rows_retain_interpretation_unit() -> None:

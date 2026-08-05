@@ -8,7 +8,7 @@ from difflib import SequenceMatcher
 from datetime import date, timedelta
 from decimal import Decimal, ROUND_HALF_UP
 from time import perf_counter
-from typing import Any
+from typing import Any, Mapping, Sequence
 from uuid import uuid4
 
 from .binding import (
@@ -355,10 +355,7 @@ class PipelineV2TurnProcessor:
             )
         except CanonicalRelationNotFound as exc:
             base = state.active_dialog_scope.intent
-            attempted = base.model_copy(
-                update={"operands": [exc.operand], "comparison": None},
-                deep=True,
-            )
+            attempted = _single_operand_attempt(base, exc.operand)
             mutation = ContextMutation(
                 turn_id=turn_id,
                 user_message=message,
@@ -543,10 +540,7 @@ class PipelineV2TurnProcessor:
             )
         except CanonicalRelationNotFound as exc:
             base = state.active_dialog_scope.intent
-            attempted = base.model_copy(
-                update={"operands": [exc.operand], "comparison": None},
-                deep=True,
-            )
+            attempted = _single_operand_attempt(base, exc.operand)
             return self._reverse_no_data(
                 ContextMutation(
                     turn_id=turn_id,
@@ -853,6 +847,19 @@ class PipelineV2TurnProcessor:
                 request_id=request_id,
             )
             grouping_source = "pipeline"
+        canonical_unit = _canonical_grouping_unit(
+            intent,
+            normalized_message,
+            envelope.get("rows") or [],
+        )
+        if canonical_unit and intent.operands[0].unit != canonical_unit:
+            operand = intent.operands[0].model_copy(
+                update={"unit": canonical_unit}, deep=True
+            )
+            intent = intent.model_copy(update={"operands": [operand]}, deep=True)
+            mutation = mutation.model_copy(
+                update={"replace_intent": intent}, deep=True
+            )
         status = str(envelope.get("status") or "error")
         outcome = _outcome(status)
         grouped = []
@@ -867,10 +874,12 @@ class PipelineV2TurnProcessor:
                     envelope.get("rows") or [],
                     dimension=intent.grouping[0].dimension,
                     default_unit=(
-                        envelope.get("unit")
+                        canonical_unit
+                        or envelope.get("unit")
                         or interpretation.get("unit")
                         or intent.operands[0].unit
                     ),
+                    authoritative_unit=canonical_unit or intent.operands[0].unit,
                     canonical_resolver=self._resolve_group_row_entity,
                 )
                 grouped = CanonicalGroupAggregator().aggregate(members)
@@ -1558,6 +1567,21 @@ class PipelineV2TurnProcessor:
         evidence_geos=(),
     ):
         intent = mutation.replace_intent
+        normalized_comparison = _normalize_same_scope_period_comparison_intent(intent)
+        if normalized_comparison is not intent:
+            intent = normalized_comparison
+            mutation = mutation.model_copy(
+                update={"replace_intent": intent}, deep=True
+            )
+            log_event(
+                LOGGER,
+                logging.INFO,
+                "same_scope_period_comparison_normalized",
+                request_id=request_id,
+                operation=intent.operation.value,
+                period_count=len(intent.periods),
+                operand_count=len(intent.operands),
+            )
         normalized_intent = _normalize_series_reduction_intent(
             state, intent, normalized_message
         )
@@ -2055,15 +2079,22 @@ def _public_native_result(native) -> dict[str, Any]:
         "status": native.status,
         "facts": facts,
         "comparison": (
-            native.comparison.model_dump(mode="json") if native.comparison else None
+            _public_safe_value(native.comparison.model_dump(mode="json"))
+            if native.comparison else None
         ),
         "comparison_set": (
-            native.comparison_set.model_dump(mode="json")
+            _public_safe_value(native.comparison_set.model_dump(mode="json"))
             if native.comparison_set and len(native.comparison_set.members) > 2
             else None
         ),
-        "derived": native.derived.model_dump(mode="json") if native.derived else None,
-        "ranking": native.ranking.model_dump(mode="json") if native.ranking else None,
+        "derived": (
+            _public_safe_value(native.derived.model_dump(mode="json"))
+            if native.derived else None
+        ),
+        "ranking": (
+            _public_safe_value(native.ranking.model_dump(mode="json"))
+            if native.ranking else None
+        ),
     }
 
 
@@ -2340,6 +2371,65 @@ def _same_operand_scope(left: AnalysisOperand, right: AnalysisOperand) -> bool:
         for item in right.entities
     }
     return left_scope == right_scope
+
+
+def _normalize_same_scope_period_comparison_intent(
+    intent: AnalysisIntent,
+) -> AnalysisIntent:
+    """Canonicalize one scalar target compared over two distinct periods.
+
+    The conversational model may represent references to two historical turns
+    as two operands.  When metric, aggregate and canonical entity scope are
+    identical and only the exact periods differ, the domain contract is
+    unambiguously ``compare_periods``: one operand plus two global periods.
+    Comparisons of different entities or different aggregates are untouched.
+    """
+    if intent.operation != Operation.COMPARE or len(intent.operands) != 2:
+        return intent
+    first, second = intent.operands
+    if (
+        first.metric != second.metric
+        or first.aggregate_type != second.aggregate_type
+        or not _same_operand_scope(first, second)
+        or len(first.periods) != 1
+        or len(second.periods) != 1
+        or first.periods[0] == second.periods[0]
+    ):
+        return intent
+    operand = first.model_copy(update={"periods": []}, deep=True)
+    return AnalysisIntent(
+        operation=Operation.COMPARE_PERIODS,
+        operands=[operand],
+        periods=[
+            first.periods[0].model_copy(deep=True),
+            second.periods[0].model_copy(deep=True),
+        ],
+        grain=intent.grain,
+    )
+
+
+def _single_operand_attempt(
+    base: AnalysisIntent,
+    operand: AnalysisOperand,
+) -> AnalysisIntent:
+    """Build a valid attempted scope for strict reverse ``no_data``.
+
+    A failed reverse selected from a comparison cannot retain operation
+    ``compare`` with one operand: that shape is invalid before the explicit
+    no-data response can be produced.  Preserve the attempted canonical
+    operand and its periods while dropping comparison-only structure.
+    """
+    operation = (
+        Operation.AGGREGATE
+        if operand.aggregate_type in {"min", "max", "avg", "first", "last"}
+        else Operation.SHOW
+    )
+    return AnalysisIntent(
+        operation=operation,
+        operands=[operand.model_copy(deep=True)],
+        periods=[item.model_copy(deep=True) for item in base.periods],
+        grain=base.grain,
+    )
 
 
 def _series_reduction_contract_summary(native, plan, intent: AnalysisIntent):
@@ -2927,11 +3017,20 @@ def _parse_iso_date(value: Any) -> date | None:
 
 
 def _safe_mapping(value: dict[str, Any]) -> dict[str, Any]:
-    return {
-        str(key): item
-        for key, item in dict(value).items()
-        if str(key).casefold() not in _PRIVATE_RESULT_FIELDS
-    }
+    return _public_safe_value(value)
+
+
+def _public_safe_value(value: Any) -> Any:
+    if isinstance(value, dict):
+        hidden = _PRIVATE_RESULT_FIELDS | _PUBLIC_HIDDEN_ROW_FIELDS
+        return {
+            str(key): _public_safe_value(item)
+            for key, item in value.items()
+            if str(key).casefold() not in hidden
+        }
+    if isinstance(value, list):
+        return [_public_safe_value(item) for item in value]
+    return value
 
 
 def _diagnostics(decision, chunks, task_count, started):
@@ -3069,6 +3168,33 @@ def _named_comparison_periods(intent: AnalysisIntent, text: str) -> list[Any]:
 def _official_name(value: str) -> str:
     text = str(value).strip()
     return text[:1].upper() + text[1:] if text else text
+
+
+def _canonical_grouping_unit(
+    intent: AnalysisIntent,
+    normalized_message: str,
+    rows: Sequence[Mapping[str, Any]],
+) -> str | None:
+    """Keep daily-balance grouping on the canonical storage/public unit."""
+    if "суточн" in str(normalized_message).casefold():
+        return "тыс. м3"
+    for reference in intent.operands[0].entities:
+        if (
+            reference.entity.entity_type == "balance"
+            and "суточный баланс" in reference.entity.display_name.casefold()
+        ):
+            return "тыс. м3"
+    for row in rows:
+        for key in (
+            "balance",
+            "balance_name",
+            "balance_label",
+            "source_balance",
+            "source_balance_name",
+        ):
+            if "суточный баланс" in str(row.get(key) or "").casefold():
+                return "тыс. м3"
+    return intent.operands[0].unit
 
 
 def _normalize_text(value: str) -> str:
