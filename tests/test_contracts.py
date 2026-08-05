@@ -9,11 +9,37 @@ from balance_chat.contracts import (
     AnalysisIntent,
     AnalysisOperand,
     ComparisonSpec,
+    ContextOperandDraft,
     InterpretationDecision,
     Operation,
     PeriodRef,
     interpretation_decision_json_schema,
 )
+
+
+def test_volume_units_are_canonicalized_in_persisted_contracts() -> None:
+    operand = AnalysisOperand(
+        operand_id="distribution",
+        metric="distribution",
+        unit="млн м3",
+    )
+    draft = ContextOperandDraft(
+        operand_id="distribution",
+        metric="distribution",
+        unit="млн м3",
+    )
+
+    assert operand.unit == "тыс. м3"
+    assert draft.unit == "тыс. м3"
+    assert AnalysisOperand(
+        operand_id="incoming",
+        metric="incoming",
+        unit=None,
+    ).unit == "тыс. м3"
+    assert AnalysisOperand(
+        operand_id="stock",
+        metric="stock",
+    ).unit == "тыс. м3"
 
 
 def test_period_ref_uses_exclusive_end() -> None:

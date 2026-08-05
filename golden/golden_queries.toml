@@ -1,4 +1,4 @@
-schema_version = "1.0"
+schema_version = "1.1"
 metadata_manifest = "../../pipeline/data/metadata/manifest.json"
 approved_metadata_bundle_id = "sha256:f8d326b02895779d69a4db81b9a5b7ba9153e04fea5193180c02daabc9d7552c"
 database_fixture = "ai-balances-staging-2025@2026-08-05"
@@ -10,7 +10,7 @@ priority = "P0 Core"
 title = "Полный суточный баланс ГП ТГ Москва"
 query = "Покажи баланс ГП ТГ Москва за 25.06.2025."
 result_shape = "balance_snapshot"
-value_mode = "both"
+value_mode = "fact"
 operation = "show"
 metric = "balance"
 
@@ -46,7 +46,7 @@ source_execution_count = 1
 [queries.result]
 status = "ok"
 min_rows = 100
-required_columns = ["article_name", "article_indent", "gas_day", "plan_value", "fact_value", "unit"]
+required_columns = ["article_name", "article_indent", "gas_day", "fact_value", "unit"]
 required_sections = ["Ресурсы", "Поступление", "Распределение"]
 unit = "тыс. м3"
 hierarchy_required = true

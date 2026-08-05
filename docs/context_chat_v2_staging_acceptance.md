@@ -68,9 +68,9 @@ end-to-end benchmark Qwen/unified/PostgreSQL и не основание для c
 3. В acceptance первый standalone resolver занял около 20.9 s; контекстный GEO
    turn — около 4.6 s до завершения resolver/gate и DB. Нужны end-to-end c=2/c=4
    и percentile latency перед production traffic.
-4. Значение единицы берётся из существующего ResultEnvelope. Проверка
-   физического масштаба `млн м3`/`тыс. м3` остаётся ответственностью parity
-   regression и не исправляется эвристикой в V2 translator.
+4. Единица больше не наследуется из произвольного ResultEnvelope. Физический
+   масштаб зафиксирован единым доменным контрактом `тыс. м3`; другое обозначение
+   канонизируется на typed/execution/public boundaries и проверяется regression.
 5. Canonical GEO `Ярославская` корректно исполняется, но active scope показывает
    сокращённое имя вместо официального `Ярославская область`. Это отдельная
    metadata/presentation-задача и не должно исправляться в summary.

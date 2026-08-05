@@ -18,6 +18,7 @@ from .contracts import (
     Operation,
     PeriodRef,
 )
+from .domain_invariants import CANONICAL_VOLUME_UNIT
 from .conversation import handle_indexes
 from .domain import metric_definition
 
@@ -467,7 +468,7 @@ class InterpretationMutationCompiler:
                 item.entity.entity_type in {"balance", "article"}
                 for item in operand.entities
             ):
-                operand = operand.model_copy(update={"unit": "тыс. м3"}, deep=True)
+                operand = operand.model_copy(update={"unit": CANONICAL_VOLUME_UNIT}, deep=True)
             if spec.reverse_direction:
                 operand = self._resolve_reverse_operand(operand)
             operands.append(operand)

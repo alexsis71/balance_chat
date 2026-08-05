@@ -110,6 +110,22 @@ def test_safe_execution_evidence_exposes_contract_without_raw_sql_or_rows() -> N
     }
 
 
+def test_volume_contract_removes_plan_fields_and_forces_canonical_unit() -> None:
+    from balance_chat.processor import _public_result_row
+
+    assert _public_result_row({
+        "article_name": "Распределение",
+        "plan": "10",
+        "plan_value": "10",
+        "fact_value": "12",
+        "unit": "млн м3",
+    }) == {
+        "article_name": "Распределение",
+        "fact_value": "12",
+        "unit": "тыс. м3",
+    }
+
+
 @pytest.mark.parametrize(
     ("query", "date_from", "date_to"),
     [
@@ -437,7 +453,7 @@ def test_peer_geo_adapter_uses_shared_semantics_not_degraded_expressions() -> No
     assert intent.comparison.target_operand_id == "operand_2"
 
 
-def test_fact_extraction_requires_explicit_unit() -> None:
+def test_fact_extraction_uses_domain_unit_when_envelope_omits_it() -> None:
     translator = PipelineEnvelopeTranslator()
     envelope = _envelope()
     intent = translator.intent(envelope)
@@ -446,8 +462,9 @@ def test_fact_extraction_requires_explicit_unit() -> None:
     task = NativeMultiOperandPlanner().plan(intent.model_copy(update={"operands": [intent.operands[0]]})).tasks[0]
     envelope["rows"][0].pop("unit")
     envelope.pop("unit")
-    with pytest.raises(EnvelopeTranslationError, match="unit"):
-        translator.fact(task, envelope)
+    fact = translator.fact(task, envelope)
+
+    assert fact.unit == "тыс. м3"
 
 
 def test_additive_scalar_rows_are_summed_with_provenance() -> None:
@@ -599,6 +616,7 @@ def test_public_result_suppresses_deterministic_execution_phrase() -> None:
         "balance": "ГП ТГ Н.Новгород суточный баланс",
         "article_name": "ТГ Москва",
         "fact_value": 1,
+        "unit": "тыс. м3",
     }]
     assert result["warnings"] == [
         {"code": "data_quality", "message": "Проверено не за все дни"}
@@ -2145,11 +2163,15 @@ def test_failed_reverse_from_comparison_builds_valid_single_operand_attempt() ->
     assert attempted.comparison is None
 
 
-def test_standalone_result_reference_rows_retain_interpretation_unit() -> None:
+def test_standalone_result_reference_rows_use_canonical_unit_and_no_plan() -> None:
     facts = _standalone_facts(
         {
             "interpretation": {"unit": "тыс.м3"},
-            "rows": [{"article_scope": "Самарская обл.", "fact_value": 12}],
+            "rows": [{
+                "article_scope": "Самарская обл.",
+                "plan_value": 11,
+                "fact_value": 12,
+            }],
         }
     )
 
@@ -2157,7 +2179,7 @@ def test_standalone_result_reference_rows_retain_interpretation_unit() -> None:
         {
             "article_scope": "Самарская обл.",
             "fact_value": 12,
-            "unit": "тыс.м3",
+            "unit": "тыс. м3",
         }
     ]
 

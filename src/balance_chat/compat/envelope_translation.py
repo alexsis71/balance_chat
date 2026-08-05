@@ -15,6 +15,7 @@ from ..contracts import (
     Operation,
     PeriodRef,
 )
+from ..domain_invariants import CANONICAL_VOLUME_UNIT
 from ..execution import ScalarFact
 from ..planning import ExecutionTask
 
@@ -420,22 +421,9 @@ def _canonical_task_unit(
     task: ExecutionTask,
     rows: list[Mapping[str, Any]] = (),
 ) -> str | None:
-    """Daily balance facts are stored and exposed in thousands of cubic metres."""
-    operand = task.scalar_intent.operands[0]
-    for reference in operand.entities:
-        if (
-            reference.role == "balance"
-            and "суточный баланс" in reference.entity.display_name.casefold()
-        ):
-            return "тыс. м3"
-    for row in rows:
-        for key in (
-            "balance", "balance_name", "balance_label",
-            "source_balance", "source_balance_name",
-        ):
-            if "суточный баланс" in str(row.get(key) or "").casefold():
-                return "тыс. м3"
-    return None
+    """All source volume facts use one authoritative physical unit."""
+    del task, rows
+    return CANONICAL_VOLUME_UNIT
 
 
 _DATE_FIELDS = ("gas_day", "day", "date", "fact_date", "balance_date", "date_from")

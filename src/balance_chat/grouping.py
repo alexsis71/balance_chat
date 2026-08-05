@@ -106,7 +106,7 @@ def member_facts_from_rows(
         value = next(
             (
                 row.get(key)
-                for key in ("fact_value", "plan_value", "value")
+                for key in ("fact_value", "value")
                 if row.get(key) is not None
             ),
             None,

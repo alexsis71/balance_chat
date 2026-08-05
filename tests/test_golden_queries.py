@@ -2,9 +2,12 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import pytest
+
 from balance_chat.golden_queries import (
     GoldenQueryResult,
     GoldenRunReport,
+    GoldenCatalogError,
     evaluate_golden_query,
     load_golden_catalog,
     metadata_contract_checks,
@@ -44,7 +47,6 @@ def _row(name: str, indent: int, fact: float, *, day: str = "2025-06-25") -> dic
         "article_scope": name.strip(),
         "article_indent": indent,
         "gas_day": day,
-        "plan_value": fact,
         "fact_value": fact,
         "unit": "тыс. м3",
     }
@@ -90,8 +92,20 @@ def test_gq_001_catalog_is_explicit_and_canonical_metadata_is_valid() -> None:
     assert query.approval_status == "approved"
     assert query.priority == "P0 Core"
     assert query.result_shape == "balance_snapshot"
-    assert query.value_mode == "both"
+    assert query.value_mode == "fact"
     assert all(item.passed for item in metadata_contract_checks(catalog, query))
+
+
+@pytest.mark.parametrize("mode", ["plan", "both"])
+def test_golden_catalog_rejects_plan_modes(tmp_path: Path, mode: str) -> None:
+    source = CATALOG.read_text(encoding="utf-8").replace(
+        'value_mode = "fact"', f'value_mode = "{mode}"', 1
+    )
+    path = tmp_path / "golden.toml"
+    path.write_text(source, encoding="utf-8")
+
+    with pytest.raises(GoldenCatalogError, match="fact-only"):
+        load_golden_catalog(path)
 
 
 def test_gq_001_semantic_contract_accepts_complete_balance_snapshot() -> None:
@@ -107,6 +121,24 @@ def test_gq_001_semantic_contract_accepts_complete_balance_snapshot() -> None:
 
     assert checks
     assert all(item.passed for item in checks), [item for item in checks if not item.passed]
+
+
+def test_gq_001_rejects_plan_columns_and_noncanonical_units() -> None:
+    catalog = load_golden_catalog(CATALOG)
+    query = catalog.queries[0]
+    rows = _passing_rows()
+    rows[0]["plan_value"] = rows[0]["fact_value"]
+    rows[1]["unit"] = "млн м3"
+
+    checks = evaluate_golden_query(
+        query,
+        _response(rows, "2025-06-25", "2025-06-26"),
+        _audit(layer="unified_balance_level", day="2025-06-25"),
+    )
+
+    failed = {item.name for item in checks if not item.passed}
+    assert "fact-only result" in failed
+    assert "canonical public unit" in failed
 
 
 def test_gq_001_exposes_current_year_fallback_and_incomplete_rows_by_layer() -> None:

@@ -5,7 +5,9 @@ from enum import StrEnum
 from typing import Any, Literal
 from uuid import uuid4
 
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+
+from .domain_invariants import CANONICAL_VOLUME_UNIT, canonical_volume_unit
 
 
 def utc_now() -> datetime:
@@ -85,7 +87,12 @@ class AnalysisOperand(ContractModel):
     aggregate_type: str = "sum"
     entities: list[OperandEntityRef] = Field(default_factory=list)
     periods: list[PeriodRef] = Field(default_factory=list)
-    unit: str | None = None
+    unit: str = CANONICAL_VOLUME_UNIT
+
+    @field_validator("unit", mode="before")
+    @classmethod
+    def normalize_volume_unit(cls, value: Any) -> str:
+        return canonical_volume_unit(value) or CANONICAL_VOLUME_UNIT
 
     @model_validator(mode="after")
     def validate_unique_roles(self) -> "AnalysisOperand":
@@ -459,6 +466,11 @@ class ContextOperandDraft(ContractModel):
     periods: list[PeriodRef] = Field(default_factory=list)
     unit: str | None = None
     reverse_direction: bool = False
+
+    @field_validator("unit", mode="before")
+    @classmethod
+    def normalize_volume_unit(cls, value: Any) -> str | None:
+        return canonical_volume_unit(value)
 
 
 class ContextIntentGraph(ContractModel):

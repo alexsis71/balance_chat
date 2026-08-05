@@ -36,6 +36,7 @@ from .contracts import (
     ResultMemoryWrite,
     TransitionOutcome,
 )
+from .domain_invariants import CANONICAL_VOLUME_UNIT, FORBIDDEN_PLAN_FIELDS
 from .execution import NativeExecutor
 from .gating import EvidenceCompletenessError, RoutingEvidenceGate
 from .grouping import CanonicalGroupAggregator, GroupingError, member_facts_from_rows
@@ -2278,13 +2279,9 @@ def _standalone_facts(envelope: dict[str, Any]) -> list[dict[str, Any]]:
         if isinstance(envelope.get("interpretation"), dict)
         else {}
     )
-    canonical_unit = str(
-        envelope.get("unit") or interpretation.get("unit") or ""
-    ).strip()
+    del interpretation
     rows = [
-        _safe_mapping(
-            {**item, **({"unit": canonical_unit} if canonical_unit and not item.get("unit") else {})}
-        )
+        _canonical_volume_row(item)
         for item in (envelope.get("rows") or [])
         if isinstance(item, dict)
     ]
@@ -2708,13 +2705,11 @@ def _normalize_full_balance_envelope(
 
     if not _is_full_balance_show(intent):
         return envelope
-    unit = intent.operands[0].unit
-    if not unit:
-        return envelope
+    unit = CANONICAL_VOLUME_UNIT
     normalized = dict(envelope)
     normalized["unit"] = unit
     normalized["rows"] = [
-        {**row, **({"unit": unit} if row.get("article_name") is not None else {})}
+        _canonical_volume_row(row)
         if isinstance(row, dict)
         else row
         for row in (envelope.get("rows") or [])
@@ -3227,16 +3222,30 @@ _PRIVATE_RESULT_FIELDS = {
 }
 
 _PUBLIC_HIDDEN_ROW_FIELDS = {
-    "balance_id", "balance_ids", "article_id", "article_ids"
+    "balance_id", "balance_ids", "article_id", "article_ids",
+    *FORBIDDEN_PLAN_FIELDS,
 }
 
 
 def _public_result_row(value: dict[str, Any]) -> dict[str, Any]:
-    return {
+    canonical = _canonical_volume_row(value)
+    row = {
         key: item
-        for key, item in _safe_mapping(value).items()
+        for key, item in canonical.items()
         if key.casefold() not in _PUBLIC_HIDDEN_ROW_FIELDS
     }
+    return row
+
+
+def _canonical_volume_row(value: Mapping[str, Any]) -> dict[str, Any]:
+    row = {
+        key: item
+        for key, item in _safe_mapping(dict(value)).items()
+        if key.casefold() not in FORBIDDEN_PLAN_FIELDS
+    }
+    if any(key in row for key in ("fact", "fact_value", "amount", "volume")):
+        row["unit"] = CANONICAL_VOLUME_UNIT
+    return row
 
 
 def _bucket_rank_public_result(envelope: dict[str, Any]) -> dict[str, Any] | None:
@@ -3339,12 +3348,8 @@ def _row_decimal(row: dict[str, Any]) -> Decimal | None:
 
 
 def _result_unit(envelope: dict[str, Any], row: dict[str, Any]) -> str:
-    interpretation = (
-        envelope.get("interpretation")
-        if isinstance(envelope.get("interpretation"), dict)
-        else {}
-    )
-    return str(row.get("unit") or envelope.get("unit") or interpretation.get("unit") or "").strip()
+    del envelope, row
+    return CANONICAL_VOLUME_UNIT
 
 
 def _metric_label(metric: Any) -> str:
@@ -3551,26 +3556,9 @@ def _canonical_grouping_unit(
     normalized_message: str,
     rows: Sequence[Mapping[str, Any]],
 ) -> str | None:
-    """Keep daily-balance grouping on the canonical storage/public unit."""
-    if "суточн" in str(normalized_message).casefold():
-        return "тыс. м3"
-    for reference in intent.operands[0].entities:
-        if (
-            reference.entity.entity_type == "balance"
-            and "суточный баланс" in reference.entity.display_name.casefold()
-        ):
-            return "тыс. м3"
-    for row in rows:
-        for key in (
-            "balance",
-            "balance_name",
-            "balance_label",
-            "source_balance",
-            "source_balance_name",
-        ):
-            if "суточный баланс" in str(row.get(key) or "").casefold():
-                return "тыс. м3"
-    return intent.operands[0].unit
+    """All grouped source facts use the authoritative physical unit."""
+    del intent, normalized_message, rows
+    return CANONICAL_VOLUME_UNIT
 
 
 def _normalize_text(value: str) -> str:

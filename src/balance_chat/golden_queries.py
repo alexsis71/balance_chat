@@ -14,6 +14,7 @@ from typing import Any, Mapping, Sequence
 import uuid
 
 from .acceptance_runner import AcceptanceHttpClient, AuditLogReader
+from .domain_invariants import CANONICAL_VOLUME_UNIT, FORBIDDEN_PLAN_FIELDS
 
 
 PRIORITIES = ("P0 Core", "P1 Analytics", "P2 Advanced")
@@ -150,8 +151,20 @@ def _parse_query(raw: Mapping[str, Any]) -> GoldenQuery:
         raise GoldenCatalogError(f"{query_id} has invalid priority: {priority}")
     if raw["approval_status"] not in {"approved", "proposed"}:
         raise GoldenCatalogError(f"{query_id} has invalid approval_status")
-    if raw["value_mode"] not in {"plan", "fact", "both"}:
-        raise GoldenCatalogError(f"{query_id} has invalid value_mode")
+    if raw["value_mode"] != "fact":
+        raise GoldenCatalogError(
+            f"{query_id} has invalid value_mode: AI Balances is fact-only"
+        )
+    result = dict(raw["result"])
+    if result.get("unit") != CANONICAL_VOLUME_UNIT:
+        raise GoldenCatalogError(
+            f"{query_id} must use canonical unit {CANONICAL_VOLUME_UNIT!r}"
+        )
+    required_columns = {
+        str(item).casefold() for item in result.get("required_columns", [])
+    }
+    if required_columns & FORBIDDEN_PLAN_FIELDS:
+        raise GoldenCatalogError(f"{query_id} cannot require plan fields")
     period = dict(raw["period"])
     if set(period) != {"date_from", "date_to"} or period["date_from"] >= period["date_to"]:
         raise GoldenCatalogError(f"{query_id} must define exclusive-end period")
@@ -169,7 +182,7 @@ def _parse_query(raw: Mapping[str, Any]) -> GoldenQuery:
         entities=tuple(dict(item) for item in raw["entities"]),
         canonical=dict(raw["canonical"]),
         execution=dict(raw["execution"]),
-        result=dict(raw["result"]),
+        result=result,
         controls=tuple(dict(item) for item in raw["controls"]),
         clarification=dict(raw["clarification"]),
         forbidden=dict(raw["forbidden"]),
@@ -333,7 +346,7 @@ def evaluate_golden_query(
         "result_shape", "required result columns",
         set(required_columns).issubset(columns), required_columns, columns,
     ))
-    checks.append(_value_mode_check(query.value_mode, columns))
+    checks.append(_fact_only_check(columns))
     if expected_result.get("hierarchy_required"):
         indents = [item.get("article_indent") for item in rows if item.get("article_indent") is not None]
         checks.append(GoldenCheck(
@@ -351,9 +364,16 @@ def evaluate_golden_query(
     units = {str(item.get("unit")) for item in rows if item.get("unit") not in (None, "")}
     if result.get("unit") not in (None, ""):
         units.add(str(result.get("unit")))
+    fact_rows = [item for item in rows if item.get("fact_value") is not None]
+    unit_contract_holds = (
+        expected_unit == CANONICAL_VOLUME_UNIT
+        and bool(fact_rows)
+        and all(item.get("unit") == CANONICAL_VOLUME_UNIT for item in fact_rows)
+        and units == {CANONICAL_VOLUME_UNIT}
+    )
     checks.append(GoldenCheck(
-        "result_shape", "canonical public unit", expected_unit in units,
-        expected_unit, sorted(units),
+        "result_shape", "canonical public unit", unit_contract_holds,
+        CANONICAL_VOLUME_UNIT, sorted(units),
     ))
     if expected_result.get("source_order_required"):
         ordered = all(
@@ -498,12 +518,12 @@ def _normalized_name(value: Any) -> str:
     return str(value or "").strip()
 
 
-def _value_mode_check(mode: str, columns: Sequence[str]) -> GoldenCheck:
+def _fact_only_check(columns: Sequence[str]) -> GoldenCheck:
     lowered = {item.casefold() for item in columns}
-    has_plan = bool(lowered & {"plan", "plan_value"})
+    has_plan = bool(lowered & FORBIDDEN_PLAN_FIELDS)
     has_fact = bool(lowered & {"fact", "fact_value"})
-    actual = "both" if has_plan and has_fact else "plan" if has_plan else "fact" if has_fact else "none"
-    return _check("result_shape", "plan/fact mode", mode, actual)
+    actual = "fact" if has_fact and not has_plan else "plan_present" if has_plan else "none"
+    return _check("result_shape", "fact-only result", "fact", actual)
 
 
 def _control_checks(control: Mapping[str, Any], rows: Sequence[Mapping[str, Any]]) -> list[GoldenCheck]:
