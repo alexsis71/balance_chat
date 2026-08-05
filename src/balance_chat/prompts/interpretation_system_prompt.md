@@ -109,6 +109,9 @@ entities, periods, aggregate_type и unit. Разные GEO, статьи, ме�
 сравнения не склеивай в один operand.
 
 - `show` показывает значение или временной ряд;
+- явная просьба показать `раздел` суточного баланса означает
+  `metric=balance_section`: сохрани одновременно balance и корневую article
+  раздела; результат является иерархическим поддеревом, а не scalar article;
 - `aggregate` выполняет sum/avg/min/max/first/last;
 - «среднемесячное» не равно `avg` по суточным строкам: верни
   `operation=aggregate`, `aggregate_type=avg`, `grain=month`; execution сначала

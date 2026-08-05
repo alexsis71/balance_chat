@@ -730,6 +730,170 @@ def test_standalone_full_balance_uses_exact_date_and_dedicated_execution() -> No
     ]
 
 
+@pytest.mark.parametrize(
+    ("section", "article_id", "expected_names", "expected_indents"),
+    [
+        (
+            "Ресурсы",
+            2010000039710,
+            ["Ресурсы", "Поступление", "От ТГ Н.Новгород"],
+            [0, 2, 4],
+        ),
+        (
+            "Поступление",
+            2010000039711,
+            ["Поступление", "От ТГ Н.Новгород"],
+            [0, 2],
+        ),
+        (
+            "Распределение",
+            2010000039755,
+            ["Распределение", "Собств. нужды и потери"],
+            [0, 2],
+        ),
+    ],
+)
+def test_exact_day_balance_section_uses_one_full_snapshot_and_filters_metadata_subtree(
+    section, article_id, expected_names, expected_indents
+) -> None:
+    balance = SimpleNamespace(
+        balance_id=2010000039953,
+        canonical_name="ГП ТГ Москва суточный баланс",
+        aliases=("гп тг москва", "тг москва"),
+    )
+    articles = (
+        SimpleNamespace(
+            article_id=2010000039710,
+            balance_id=balance.balance_id,
+            canonical_name="Ресурсы",
+            aliases=(),
+            path=("Ресурсы",),
+        ),
+        SimpleNamespace(
+            article_id=2010000039711,
+            balance_id=balance.balance_id,
+            canonical_name="Поступление",
+            aliases=(),
+            path=("Ресурсы", "Поступление"),
+        ),
+        SimpleNamespace(
+            article_id=2010000039714,
+            balance_id=balance.balance_id,
+            canonical_name="От ТГ Н.Новгород",
+            aliases=(),
+            path=("Ресурсы", "Поступление", "От ТГ Н.Новгород"),
+        ),
+        SimpleNamespace(
+            article_id=2010000039753,
+            balance_id=balance.balance_id,
+            canonical_name="Запас газа",
+            aliases=(),
+            path=("Запас газа",),
+        ),
+        SimpleNamespace(
+            article_id=2010000039755,
+            balance_id=balance.balance_id,
+            canonical_name="Распределение",
+            aliases=(),
+            path=("Распределение",),
+        ),
+        SimpleNamespace(
+            article_id=2010000039756,
+            balance_id=balance.balance_id,
+            canonical_name="Собств. нужды и потери",
+            aliases=(),
+            path=("Распределение", "Собств. нужды и потери"),
+        ),
+    )
+
+    class SectionRuntime:
+        def __init__(self):
+            self.execute_calls = 0
+
+        def _import_pipeline_module(self, name):
+            if name == "pipeline_v2.nlp_ru":
+                return SimpleNamespace(normalize_query_lemmas=_test_normalize)
+            if name == "pipeline_v2.query_analyzer":
+                return SimpleNamespace(analyze_query=lambda _query: SimpleNamespace(
+                    intent="show",
+                    metric="incoming",
+                    article_policy=None,
+                    article_text=None,
+                ))
+            raise ImportError(name)
+
+        def execute_raw(self, *_args, **_kwargs):
+            raise AssertionError("section snapshot must not use legacy standalone")
+
+        def execute(self, _query, source_intent, **kwargs):
+            self.execute_calls += 1
+            assert kwargs["apply_summary"] is False
+            assert source_intent.operands[0].metric == "balance"
+            assert [item.role for item in source_intent.operands[0].entities] == ["balance"]
+            return {
+                "status": "ok",
+                "rows": [
+                    {"article_id": item.article_id,
+                     "article_name": " " * (2 * (len(item.path) - 1)) + item.canonical_name,
+                     "article_indent": 2 * (len(item.path) - 1),
+                     "gas_day": "2025-06-25",
+                     "fact_value": str(index + 1)}
+                    for index, item in enumerate(articles)
+                ],
+                "debug": {
+                    "sql_function": "api.show_balance_day",
+                    "params": {"balance_id": balance.balance_id, "day": "2025-06-25"},
+                },
+            }
+
+    class Registry:
+        geo_objects = ()
+        geo_groups = ()
+        routes = ()
+        manifest = SimpleNamespace(bundle_version="2026.08.1")
+
+        @staticmethod
+        def balance(value):
+            return balance if "москва" in _test_normalize(value) else None
+
+        @staticmethod
+        def articles_for_balance(value):
+            return articles if int(value) == balance.balance_id else ()
+
+        @staticmethod
+        def article(value):
+            return next((item for item in articles if item.article_id == int(value)), None)
+
+    runtime = SectionRuntime()
+    registry = Registry()
+    processor = PipelineV2TurnProcessor(
+        runtime=runtime,
+        registry=registry,
+        interpreter=InvalidInterpreter(),
+        compiler=InterpretationMutationCompiler(RegistryEntityBinder(registry)),
+        executor=object(),
+        policy=NeverCalled(),
+    )
+
+    processed = processor.process(
+        ContextContractV2(session_id="session"),
+        message=f"Покажи раздел {section} баланса ГП ТГ Москва за 25.06.2025.",
+        execute_db=True,
+        clarification=None,
+        request_id=f"section-{article_id}",
+    )
+
+    assert runtime.execute_calls == 1
+    assert processed.mutation.replace_intent.operands[0].metric == "balance_section"
+    assert processed.mutation.replace_intent.operands[0].entities[1].entity.entity_id == (
+        f"ART:{article_id}"
+    )
+    assert [row["article_name"].strip() for row in processed.response["rows"]] == expected_names
+    assert [row["article_indent"] for row in processed.response["rows"]] == expected_indents
+    assert processed.diagnostics["execution"]["layer"] == "unified_balance_section"
+    assert processed.diagnostics["execution"]["source_execution_count"] == 1
+
+
 def test_contextual_full_balance_preserves_hierarchical_rows() -> None:
     balance = OperandEntityRef(
         role="balance",

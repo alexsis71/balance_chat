@@ -62,7 +62,8 @@ C:\Users\alexs\miniforge3\envs\ai_env\python.exe -m pytest -q
 [`docs/context_chat_acceptance_runner.md`](docs/context_chat_acceptance_runner.md).
 
 Неприкосновенное продуктовое ядро отдельно защищается вручную утверждёнными
-Golden Queries. Первый контракт `GQ-001`, отличие от широкого acceptance,
+Golden Queries. Контракты `GQ-001…GQ-004` защищают полный баланс и три
+иерархических section snapshot на точную дату; отличие от широкого acceptance,
 структура каталога и блокирующий P0 merge gate описаны в
 [`docs/golden_queries.md`](docs/golden_queries.md). Acceptance-сценарии не
 становятся Golden Queries автоматически.

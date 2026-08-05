@@ -177,6 +177,23 @@ class PipelineV2TurnProcessor:
             explicit_business_count=routing.explicit_business_count,
             explicit_geo_count=routing.explicit_geo_count,
         )
+        balance_section = self._deterministic_balance_section_mutation(
+            message,
+            explicit_businesses,
+            turn_id,
+        )
+        if balance_section is not None:
+            return self._execute_mutation(
+                state,
+                balance_section,
+                normalized_message=balance_section.normalized_message or message,
+                execute_db=execute_db,
+                request_id=request_id,
+                started=started,
+                interpretation_mode="deterministic_balance_section",
+                memory_chunks=[],
+                evidence_businesses=explicit_businesses,
+            )
         full_balance = self._deterministic_full_balance_mutation(
             message,
             explicit_businesses,
@@ -454,6 +471,23 @@ class PipelineV2TurnProcessor:
         explicit_geos = self._tagged_geo_objects(message)
         explicit_businesses = self._tagged_business_balances(message)
         business_mentions = self._tagged_business_entity_mentions(message)
+        balance_section = self._deterministic_balance_section_mutation(
+            message,
+            explicit_businesses,
+            turn_id,
+        )
+        if balance_section is not None:
+            return self._execute_mutation(
+                state,
+                balance_section,
+                normalized_message=balance_section.normalized_message or message,
+                execute_db=execute_db,
+                request_id=request_id,
+                started=started,
+                interpretation_mode="deterministic_balance_section",
+                memory_chunks=[],
+                evidence_businesses=explicit_businesses,
+            )
         full_balance = self._deterministic_full_balance_mutation(
             message,
             explicit_businesses,
@@ -1337,6 +1371,61 @@ class PipelineV2TurnProcessor:
             replace_intent=intent,
         )
 
+    def _deterministic_balance_section_mutation(
+        self,
+        message: str,
+        balances: Sequence[Any],
+        turn_id: str,
+    ) -> ContextMutation | None:
+        """Bind an explicit metadata section and exact day without an LLM pass."""
+
+        period = _explicit_single_day_period(message)
+        if len(balances) != 1 or period is None or self._analyze_query is None:
+            return None
+        try:
+            analyzed = self._analyze_query(message)
+        except Exception:
+            return None
+        if str(getattr(analyzed, "intent", "")).casefold() != "show":
+            return None
+        balance = balances[0]
+        section = _explicit_section_article(self.registry, balance, message)
+        if section is None:
+            return None
+        intent = AnalysisIntent(
+            operation=Operation.SHOW,
+            operands=[AnalysisOperand(
+                operand_id="section_snapshot",
+                metric="balance_section",
+                aggregate_type="sum",
+                entities=[
+                    OperandEntityRef(
+                        role="balance",
+                        entity=CanonicalEntityRef(
+                            entity_id=f"BAL:{balance.balance_id}",
+                            entity_type="balance",
+                            display_name=balance.canonical_name,
+                        ),
+                    ),
+                    OperandEntityRef(
+                        role="article",
+                        entity=CanonicalEntityRef(
+                            entity_id=f"ART:{section.article_id}",
+                            entity_type="article",
+                            display_name=section.canonical_name,
+                        ),
+                    ),
+                ],
+            )],
+            periods=[period],
+        )
+        return ContextMutation(
+            turn_id=turn_id,
+            user_message=message,
+            normalized_message=message,
+            replace_intent=intent,
+        )
+
     def _tagged_business_entity_mentions(self, message: str) -> list[EntityMention]:
         """Preserve every qualified business span and its local routing role."""
         if self._normalize_lemmas is None:
@@ -1749,7 +1838,7 @@ class PipelineV2TurnProcessor:
             explicit_geo_count=len(evidence_geos),
             pre_database=True,
         )
-        if _is_full_balance_show(intent):
+        if _is_full_balance_show(intent) or _is_balance_section_show(intent):
             return self._execute_full_balance_mutation(
                 state,
                 mutation,
@@ -1904,17 +1993,22 @@ class PipelineV2TurnProcessor:
         memory_chunks,
         decision=None,
     ) -> TurnProcessResult:
-        """Preserve the hierarchical rows of an explicit full-balance request."""
+        """Preserve full-balance or metadata-section hierarchical rows."""
         execute = getattr(self.runtime, "execute", None)
         if not callable(execute):
             raise TurnProcessingError(
                 "balance-level execution is unavailable",
                 code="balance_level_execution_unavailable",
             )
+        section = _balance_section_article(intent, self.registry)
+        source_intent = _full_balance_source_intent(intent) if section is not None else intent
+        execution_layer = (
+            "unified_balance_section" if section is not None else "unified_balance_level"
+        )
         try:
             envelope = execute(
                 normalized_message,
-                intent,
+                source_intent,
                 execute_db=execute_db,
                 request_id=f"{request_id}:balance",
                 apply_summary=False,
@@ -1924,12 +2018,18 @@ class PipelineV2TurnProcessor:
                 "balance-level execution failed",
                 code="balance_level_execution_failed",
             ) from exc
-        envelope = _normalize_full_balance_envelope(envelope, intent)
+        if section is not None:
+            envelope = _filter_balance_section_envelope(
+                envelope,
+                section,
+                self.registry,
+            )
+        envelope = _normalize_full_balance_envelope(envelope, source_intent)
         status = str(envelope.get("status") or "error")
         outcome = _outcome(status)
         summary_diagnostics: dict[str, Any] = {
             "requested": False,
-            "execution_layer": "unified_balance_level",
+            "execution_layer": execution_layer,
         }
         summarize = getattr(self.runtime, "summarize_envelope", None)
         if outcome == TransitionOutcome.SUCCESS and execute_db and callable(summarize):
@@ -2001,7 +2101,7 @@ class PipelineV2TurnProcessor:
         diagnostics.setdefault("execution", {}).update(
             status=status,
             task_count=1,
-            layer="unified_balance_level",
+            layer=execution_layer,
             source_execution_count=1,
             row_count=len(envelope.get("rows") or []),
             elapsed_ms=int((perf_counter() - started) * 1000),
@@ -2695,6 +2795,150 @@ def _explicit_single_day_period(message: str) -> PeriodRef | None:
         return None
     start = unique[0]
     return PeriodRef(date_from=start, date_to=start + timedelta(days=1))
+
+
+_SECTION_MARKER = re.compile(r"\bраздел[а-я]*\b", re.IGNORECASE)
+
+
+def _explicit_section_article(registry: Any, balance: Any, message: str) -> Any | None:
+    """Resolve an explicit ``section <metadata name>`` within one balance."""
+
+    normalized = _normalize_text(message)
+    marker = _SECTION_MARKER.search(normalized)
+    articles_for_balance = getattr(registry, "articles_for_balance", None)
+    if marker is None or not callable(articles_for_balance):
+        return None
+    suffix = f" {normalized[marker.end():].strip()} "
+    articles = tuple(articles_for_balance(balance.balance_id))
+    matches: dict[int, tuple[int, Any]] = {}
+    for article in articles:
+        path = tuple(getattr(article, "path", ()) or ())
+        if not path or not any(
+            len(tuple(getattr(candidate, "path", ()) or ())) > len(path)
+            and tuple(getattr(candidate, "path", ()) or ())[:len(path)] == path
+            for candidate in articles
+        ):
+            continue
+        variants = (
+            getattr(article, "canonical_name", ""),
+            *(getattr(article, "aliases", ()) or ()),
+        )
+        lengths = [
+            len(candidate)
+            for value in variants
+            if (candidate := _normalize_text(value))
+            and f" {candidate} " in suffix
+        ]
+        if lengths:
+            matches[int(article.article_id)] = (max(lengths), article)
+    if not matches:
+        return None
+    longest = max(item[0] for item in matches.values())
+    selected = [item[1] for item in matches.values() if item[0] == longest]
+    return selected[0] if len(selected) == 1 else None
+
+
+def _is_balance_section_show(intent: AnalysisIntent) -> bool:
+    if (
+        intent.operation != Operation.SHOW
+        or len(intent.operands) != 1
+        or intent.operands[0].metric != "balance_section"
+        or intent.grouping
+        or intent.comparison is not None
+        or intent.formula is not None
+        or intent.ranking is not None
+    ):
+        return False
+    return [item.role for item in intent.operands[0].entities] == [
+        "balance", "article",
+    ]
+
+
+def _balance_section_article(intent: AnalysisIntent, registry: Any) -> Any | None:
+    if not _is_balance_section_show(intent):
+        return None
+    article_ref = intent.operands[0].entities[1].entity
+    article_id = _numeric_metadata_id(article_ref.entity_id)
+    lookup = getattr(registry, "article", None)
+    if article_id is None or not callable(lookup):
+        return None
+    return lookup(article_id)
+
+
+def _full_balance_source_intent(intent: AnalysisIntent) -> AnalysisIntent:
+    operand = intent.operands[0]
+    balance = next(item for item in operand.entities if item.role == "balance")
+    return AnalysisIntent(
+        operation=Operation.SHOW,
+        operands=[AnalysisOperand(
+            operand_id="balance_snapshot",
+            metric="balance",
+            aggregate_type="sum",
+            entities=[balance.model_copy(deep=True)],
+        )],
+        periods=[
+            item.model_copy(deep=True)
+            for item in (intent.periods or operand.periods)
+        ],
+    )
+
+
+def _filter_balance_section_envelope(
+    envelope: dict[str, Any],
+    root: Any,
+    registry: Any,
+) -> dict[str, Any]:
+    root_path = tuple(getattr(root, "path", ()) or ())
+    articles_for_balance = getattr(registry, "articles_for_balance", None)
+    if not root_path or not callable(articles_for_balance):
+        return {**envelope, "status": "no_data", "rows": []}
+    allowed_ids = {
+        int(item.article_id)
+        for item in articles_for_balance(root.balance_id)
+        if tuple(getattr(item, "path", ()) or ())[:len(root_path)] == root_path
+    }
+    selected = [
+        dict(row)
+        for row in (envelope.get("rows") or [])
+        if isinstance(row, Mapping)
+        and _numeric_metadata_id(row.get("article_id")) in allowed_ids
+    ]
+    root_row = next(
+        (
+            row for row in selected
+            if _numeric_metadata_id(row.get("article_id")) == int(root.article_id)
+        ),
+        None,
+    )
+    if root_row is None:
+        return {**envelope, "status": "no_data", "rows": []}
+    base_indent = _row_article_indent(root_row)
+    normalized_rows = []
+    for row in selected:
+        name = str(row.get("article_name") or "").strip()
+        normalized_rows.append({
+            **row,
+            "article_name": name,
+            "article_scope": str(row.get("article_scope") or name).strip(),
+            "article_indent": max(0, _row_article_indent(row) - base_indent),
+        })
+    return {**envelope, "rows": normalized_rows}
+
+
+def _row_article_indent(row: Mapping[str, Any]) -> int:
+    raw = row.get("article_indent")
+    if raw is not None:
+        try:
+            return int(raw)
+        except (TypeError, ValueError):
+            pass
+    name = str(row.get("article_name") or "")
+    return len(name) - len(name.lstrip())
+
+
+def _numeric_metadata_id(value: Any) -> int | None:
+    tail = str(value or "").strip().rsplit(":", 1)[-1]
+    return int(tail) if tail.isdigit() else None
 
 
 def _normalize_full_balance_envelope(

@@ -84,16 +84,80 @@ def _audit(*, layer: str, day: str, with_count: bool = True) -> dict:
     return {"turn_completed": {"execution": execution}}
 
 
+def _contract_response(query, rows: list[dict]) -> dict:
+    entities = [{
+        "role": item["role"],
+        "entity": {
+            "entity_id": item["canonical_id"],
+            "entity_type": item["entity_type"],
+            "display_name": item["canonical_name"],
+        },
+    } for item in query.entities]
+    intent = {
+        "operation": query.operation,
+        "operands": [{
+            "operand_id": "snapshot",
+            "metric": query.metric,
+            "aggregate_type": "sum",
+            "entities": entities,
+            "periods": [],
+        }],
+        "periods": [query.period],
+        "grouping": [],
+    }
+    return {
+        "status": "ok",
+        "context": {"active": {"intent": intent}},
+        "result": {"status": "ok", "rows": rows},
+    }
+
+
+def _rows_for_contract(query) -> list[dict]:
+    count = int(query.result["row_count"])
+    rows = [
+        _row(f"Статья {index}", 4 if index % 2 else 2, float(index))
+        for index in range(count)
+    ]
+    for control in query.controls:
+        rows[int(control["row_index"])] = _row(
+            str(control["article_name"]),
+            int(control["article_indent"]),
+            float(control["fact_value"]),
+            day=str(control["gas_day"]),
+        )
+    return rows
+
+
 def test_gq_001_catalog_is_explicit_and_canonical_metadata_is_valid() -> None:
     catalog = load_golden_catalog(CATALOG)
 
-    assert [item.query_id for item in catalog.queries] == ["GQ-001"]
+    assert [item.query_id for item in catalog.queries] == [
+        "GQ-001", "GQ-002", "GQ-003", "GQ-004",
+    ]
     query = catalog.queries[0]
     assert query.approval_status == "approved"
     assert query.priority == "P0 Core"
     assert query.result_shape == "balance_snapshot"
     assert query.value_mode == "fact"
     assert all(item.passed for item in metadata_contract_checks(catalog, query))
+
+
+@pytest.mark.parametrize("query_id", ["GQ-002", "GQ-003", "GQ-004"])
+def test_section_snapshot_contracts_are_canonical_and_complete(query_id: str) -> None:
+    catalog = load_golden_catalog(CATALOG)
+    query = next(item for item in catalog.queries if item.query_id == query_id)
+    rows = _rows_for_contract(query)
+
+    checks = evaluate_golden_query(
+        query,
+        _contract_response(query, rows),
+        _audit(layer="unified_balance_section", day="2025-06-25"),
+        metadata_checks=metadata_contract_checks(catalog, query),
+    )
+
+    assert query.result_shape == "section_snapshot"
+    assert query.metric == "balance_section"
+    assert all(item.passed for item in checks), [item for item in checks if not item.passed]
 
 
 @pytest.mark.parametrize("mode", ["plan", "both"])

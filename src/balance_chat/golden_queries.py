@@ -199,15 +199,31 @@ def metadata_contract_checks(catalog: GoldenCatalog, query: GoldenQuery) -> list
     balances = _jsonl_by_id(base / manifest["catalogs"]["balances"], "balance_id")
     articles = _jsonl_by_id(base / manifest["catalogs"]["articles"], "article_id")
     for entity in query.entities:
-        if entity.get("entity_type") != "balance":
-            continue
+        entity_type = entity.get("entity_type")
         raw_id = _numeric_id(entity.get("canonical_id"))
-        actual = balances.get(raw_id)
-        checks.append(_check(
-            "binding", f"canonical balance {entity.get('canonical_id')} exists",
-            {"canonical_name": entity.get("canonical_name")},
-            {"canonical_name": actual.get("canonical_name")} if actual else None,
-        ))
+        if entity_type == "balance":
+            actual = balances.get(raw_id)
+            checks.append(_check(
+                "binding", f"canonical balance {entity.get('canonical_id')} exists",
+                {"canonical_name": entity.get("canonical_name")},
+                {"canonical_name": actual.get("canonical_name")} if actual else None,
+            ))
+        elif entity_type == "article":
+            actual = articles.get(raw_id)
+            expected_balance = _numeric_id(
+                (query.canonical.get("balance_ids") or [None])[0]
+            )
+            checks.append(_check(
+                "binding", f"canonical article {entity.get('canonical_id')} exists",
+                {
+                    "balance_id": expected_balance,
+                    "canonical_name": entity.get("canonical_name"),
+                },
+                ({
+                    "balance_id": actual.get("balance_id"),
+                    "canonical_name": actual.get("canonical_name"),
+                } if actual else None),
+            ))
     expected_balance = _numeric_id((query.canonical.get("balance_ids") or [None])[0])
     for control in query.controls:
         article_id = _numeric_id(control.get("canonical_article_id"))
@@ -340,6 +356,11 @@ def evaluate_golden_query(
             {"min_rows": expected_result.get("min_rows")}, len(rows),
         ),
     ])
+    if expected_result.get("row_count") is not None:
+        checks.append(_check(
+            "result_shape", "exact result row count",
+            int(expected_result["row_count"]), len(rows),
+        ))
     columns = sorted({str(key) for row in rows for key in row})
     required_columns = list(expected_result.get("required_columns") or [])
     checks.append(GoldenCheck(
@@ -507,9 +528,13 @@ def _infer_result_shape(intent: Mapping[str, Any]) -> str | None:
     if intent.get("operation") == "show" and len(operands) == 1:
         operand = operands[0]
         entities = operand.get("entities") or []
-        if operand.get("metric") == "balance" and any(
-            item.get("role") == "balance" for item in entities
-        ) and not any(item.get("role") == "article" for item in entities):
+        roles = {item.get("role") for item in entities}
+        if (
+            operand.get("metric") == "balance_section"
+            and {"balance", "article"}.issubset(roles)
+        ):
+            return "section_snapshot"
+        if operand.get("metric") == "balance" and "balance" in roles and "article" not in roles:
             return "balance_snapshot"
     return None
 
@@ -533,7 +558,12 @@ def _control_checks(control: Mapping[str, Any], rows: Sequence[Mapping[str, Any]
     checks = [
         _check("result_data", f"{prefix} article", control.get("article_name"), _normalized_name(row.get("article_name"))),
         _check("result_data", f"{prefix} indent", control.get("article_indent"), row.get("article_indent")),
-        _check("result_data", f"{prefix} gas day", control.get("gas_day"), row.get("gas_day")),
+        _check(
+            "result_data",
+            f"{prefix} gas day",
+            str(control.get("gas_day"))[:10],
+            str(row.get("gas_day"))[:10] if row.get("gas_day") is not None else None,
+        ),
     ]
     expected = control.get("fact_value")
     actual = row.get("fact_value")

@@ -90,3 +90,294 @@ periods = [
   ["2025-01-01", "2026-01-01"],
 ]
 canonical_balance_ids = ["BAL:2010000297416"]
+
+[[queries]]
+id = "GQ-002"
+approval_status = "approved"
+priority = "P0 Core"
+title = "Раздел Ресурсы суточного баланса"
+query = "Покажи раздел Ресурсы баланса ГП ТГ Москва за 25.06.2025."
+result_shape = "section_snapshot"
+value_mode = "fact"
+operation = "show"
+metric = "balance_section"
+
+[queries.period]
+date_from = "2025-06-25"
+date_to = "2025-06-26"
+
+[[queries.entities]]
+mention = "ГП ТГ Москва"
+role = "balance"
+entity_type = "balance"
+canonical_id = "BAL:2010000039953"
+canonical_name = "ГП ТГ Москва суточный баланс"
+
+[[queries.entities]]
+mention = "Ресурсы"
+role = "article"
+entity_type = "article"
+canonical_id = "ART:2010000039710"
+canonical_name = "Ресурсы"
+
+[queries.canonical]
+balance_ids = ["BAL:2010000039953"]
+article_ids = ["ART:2010000039710"]
+geo_ids = []
+relation_ids = []
+
+[queries.execution]
+semantic_sql = '''
+SELECT SUBTREE("Ресурсы")
+FROM BALANCE("ГП ТГ Москва суточный баланс")
+WHERE PERIOD('2025-06-25','2025-06-26');
+'''
+allowed_layers = ["unified_balance_section"]
+sql_function = "api.show_balance_day"
+required_params = { balance_id = 2010000039953, day = "2025-06-25" }
+forbidden_params = ["article_id", "article_ids"]
+source_execution_count = 1
+
+[queries.result]
+status = "ok"
+min_rows = 16
+row_count = 16
+required_columns = ["article_name", "article_indent", "gas_day", "fact_value", "unit"]
+required_sections = ["Ресурсы", "Поступление"]
+unit = "тыс. м3"
+hierarchy_required = true
+source_order_required = true
+
+[[queries.controls]]
+row_index = 0
+canonical_article_id = "ART:2010000039710"
+article_name = "Ресурсы"
+article_indent = 0
+gas_day = "2025-06-25"
+fact_value = 323248.059
+tolerance = 0.001
+
+[[queries.controls]]
+row_index = 1
+canonical_article_id = "ART:2010000039711"
+article_name = "Поступление"
+article_indent = 2
+gas_day = "2025-06-25"
+fact_value = 323248.059
+tolerance = 0.001
+
+[[queries.controls]]
+row_index = 4
+canonical_article_id = "ART:2010000039714"
+article_name = "От ТГ Н.Новгород"
+article_indent = 4
+gas_day = "2025-06-25"
+fact_value = 318349.277
+tolerance = 0.001
+
+[queries.clarification]
+allowed = false
+questions = []
+
+[queries.forbidden]
+article_level = false
+scalar_result = true
+periods = [["2025-01-01", "2026-01-01"]]
+canonical_balance_ids = ["BAL:2010000297416"]
+
+[[queries]]
+id = "GQ-003"
+approval_status = "approved"
+priority = "P0 Core"
+title = "Раздел Поступление суточного баланса"
+query = "Покажи раздел Поступление баланса ГП ТГ Москва за 25.06.2025."
+result_shape = "section_snapshot"
+value_mode = "fact"
+operation = "show"
+metric = "balance_section"
+
+[queries.period]
+date_from = "2025-06-25"
+date_to = "2025-06-26"
+
+[[queries.entities]]
+mention = "ГП ТГ Москва"
+role = "balance"
+entity_type = "balance"
+canonical_id = "BAL:2010000039953"
+canonical_name = "ГП ТГ Москва суточный баланс"
+
+[[queries.entities]]
+mention = "Поступление"
+role = "article"
+entity_type = "article"
+canonical_id = "ART:2010000039711"
+canonical_name = "Поступление"
+
+[queries.canonical]
+balance_ids = ["BAL:2010000039953"]
+article_ids = ["ART:2010000039711"]
+geo_ids = []
+relation_ids = []
+
+[queries.execution]
+semantic_sql = '''
+SELECT SUBTREE("Ресурсы"/"Поступление")
+FROM BALANCE("ГП ТГ Москва суточный баланс")
+WHERE PERIOD('2025-06-25','2025-06-26');
+'''
+allowed_layers = ["unified_balance_section"]
+sql_function = "api.show_balance_day"
+required_params = { balance_id = 2010000039953, day = "2025-06-25" }
+forbidden_params = ["article_id", "article_ids"]
+source_execution_count = 1
+
+[queries.result]
+status = "ok"
+min_rows = 15
+row_count = 15
+required_columns = ["article_name", "article_indent", "gas_day", "fact_value", "unit"]
+required_sections = ["Поступление"]
+unit = "тыс. м3"
+hierarchy_required = true
+source_order_required = true
+
+[[queries.controls]]
+row_index = 0
+canonical_article_id = "ART:2010000039711"
+article_name = "Поступление"
+article_indent = 0
+gas_day = "2025-06-25"
+fact_value = 323248.059
+tolerance = 0.001
+
+[[queries.controls]]
+row_index = 3
+canonical_article_id = "ART:2010000039714"
+article_name = "От ТГ Н.Новгород"
+article_indent = 2
+gas_day = "2025-06-25"
+fact_value = 318349.277
+tolerance = 0.001
+
+[[queries.controls]]
+row_index = 9
+canonical_article_id = "ART:2010000039721"
+article_name = "От ТГ С.-Петербург"
+article_indent = 2
+gas_day = "2025-06-25"
+fact_value = 4808.195
+tolerance = 0.001
+
+[queries.clarification]
+allowed = false
+questions = []
+
+[queries.forbidden]
+article_level = false
+scalar_result = true
+periods = [["2025-01-01", "2026-01-01"]]
+canonical_balance_ids = ["BAL:2010000297416"]
+
+[[queries]]
+id = "GQ-004"
+approval_status = "approved"
+priority = "P0 Core"
+title = "Раздел Распределение суточного баланса"
+query = "Покажи раздел Распределение баланса ГП ТГ Москва за 25.06.2025."
+result_shape = "section_snapshot"
+value_mode = "fact"
+operation = "show"
+metric = "balance_section"
+
+[queries.period]
+date_from = "2025-06-25"
+date_to = "2025-06-26"
+
+[[queries.entities]]
+mention = "ГП ТГ Москва"
+role = "balance"
+entity_type = "balance"
+canonical_id = "BAL:2010000039953"
+canonical_name = "ГП ТГ Москва суточный баланс"
+
+[[queries.entities]]
+mention = "Распределение"
+role = "article"
+entity_type = "article"
+canonical_id = "ART:2010000039755"
+canonical_name = "Распределение"
+
+[queries.canonical]
+balance_ids = ["BAL:2010000039953"]
+article_ids = ["ART:2010000039755"]
+geo_ids = []
+relation_ids = []
+
+[queries.execution]
+semantic_sql = '''
+SELECT SUBTREE("Распределение")
+FROM BALANCE("ГП ТГ Москва суточный баланс")
+WHERE PERIOD('2025-06-25','2025-06-26');
+'''
+allowed_layers = ["unified_balance_section"]
+sql_function = "api.show_balance_day"
+required_params = { balance_id = 2010000039953, day = "2025-06-25" }
+forbidden_params = ["article_id", "article_ids"]
+source_execution_count = 1
+
+[queries.result]
+status = "ok"
+min_rows = 71
+row_count = 71
+required_columns = ["article_name", "article_indent", "gas_day", "fact_value", "unit"]
+required_sections = ["Распределение", "Собств. нужды и потери", "Собственные потребители"]
+unit = "тыс. м3"
+hierarchy_required = true
+source_order_required = true
+
+[[queries.controls]]
+row_index = 0
+canonical_article_id = "ART:2010000039755"
+article_name = "Распределение"
+article_indent = 0
+gas_day = "2025-06-25"
+fact_value = 323248.059
+tolerance = 0.001
+
+[[queries.controls]]
+row_index = 1
+canonical_article_id = "ART:2010000039756"
+article_name = "Собств. нужды и потери"
+article_indent = 2
+gas_day = "2025-06-25"
+fact_value = 978.804
+tolerance = 0.001
+
+[[queries.controls]]
+row_index = 31
+canonical_article_id = "ART:2010000039792"
+article_name = "Собственные потребители"
+article_indent = 2
+gas_day = "2025-06-25"
+fact_value = 145493.29
+tolerance = 0.001
+
+[[queries.controls]]
+row_index = 32
+canonical_article_id = "ART:2010000039793"
+article_name = "Москва"
+article_indent = 4
+gas_day = "2025-06-25"
+fact_value = 36994.814
+tolerance = 0.001
+
+[queries.clarification]
+allowed = false
+questions = []
+
+[queries.forbidden]
+article_level = false
+scalar_result = true
+periods = [["2025-01-01", "2026-01-01"]]
+canonical_balance_ids = ["BAL:2010000297416"]

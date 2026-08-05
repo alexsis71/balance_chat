@@ -27,6 +27,14 @@ METRICS: dict[str, MetricDefinition] = {
     "balance": MetricDefinition(
         "balance", "balance", "баланс газа", "баланса газа", "sum", _FLOW_AGGREGATES
     ),
+    "balance_section": MetricDefinition(
+        "balance_section",
+        "balance",
+        "раздел баланса",
+        "раздела баланса",
+        "sum",
+        _FLOW_AGGREGATES,
+    ),
     "distribution": MetricDefinition(
         "distribution", "flow", "распределение газа", "распределения газа", "sum", _FLOW_AGGREGATES,
         canonical_articles=("Распределение",),
