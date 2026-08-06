@@ -157,6 +157,21 @@ class PipelineV2TurnProcessor:
                 interpretation_mode="deterministic_extremum_comparison",
                 memory_chunks=[],
             )
+        direction_comparison = self._deterministic_direction_comparison_mutation(
+            message, turn_id
+        )
+        if direction_comparison is not None:
+            return self._execute_mutation(
+                state,
+                direction_comparison,
+                normalized_message=direction_comparison.normalized_message or message,
+                execute_db=execute_db,
+                request_id=request_id,
+                started=started,
+                interpretation_mode="deterministic_direction_comparison",
+                memory_chunks=[],
+                evidence_businesses=self._tagged_business_balances(message),
+            )
         directed_flow_balance = self._deterministic_analyzed_flow_mutation(
             message, turn_id
         )
@@ -511,6 +526,21 @@ class PipelineV2TurnProcessor:
         started: float,
     ) -> TurnProcessResult:
         """Interpret every active-session turn against the seven-turn ledger."""
+        direction_comparison = self._deterministic_direction_comparison_mutation(
+            message, turn_id
+        )
+        if direction_comparison is not None:
+            return self._execute_mutation(
+                state,
+                direction_comparison,
+                normalized_message=direction_comparison.normalized_message or message,
+                execute_db=execute_db,
+                request_id=request_id,
+                started=started,
+                interpretation_mode="deterministic_direction_comparison",
+                memory_chunks=[],
+                evidence_businesses=self._tagged_business_balances(message),
+            )
         directed_flow_balance = self._deterministic_analyzed_flow_mutation(
             message, turn_id
         )
@@ -1523,6 +1553,103 @@ class PipelineV2TurnProcessor:
             ),
         )
 
+    def _deterministic_direction_comparison_mutation(
+        self,
+        message: str,
+        turn_id: str,
+    ) -> ContextMutation | None:
+        """Bind two explicit business directions to two canonical operands.
+
+        A comparison may legitimately reuse the same two business objects in
+        opposite roles.  The global entity set therefore cannot represent the
+        query: every ordered ``source -> destination`` pair is resolved and
+        validated independently against the source balance metadata.
+        """
+
+        if not re.search(r"\bсравн\w*", _normalize_text(message)):
+            return None
+        mentions = self._tagged_business_entity_mentions(message)
+        pairs: list[tuple[Any, Any]] = []
+        pending_source: Any | None = None
+        for mention in mentions:
+            record = self.registry.balance(mention.text)
+            if record is None:
+                return None
+            if mention.role == "source":
+                if pending_source is not None:
+                    return None
+                pending_source = record
+            elif mention.role == "destination" and pending_source is not None:
+                if str(record.balance_id) == str(pending_source.balance_id):
+                    return None
+                pairs.append((pending_source, record))
+                pending_source = None
+        if pending_source is not None or len(pairs) != 2 or len(set(
+            (str(source.balance_id), str(destination.balance_id))
+            for source, destination in pairs
+        )) != 2:
+            return None
+
+        periods = self._analyzed_periods(message)
+        if len(periods) != 1:
+            return None
+        operands: list[AnalysisOperand] = []
+        for index, (source, destination) in enumerate(pairs, start=1):
+            article = _unique_direction_article(
+                self.registry,
+                balance=source,
+                target=destination,
+                metric="distribution",
+            )
+            if article is None:
+                return None
+            operands.append(AnalysisOperand(
+                operand_id=f"direction_{index}",
+                metric="distribution",
+                aggregate_type="sum",
+                unit=CANONICAL_VOLUME_UNIT,
+                entities=[
+                    _typed_entity("balance", "balance", source),
+                    _typed_entity("destination", "balance", destination),
+                    _typed_entity("article", "article", article),
+                ],
+            ))
+        return ContextMutation(
+            turn_id=turn_id,
+            user_message=message,
+            normalized_message=message,
+            replace_intent=AnalysisIntent(
+                operation=Operation.COMPARE,
+                operands=operands,
+                periods=periods,
+                comparison=ComparisonSpec(
+                    baseline_operand_id=operands[0].operand_id,
+                    target_operand_id=operands[1].operand_id,
+                ),
+            ),
+        )
+
+    def _analyzed_periods(self, message: str) -> list[PeriodRef]:
+        """Return exact periods produced by the existing deterministic analyzer."""
+
+        if self._analyze_query is None:
+            return []
+        try:
+            analyzed = self._analyze_query(message)
+        except Exception:
+            return []
+        periods = [
+            PeriodRef(date_from=item.date_from, date_to=item.date_to)
+            for item in (getattr(analyzed, "periods", None) or [])
+        ]
+        if periods:
+            return periods
+        date_from = getattr(analyzed, "date_from", None)
+        date_to = getattr(analyzed, "date_to", None)
+        if not date_from or not date_to:
+            return []
+        return [PeriodRef(date_from=date_from, date_to=date_to)]
+
     def _deterministic_full_balance_mutation(
         self,
         message: str,
@@ -1765,7 +1892,7 @@ class PipelineV2TurnProcessor:
             previous = tokens[qualifier - 1] if qualifier > 0 else ""
             if previous == "гп" and qualifier > 1:
                 previous = tokens[qualifier - 2]
-            if previous in {"от", "из"}:
+            if previous in {"от", "из", "иза"}:
                 role = "source"
             elif previous in {"в", "во", "к", "до"}:
                 role = "destination"
@@ -2271,6 +2398,10 @@ class PipelineV2TurnProcessor:
             + int(native.derived is not None)
             + int(native.ranking is not None),
             source_execution_count=native.source_execution_count,
+            tasks=[
+                _native_task_evidence(task, result)
+                for task, result in zip(plan.tasks, native.task_results)
+            ],
         )
         diagnostics["result_memory"] = memory_diag
         diagnostics["summary"] = summary_diagnostics
@@ -2320,11 +2451,15 @@ class PipelineV2TurnProcessor:
             else "unified_balance_level"
         )
         try:
-            if directed_article is not None:
+            if section is not None or directed_article is not None:
                 if not callable(execute_balance_day):
                     raise TurnProcessingError(
-                        "directed-flow execution is unavailable",
-                        code="directed_flow_execution_unavailable",
+                        "canonical balance-day execution is unavailable",
+                        code=(
+                            "directed_flow_execution_unavailable"
+                            if directed_article is not None
+                            else "balance_level_execution_unavailable"
+                        ),
                     )
                 balance_ref = source_intent.operands[0].entities[0].entity
                 period = source_intent.periods[0]
@@ -3897,6 +4032,30 @@ def _safe_execution_evidence(envelope: dict[str, Any]) -> dict[str, Any]:
         evidence["sql_function"] = function.strip()
     if safe_params:
         evidence["sql_params"] = safe_params
+    return evidence
+
+
+def _native_task_evidence(task: Any, result: Any) -> dict[str, Any]:
+    """Expose bounded canonical evidence for one decomposed scalar task."""
+
+    operand = task.scalar_intent.operands[0]
+    periods = operand.periods or task.scalar_intent.periods
+    evidence: dict[str, Any] = {
+        "task_id": task.task_id,
+        "operand_id": task.operand_id,
+        "metric": operand.metric,
+        "aggregate_type": operand.aggregate_type,
+        "canonical_entities": [
+            {
+                "role": item.role,
+                "entity_id": item.entity.entity_id,
+                "entity_type": item.entity.entity_type,
+            }
+            for item in operand.entities
+        ],
+        "periods": [item.model_dump(mode="json") for item in periods],
+    }
+    evidence.update(_safe_execution_evidence(result.envelope))
     return evidence
 
 

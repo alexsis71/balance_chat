@@ -216,8 +216,10 @@ def metadata_contract_checks(catalog: GoldenCatalog, query: GoldenQuery) -> list
             ))
         elif entity_type == "article":
             actual = articles.get(raw_id)
+            article_balances = query.canonical.get("article_balance_ids") or {}
             expected_balance = _numeric_id(
-                (query.canonical.get("balance_ids") or [None])[0]
+                article_balances.get(str(entity.get("canonical_id")))
+                or (query.canonical.get("balance_ids") or [None])[0]
             )
             checks.append(_check(
                 "binding", f"canonical article {entity.get('canonical_id')} exists",
@@ -241,6 +243,8 @@ def metadata_contract_checks(catalog: GoldenCatalog, query: GoldenQuery) -> list
             ))
     expected_balance = _numeric_id((query.canonical.get("balance_ids") or [None])[0])
     for control in query.controls:
+        if not control.get("canonical_article_id"):
+            continue
         article_id = _numeric_id(control.get("canonical_article_id"))
         actual = articles.get(article_id)
         expected = {
@@ -284,7 +288,8 @@ def evaluate_golden_query(
     active = context.get("active") if isinstance(context.get("active"), Mapping) else {}
     intent = active.get("intent") if isinstance(active.get("intent"), Mapping) else {}
     result = response.get("result") if isinstance(response.get("result"), Mapping) else {}
-    rows = [item for item in (result.get("rows") or []) if isinstance(item, Mapping)]
+    raw_rows = result.get("rows") or result.get("facts") or []
+    rows = [item for item in raw_rows if isinstance(item, Mapping)]
     operands = [item for item in (intent.get("operands") or []) if isinstance(item, Mapping)]
     entities = [entity for operand in operands for entity in (operand.get("entities") or [])]
     periods = _intent_periods(intent, operands)
@@ -311,10 +316,10 @@ def evaluate_golden_query(
     )} for item in query.entities]
     checks.append(_check("binding", "semantic roles and canonical entities", expected_entities, actual_entities))
     canonical_actual = {
-        "balance_ids": sorted(item["canonical_id"] for item in actual_entities if item["entity_type"] == "balance"),
-        "article_ids": sorted(item["canonical_id"] for item in actual_entities if item["entity_type"] == "article"),
-        "geo_ids": sorted(item["canonical_id"] for item in actual_entities if item["entity_type"] in {"geo_object", "geo_group"}),
-        "relation_ids": sorted(item["canonical_id"] for item in actual_entities if item["entity_type"] == "route"),
+        "balance_ids": sorted({item["canonical_id"] for item in actual_entities if item["entity_type"] == "balance"}),
+        "article_ids": sorted({item["canonical_id"] for item in actual_entities if item["entity_type"] == "article"}),
+        "geo_ids": sorted({item["canonical_id"] for item in actual_entities if item["entity_type"] in {"geo_object", "geo_group"}}),
+        "relation_ids": sorted({item["canonical_id"] for item in actual_entities if item["entity_type"] == "route"}),
     }
     for key in ("balance_ids", "article_ids", "geo_ids", "relation_ids"):
         checks.append(_check(
@@ -348,10 +353,34 @@ def evaluate_golden_query(
             "planning", "source execution count", required_count,
             execution.get("source_execution_count"),
         ))
-    checks.append(_check(
-        "SQL", "SQL function", query.execution.get("sql_function"),
-        execution.get("sql_function"),
-    ))
+    required_tasks = query.execution.get("required_tasks") or []
+    actual_tasks = execution.get("tasks") if isinstance(execution.get("tasks"), list) else []
+    for index, expected_task in enumerate(required_tasks):
+        actual_task = actual_tasks[index] if index < len(actual_tasks) else {}
+        expected_subset = dict(expected_task)
+        actual_subset: dict[str, Any] = {}
+        for key in expected_subset:
+            if key == "period":
+                task_periods = actual_task.get("periods") or []
+                first = task_periods[0] if task_periods else None
+                actual_subset[key] = (
+                    {
+                        "date_from": first.get("date_from"),
+                        "date_to": first.get("date_to"),
+                    }
+                    if isinstance(first, Mapping) else None
+                )
+            else:
+                actual_subset[key] = actual_task.get(key)
+        checks.append(_check(
+            "planning", f"canonical scalar task {index + 1}",
+            expected_subset, actual_subset,
+        ))
+    if "sql_function" in query.execution:
+        checks.append(_check(
+            "SQL", "SQL function", query.execution.get("sql_function"),
+            execution.get("sql_function"),
+        ))
     actual_params = execution.get("sql_params") if isinstance(execution.get("sql_params"), Mapping) else {}
     for key, expected in (query.execution.get("required_params") or {}).items():
         checks.append(_check("SQL", f"SQL parameter {key}", expected, actual_params.get(key)))
@@ -400,7 +429,10 @@ def evaluate_golden_query(
     units = {str(item.get("unit")) for item in rows if item.get("unit") not in (None, "")}
     if result.get("unit") not in (None, ""):
         units.add(str(result.get("unit")))
-    fact_rows = [item for item in rows if item.get("fact_value") is not None]
+    fact_rows = [
+        item for item in rows
+        if item.get("fact_value") is not None or item.get("value") is not None
+    ]
     unit_contract_holds = (
         expected_unit == CANONICAL_VOLUME_UNIT
         and bool(fact_rows)
@@ -549,6 +581,15 @@ def _intent_periods(intent: Mapping[str, Any], operands: Sequence[Mapping[str, A
 
 def _infer_result_shape(intent: Mapping[str, Any]) -> str | None:
     operands = intent.get("operands") or []
+    if intent.get("operation") == "compare" and len(operands) == 2:
+        if all(
+            operand.get("metric") == "distribution"
+            and {"balance", "destination", "article"}.issubset({
+                item.get("role") for item in (operand.get("entities") or [])
+            })
+            for operand in operands
+        ):
+            return "directed_flow_comparison"
     if intent.get("operation") == "show" and len(operands) == 1:
         operand = operands[0]
         entities = operand.get("entities") or []
@@ -576,7 +617,7 @@ def _normalized_name(value: Any) -> str:
 def _fact_only_check(columns: Sequence[str]) -> GoldenCheck:
     lowered = {item.casefold() for item in columns}
     has_plan = bool(lowered & FORBIDDEN_PLAN_FIELDS)
-    has_fact = bool(lowered & {"fact", "fact_value"})
+    has_fact = bool(lowered & {"fact", "fact_value", "value"})
     actual = "fact" if has_fact and not has_plan else "plan_present" if has_plan else "none"
     return _check("result_shape", "fact-only result", "fact", actual)
 
@@ -584,6 +625,28 @@ def _fact_only_check(columns: Sequence[str]) -> GoldenCheck:
 def _control_checks(control: Mapping[str, Any], rows: Sequence[Mapping[str, Any]]) -> list[GoldenCheck]:
     index = int(control["row_index"])
     row = rows[index] if 0 <= index < len(rows) else {}
+    if control.get("task_id"):
+        prefix = f"control fact {index} ({control.get('task_id')})"
+        periods = row.get("periods") if isinstance(row.get("periods"), list) else []
+        checks = [
+            _check("result_data", f"{prefix} task", control.get("task_id"), row.get("task_id")),
+            _check("result_data", f"{prefix} label", control.get("label"), row.get("label")),
+            _check(
+                "result_data", f"{prefix} period",
+                control.get("period"), periods[0] if periods else None,
+            ),
+        ]
+        expected = control.get("value")
+        actual = row.get("value")
+        try:
+            delta = abs(Decimal(str(expected)) - Decimal(str(actual)))
+            passed = delta <= Decimal(str(control.get("tolerance", 0)))
+        except (InvalidOperation, TypeError):
+            passed = False
+        checks.append(GoldenCheck(
+            "result_data", f"{prefix} value", passed, expected, actual,
+        ))
+        return checks
     prefix = f"control row {index} ({control.get('canonical_article_id')})"
     checks = [
         _check("result_data", f"{prefix} article", control.get("article_name"), _normalized_name(row.get("article_name"))),

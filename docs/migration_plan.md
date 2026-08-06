@@ -69,8 +69,8 @@ HEAD` подтвердил 10 уже существующих падений; е
 
 Срез от 2026-08-06:
 
-- текущий локальный regression расширен до `226 passed`;
-- утверждённый DB-backed Golden P0 gate: `7/7 passed`;
+- текущий локальный regression расширен до `228 passed`;
+- утверждённый DB-backed Golden P0 gate: `8/8 passed`;
 - широкий DB-backed acceptance: `0/12` полностью пройденных сценариев,
   `267/308` отдельных checks, 41 result `ok` из 55 выполненных turn;
 - основные блокеры находятся в inheritance/reference исторических operands,

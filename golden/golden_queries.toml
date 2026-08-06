@@ -186,6 +186,145 @@ periods = [["2025-01-01", "2026-01-01"]]
 canonical_balance_ids = ["BAL:2010000297416"]
 
 [[queries]]
+id = "GQ-008"
+approval_status = "approved"
+priority = "P0 Core"
+title = "Сравнение двух противоположных business-направлений за месяц"
+query = "Сравни распределение газа из ГП ТГ Сургут в ГП ТГ Томск с перетоком из ТГ Томск в ТГ Сургут в июне 2025"
+result_shape = "directed_flow_comparison"
+value_mode = "fact"
+operation = "compare"
+metric = "distribution"
+
+[queries.period]
+date_from = "2025-06-01"
+date_to = "2025-07-01"
+
+[[queries.entities]]
+mention = "из ГП ТГ Сургут"
+role = "balance"
+entity_type = "balance"
+canonical_id = "BAL:2010000040579"
+canonical_name = "ГП ТГ Сургут суточный баланс"
+
+[[queries.entities]]
+mention = "в ГП ТГ Томск"
+role = "destination"
+entity_type = "balance"
+canonical_id = "BAL:2010000040765"
+canonical_name = "ГП ТГ Томск суточный баланс"
+
+[[queries.entities]]
+mention = "Сургут → Томск"
+role = "article"
+entity_type = "article"
+canonical_id = "ART:2010000040514"
+canonical_name = "ТГ Томск"
+
+[[queries.entities]]
+mention = "из ТГ Томск"
+role = "balance"
+entity_type = "balance"
+canonical_id = "BAL:2010000040765"
+canonical_name = "ГП ТГ Томск суточный баланс"
+
+[[queries.entities]]
+mention = "в ТГ Сургут"
+role = "destination"
+entity_type = "balance"
+canonical_id = "BAL:2010000040579"
+canonical_name = "ГП ТГ Сургут суточный баланс"
+
+[[queries.entities]]
+mention = "Томск → Сургут"
+role = "article"
+entity_type = "article"
+canonical_id = "ART:2010000040604"
+canonical_name = "ТГ Сургут"
+
+[queries.canonical]
+balance_ids = ["BAL:2010000040579", "BAL:2010000040765"]
+article_ids = ["ART:2010000040514", "ART:2010000040604"]
+geo_ids = []
+relation_ids = []
+article_balance_ids = { "ART:2010000040514" = "BAL:2010000040579", "ART:2010000040604" = "BAL:2010000040765" }
+
+[queries.execution]
+semantic_sql = '''
+COMPARE(
+  SELECT SUM("ТГ Томск") FROM BALANCE("ГП ТГ Сургут суточный баланс"),
+  SELECT SUM("ТГ Сургут") FROM BALANCE("ГП ТГ Томск суточный баланс")
+)
+WHERE PERIOD('2025-06-01','2025-07-01');
+'''
+allowed_layers = ["native_deterministic"]
+source_execution_count = 2
+
+[[queries.execution.required_tasks]]
+task_id = "task_1"
+operand_id = "direction_1"
+metric = "distribution"
+aggregate_type = "sum"
+canonical_entities = [
+  { role = "balance", entity_id = "BAL:2010000040579", entity_type = "balance" },
+  { role = "destination", entity_id = "BAL:2010000040765", entity_type = "balance" },
+  { role = "article", entity_id = "ART:2010000040514", entity_type = "article" },
+]
+period = { date_from = "2025-06-01", date_to = "2025-07-01" }
+sql_function = "api.show_balance_articles_period"
+sql_params = { balance_id = 2010000040579, date_from = "2025-06-01", date_to = "2025-07-01" }
+
+[[queries.execution.required_tasks]]
+task_id = "task_2"
+operand_id = "direction_2"
+metric = "distribution"
+aggregate_type = "sum"
+canonical_entities = [
+  { role = "balance", entity_id = "BAL:2010000040765", entity_type = "balance" },
+  { role = "destination", entity_id = "BAL:2010000040579", entity_type = "balance" },
+  { role = "article", entity_id = "ART:2010000040604", entity_type = "article" },
+]
+period = { date_from = "2025-06-01", date_to = "2025-07-01" }
+sql_function = "api.show_balance_articles_period"
+sql_params = { balance_id = 2010000040765, date_from = "2025-06-01", date_to = "2025-07-01" }
+
+[queries.result]
+status = "ok"
+min_rows = 2
+row_count = 2
+required_columns = ["task_id", "value", "unit", "label", "periods"]
+required_sections = []
+unit = "тыс. м3"
+hierarchy_required = false
+source_order_required = false
+
+[[queries.controls]]
+row_index = 0
+task_id = "task_1"
+label = "ТГ Томск"
+period = { date_from = "2025-06-01", date_to = "2025-07-01" }
+value = 2512.377
+tolerance = 0.001
+
+[[queries.controls]]
+row_index = 1
+task_id = "task_2"
+label = "ТГ Сургут"
+period = { date_from = "2025-06-01", date_to = "2025-07-01" }
+value = 9136.25
+tolerance = 0.001
+
+[queries.clarification]
+allowed = false
+questions = []
+
+[queries.forbidden]
+article_level = false
+scalar_result = false
+periods = [["2025-01-01", "2026-01-01"]]
+canonical_balance_ids = ["BAL:2010000297416"]
+
+[[queries]]
 id = "GQ-005"
 approval_status = "approved"
 priority = "P0 Core"

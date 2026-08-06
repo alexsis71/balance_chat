@@ -133,7 +133,7 @@ def test_gq_001_catalog_is_explicit_and_canonical_metadata_is_valid() -> None:
 
     assert sorted(item.query_id for item in catalog.queries) == [
         "GQ-001", "GQ-002", "GQ-003", "GQ-004",
-        "GQ-005", "GQ-006", "GQ-007",
+        "GQ-005", "GQ-006", "GQ-007", "GQ-008",
     ]
     query = catalog.queries[0]
     assert query.approval_status == "approved"
@@ -176,6 +176,79 @@ def test_directed_flow_contracts_are_canonical_and_complete(query_id: str) -> No
 
     assert query.result_shape == "directed_flow_value"
     assert query.metric in {"incoming", "distribution"}
+    assert all(item.passed for item in checks), [item for item in checks if not item.passed]
+
+
+def test_gq_008_requires_two_canonical_directions_and_two_source_executions() -> None:
+    catalog = load_golden_catalog(CATALOG)
+    query = next(item for item in catalog.queries if item.query_id == "GQ-008")
+    entity_refs = [{
+        "role": item["role"],
+        "entity": {
+            "entity_id": item["canonical_id"],
+            "entity_type": item["entity_type"],
+            "display_name": item["canonical_name"],
+        },
+    } for item in query.entities]
+    intent = {
+        "operation": "compare",
+        "operands": [
+            {
+                "operand_id": "direction_1",
+                "metric": "distribution",
+                "aggregate_type": "sum",
+                "entities": entity_refs[:3],
+                "periods": [],
+            },
+            {
+                "operand_id": "direction_2",
+                "metric": "distribution",
+                "aggregate_type": "sum",
+                "entities": entity_refs[3:],
+                "periods": [],
+            },
+        ],
+        "periods": [query.period],
+        "grouping": [],
+    }
+    facts = [
+        {
+            "task_id": "task_1", "value": "2512.377", "unit": "тыс. м3",
+            "label": "ТГ Томск", "periods": [query.period],
+        },
+        {
+            "task_id": "task_2", "value": "9136.25", "unit": "тыс. м3",
+            "label": "ТГ Сургут", "periods": [query.period],
+        },
+    ]
+    actual_tasks = []
+    for expected_task in query.execution["required_tasks"]:
+        actual_task = dict(expected_task)
+        period = actual_task.pop("period")
+        actual_task["periods"] = [{**period, "label": None}]
+        actual_tasks.append(actual_task)
+    audit = {
+        "turn_completed": {
+            "execution": {
+                "layer": "native_deterministic",
+                "source_execution_count": 2,
+                "tasks": actual_tasks,
+            }
+        }
+    }
+
+    checks = evaluate_golden_query(
+        query,
+        {
+            "status": "ok",
+            "context": {"active": {"intent": intent}},
+            "result": {"status": "ok", "facts": facts},
+        },
+        audit,
+        metadata_checks=metadata_contract_checks(catalog, query),
+    )
+
+    assert query.result_shape == "directed_flow_comparison"
     assert all(item.passed for item in checks), [item for item in checks if not item.passed]
 
 

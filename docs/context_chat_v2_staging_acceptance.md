@@ -10,8 +10,8 @@ PostgreSQL execution/context store и модель `ai-balances-language`. Healt
 
 | Gate | Результат |
 |---|---:|
-| Локальный pytest | `226/226 passed` |
-| DB-backed Golden P0 | `7/7 passed` |
+| Локальный pytest | `228/228 passed` |
+| DB-backed Golden P0 | `8/8 passed` |
 | Широкий DB-backed acceptance | `0/12` сценариев |
 | Отдельные acceptance checks | `267/308` |
 | Result `ok` | `41/55` выполненных turn |

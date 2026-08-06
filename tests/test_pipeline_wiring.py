@@ -61,6 +61,7 @@ from balance_chat.execution import (
     ScalarFact,
     TaskExecutionResult,
 )
+from balance_chat.planning import NativeMultiOperandPlanner
 
 
 def _envelope():
@@ -585,6 +586,117 @@ def test_arrow_flow_uses_source_distribution_and_preserves_period_order() -> Non
     ]
 
 
+def test_two_explicit_business_directions_bind_as_two_operands_with_common_period() -> None:
+    surgut = SimpleNamespace(
+        balance_id=2010000040579,
+        canonical_name="ГП ТГ Сургут суточный баланс",
+        aliases=("гп тг сургут", "тг сургут", "сургут"),
+    )
+    tomsk = SimpleNamespace(
+        balance_id=2010000040765,
+        canonical_name="ГП ТГ Томск суточный баланс",
+        aliases=("гп тг томск", "тг томск", "томск"),
+    )
+    articles = (
+        SimpleNamespace(
+            article_id=2010000040514,
+            balance_id=surgut.balance_id,
+            canonical_name="ТГ Томск",
+            aliases=(),
+            section="Распределение",
+            path=("Распределение", "За пределы", "ТГ Томск"),
+        ),
+        SimpleNamespace(
+            article_id=2010000040604,
+            balance_id=tomsk.balance_id,
+            canonical_name="ТГ Сургут",
+            aliases=(),
+            section="Распределение",
+            path=("Распределение", "За пределы", "ТГ Сургут"),
+        ),
+    )
+
+    class Runtime:
+        def _import_pipeline_module(self, name):
+            if name == "pipeline_v2.nlp_ru":
+                return SimpleNamespace(normalize_query_lemmas=_test_normalize)
+            if name == "pipeline_v2.query_analyzer":
+                return SimpleNamespace(analyze_query=lambda _query: SimpleNamespace(
+                    intent="multi_query",
+                    metric="composite",
+                    aggregate_type="calculated",
+                    date_from="2025-06-01",
+                    date_to="2025-07-01",
+                    periods=[],
+                    needs_clarification=False,
+                ))
+            raise ImportError(name)
+
+    class Registry:
+        geo_objects = ()
+        geo_groups = ()
+        routes = ()
+
+        @staticmethod
+        def balance(value):
+            normalized = _test_normalize(value)
+            if "сургут" in normalized:
+                return surgut
+            if "томск" in normalized:
+                return tomsk
+            if str(value) == str(surgut.balance_id):
+                return surgut
+            if str(value) == str(tomsk.balance_id):
+                return tomsk
+            return None
+
+        @staticmethod
+        def articles_for_balance(balance_id):
+            return tuple(
+                item for item in articles if int(item.balance_id) == int(balance_id)
+            )
+
+    processor = PipelineV2TurnProcessor(
+        runtime=Runtime(),
+        registry=Registry(),
+        interpreter=InvalidInterpreter(),
+        compiler=object(),
+        executor=object(),
+        policy=NeverCalled(),
+    )
+
+    mutation = processor._deterministic_direction_comparison_mutation(
+        "Сравни распределение газа из ГП ТГ Сургут в ГП ТГ Томск "
+        "с перетоком из ТГ Томск в ТГ Сургут в июне 2025",
+        "turn",
+    )
+
+    assert mutation is not None
+    intent = mutation.replace_intent
+    assert intent.operation == Operation.COMPARE
+    assert [(item.date_from.isoformat(), item.date_to.isoformat()) for item in intent.periods] == [
+        ("2025-06-01", "2025-07-01")
+    ]
+    assert [
+        [(item.role, item.entity.entity_id) for item in operand.entities]
+        for operand in intent.operands
+    ] == [
+        [
+            ("balance", "BAL:2010000040579"),
+            ("destination", "BAL:2010000040765"),
+            ("article", "ART:2010000040514"),
+        ],
+        [
+            ("balance", "BAL:2010000040765"),
+            ("destination", "BAL:2010000040579"),
+            ("article", "ART:2010000040604"),
+        ],
+    ]
+    plan = NativeMultiOperandPlanner().plan(intent)
+    assert len(plan.tasks) == 2
+    assert [task.operand_id for task in plan.tasks] == ["direction_1", "direction_2"]
+
+
 def test_pipeline_grouping_contract_is_preserved() -> None:
     envelope = _envelope()
     plan = envelope["debug"]["resolved_plan"]
@@ -1085,11 +1197,14 @@ def test_exact_day_balance_section_uses_one_full_snapshot_and_filters_metadata_s
         def execute_raw(self, *_args, **_kwargs):
             raise AssertionError("section snapshot must not use legacy standalone")
 
-        def execute(self, _query, source_intent, **kwargs):
+        def execute(self, *_args, **_kwargs):
+            raise AssertionError("section snapshot must not re-run unified resolution")
+
+        def execute_balance_day(self, *, balance_id, day, request_id=None):
             self.execute_calls += 1
-            assert kwargs["apply_summary"] is False
-            assert source_intent.operands[0].metric == "balance"
-            assert [item.role for item in source_intent.operands[0].entities] == ["balance"]
+            assert balance_id == balance.balance_id
+            assert day == "2025-06-25"
+            assert request_id
             return {
                 "status": "ok",
                 "rows": [

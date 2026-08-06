@@ -267,7 +267,7 @@ Result-memory write создаётся как outbox-запись в той же
 - acceptance catalog проверяет ширину и последовательности T1–T7 с реальной
   БД. Coverage evaluator-ами не является semantic acceptance.
 
-На 2026-08-06 pytest равен `226/226`, Golden P0 — `7/7`, а широкий DB-backed
+На 2026-08-06 pytest равен `228/228`, Golden P0 — `8/8`, а широкий DB-backed
 acceptance — `0/12` полностью пройденных сценариев при `267/308` успешных
 checks. Поэтому система находится на этапе contextual stabilization, а не
 production readiness. Подробный срез приведён в

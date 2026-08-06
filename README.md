@@ -62,9 +62,10 @@ C:\Users\alexs\miniforge3\envs\ai_env\python.exe -m pytest -q
 [`docs/context_chat_acceptance_runner.md`](docs/context_chat_acceptance_runner.md).
 
 Неприкосновенное продуктовое ядро отдельно защищается вручную утверждёнными
-Golden Queries. Контракты `GQ-001…GQ-007` защищают полный баланс, три
-иерархических section snapshot и три типизированных направленных потока на
-точную дату; отличие от широкого acceptance, структура каталога и блокирующий
+Golden Queries. Контракты `GQ-001…GQ-008` защищают полный баланс, три
+иерархических section snapshot, три типизированных направленных потока на
+точную дату и сравнение двух противоположных business-направлений за месяц;
+отличие от широкого acceptance, структура каталога и блокирующий
 P0 merge gate описаны в
 [`docs/golden_queries.md`](docs/golden_queries.md). Acceptance-сценарии не
 становятся Golden Queries автоматически.
@@ -73,9 +74,9 @@ P0 merge gate описаны в
 
 Checkpoint 2026-08-06 разделяет три разных уровня проверки:
 
-- локальный pytest: `226/226 passed`; это преимущественно unit/component tests
+- локальный pytest: `228/228 passed`; это преимущественно unit/component tests
   с fake runtime, PostgreSQL и HTTP client;
-- DB-backed Golden P0: `7/7 passed`, merge gate `PASS`;
+- DB-backed Golden P0: `8/8 passed`, merge gate `PASS`;
 - широкий DB-backed Context Chat acceptance: `0/12` полностью пройденных
   сценариев, `267/308` отдельных checks, 41 успешный result из 55 выполненных
   turn. Один semantic mismatch делает весь многошаговый сценарий failed.
