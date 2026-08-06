@@ -6,20 +6,35 @@
 Текущий `pipeline` пока остаётся владельцем resolver/execution, SQL/MCP,
 PostgreSQL и `ResultEnvelope`.
 
+Фактический runtime имеет несколько явных execution paths:
+
 ```text
 user turn
    │
-   ▼
-Context Contract V2 ── deterministic reducer ── optimistic store
-   │
-   ▼
-compatibility projection
-   │  supported scalar shape
-   ▼
-pipeline unified_strict ── MCP/PostgreSQL
-
-unsupported multi-operand/grouped shape ──► explicit UnsupportedLegacyShape
+   ├─ exact balance/section/day ───────► deterministic balance snapshot
+   ├─ exact directed flow/day ─────────► deterministic canonical flow
+   ├─ complete legacy capability ──────► explicit V1 compatibility bridge
+   └─ contextual/analytical turn
+             │
+             ▼
+      Qwen interpretation ──► deterministic binder ──► ContextMutation
+                                                       │
+                                                       ▼
+Context Contract V2 ── reducer/store ──► native planner/executor
+                                             │
+                                             ▼
+                                  pipeline unified_strict ──► PostgreSQL
 ```
+
+Маршруты не являются fallback-цепочкой. Каждый выбирается до execution по
+явному типизированному контракту. Ошибка interpretation/binding/native planning
+возвращается наружу и не переключает запрос на legacy автоматически.
+
+Наличие нескольких маршрутов является главным stabilization-риском:
+одинаковая бизнес-семантика должна материализоваться в одинаковый
+`AnalysisIntent` независимо от пути распознавания. Golden Queries защищают
+узкое ядро, а широкий acceptance выявляет расхождения между маршрутами на
+продолжениях диалога.
 
 ## Почему контракт многосоставной
 
@@ -87,8 +102,11 @@ LLM или execution. Reservation хранится в PostgreSQL с TTL, а `req
 `UnifiedInterpreter` объединяет исправление формулировки и определение
 контекстной мутации в одном structured-output вызове. Первый самодостаточный
 turn может идти прямо в deterministic resolver. После появления active scope
-каждый следующий turn проходит через Qwen, потому что даже внешне полный вопрос
-может ссылаться на ранее выбранные GEO, business entity, operand или период.
+большинство контекстных turn проходит через Qwen, потому что даже внешне полный
+вопрос может ссылаться на ранее выбранные GEO, business entity, operand или
+период. Исключение составляют явно доказуемые deterministic contracts
+(например, полный balance snapshot или полностью заданный направленный поток);
+они не требуют повторного LLM-разбора.
 
 Ответ модели содержит текстовые entity mentions, directives и canonical
 exclusive-end периоды, но никогда runtime IDs. `metadata_bundle_version`
@@ -152,10 +170,14 @@ period. Его ошибочные entity candidates не исполняются:
 `deterministic_role_separated`; невалидная или несводимая к одному operand
 semantic форма завершается ошибкой, а не fallback на случайную статью.
 
-Смена GEO сохраняет canonical период через scope reference. Обратное направление
-переставляет source/destination и удаляет direction-bound article до нового
-resolution. Несколько явно выбранных сущностей сохраняются отдельными
-операндами, поэтому их можно сравнить на следующем этапе.
+Проектный контракт требует, чтобы смена GEO сохраняла canonical период через
+scope reference, а обратное направление переставляло source/destination и
+удаляло direction-bound article до нового resolution. Эти правила реализованы,
+но широкий DB-backed acceptance показывает, что они пока не соблюдаются
+одинаково для active scope, исторического operand handle и legacy bridge.
+Несколько явно выбранных сущностей должны оставаться отдельными операндами;
+неоднозначный выбор исторического operand обязан приводить к clarification, а
+не к произвольному active operand.
 
 ## Native planning
 
@@ -182,6 +204,13 @@ PostgreSQL execution и не может менять факты. Для standalo
 включается на финальном unified envelope; semantic/dry-run вызовы остаются без
 него. Источник summary и deterministic execution layer фиксируются в JSON-логе,
 а техническое сообщение про execution layer не входит в публичный ответ.
+
+Для составного `flow_balance` summary должен получать typed роли `incoming` и
+`distribution`. Их разрешено сопоставлять и использовать для сальдо/дельты, но
+нельзя складывать и называть сумму общим объёмом поступлений. Сейчас legacy
+bridge не всегда передаёт эту семантику presentation layer достаточно явно;
+источник `generated_by` журналируется, но внутреннее переключение writer на
+deterministic fallback требует дополнительной диагностики.
 
 ## Canonical grouping
 
@@ -226,3 +255,20 @@ Result-memory write создаётся как outbox-запись в той же
 
 Удаление пользовательской сессии является soft-delete. Роль приложения не
 имеет DELETE/UPDATE прав на mutation journal, поэтому audit сохраняется.
+
+## Quality gates и текущая готовность
+
+Проверки разделены намеренно:
+
+- pytest защищает локальные контракты компонентов, но не доказывает работу
+  реального Qwen/PostgreSQL диалога;
+- Golden Queries фиксируют вручную утверждённое неприкосновенное P0-ядро и
+  требуют 100% перед merge;
+- acceptance catalog проверяет ширину и последовательности T1–T7 с реальной
+  БД. Coverage evaluator-ами не является semantic acceptance.
+
+На 2026-08-06 pytest равен `226/226`, Golden P0 — `7/7`, а широкий DB-backed
+acceptance — `0/12` полностью пройденных сценариев при `267/308` успешных
+checks. Поэтому система находится на этапе contextual stabilization, а не
+production readiness. Подробный срез приведён в
+[`project_status.md`](project_status.md).

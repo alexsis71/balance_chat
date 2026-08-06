@@ -2,6 +2,11 @@
 
 Дата: 2026-08-03.
 
+> Исторический отчёт конкретного checkpoint. Он не описывает текущее качество
+> широкого Context Chat acceptance. Актуальный срез находится в
+> [`project_status.md`](project_status.md); на 2026-08-06 pytest равен
+> `226/226`, Golden P0 — `7/7`, широкий DB-backed acceptance — `0/12`.
+
 ## Новая версия
 
 - Полный набор `balance_chat`: **84 passed**, одно внешнее deprecation-warning

@@ -81,11 +81,22 @@ session/request IDs, compact semantic snapshots, результаты прове
 
 ## Последний подтверждённый checkpoint
 
-- strict dry-run: 12 сценариев, 104/104 expectation lines, 121/121 checks,
-  coverage 100%, gaps 0;
-- локальный regression: 188 passed;
-- focused DB-backed `BC-05`: 2/2 turn, 13/13 checks, включая canonical aliases,
-  официальные display names, повторную группировку без DB retry и `тыс. м3`;
-- focused DB-backed `BC-04`: все шесть HTTP turn завершились без server error,
-  reverse без связи вернул строгий `no_data`; три semantic assertions всё ещё
-  выявляют отдельные product defects выбора homonym/source.
+Полный DB-backed прогон от 2026-08-06:
+
+- 12 сценариев `@current-contract`;
+- passed `0`, failed `12`, semantic acceptance `0%`;
+- 267/308 отдельных checks прошли;
+- из 55 фактически выполненных query turn: HTTP 200 получили 46, result `ok` —
+  41, все назначенные semantic checks прошли у 29;
+- девять turn завершились HTTP 422, а последующие turn соответствующих
+  сценариев были заблокированы fail-fast политикой;
+- automated expectation coverage `98.67%` означает полноту evaluator-ов, а не
+  качество backend;
+- restart action требует явного `--restart-command`; без него результат нельзя
+  считать подтверждённым restart recovery.
+
+Локальный отчёт (каталог `reports/` исключён из Git):
+`reports/acceptance/acceptance-20260806T091901Z-5f22fb93.md`.
+Результат не удовлетворяет целям `Success Rate >= 95%` и semantic/helpfulness
+acceptance `>= 80%`. Локальный regression на том же checkpoint — `226 passed`;
+он не заменяет DB-backed acceptance.

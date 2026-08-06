@@ -1,5 +1,52 @@
 # Context Chat V2: staging acceptance
 
+## Актуальный checkpoint: 2026-08-06
+
+Текущий runtime использует ready metadata bundle `2026.08.1`, schema `1.1`,
+PostgreSQL execution/context store и модель `ai-balances-language`. Health всех
+обязательных компонентов вернул `ready=true`.
+
+Проверки разделены на независимые quality gates:
+
+| Gate | Результат |
+|---|---:|
+| Локальный pytest | `226/226 passed` |
+| DB-backed Golden P0 | `7/7 passed` |
+| Широкий DB-backed acceptance | `0/12` сценариев |
+| Отдельные acceptance checks | `267/308` |
+| Result `ok` | `41/55` выполненных turn |
+| Полностью green turn | `29/55` |
+
+Golden P0 подтверждает полный balance snapshot, три section snapshot и три
+exact-day directed-flow контракта. Это неприкосновенное ядро продукта, но не
+доказательство устойчивого диалога T1–T7.
+
+Широкий acceptance выявил следующие системные классы дефектов:
+
+- деградация `compare_periods` в entity comparison;
+- потеря исторических operand/period handles;
+- непоследовательные business/GEO роли и reverse direction;
+- нестабильные переходы между GEO groups и отдельными GEO;
+- ошибки stock/export continuation;
+- расхождение `no_data`/clarification/HTTP 422;
+- недостаточная typed semantics compound summary;
+- несогласованный concurrency outcome и непроверенный реальный restart без
+  `--restart-command`.
+
+Цели `Success Rate >= 95%` и semantic/helpfulness acceptance `>= 80%` не
+достигнуты. Текущая стадия — contextual stabilization; production readiness и
+cutover не объявлены.
+
+Актуальные локальные отчёты (каталог `reports/` исключён из Git):
+
+- `reports/golden/golden-20260806T094232Z-075f2832.md`;
+- `reports/acceptance/acceptance-20260806T091901Z-5f22fb93.md`.
+
+Ниже сохранён исторический checkpoint 2026-07-31. Его focused smoke-результаты
+не должны интерпретироваться как текущее широкое acceptance.
+
+## Исторический checkpoint: 2026-07-31
+
 Дата проверки: 2026-07-31; повтор после metadata rebuild выполнен в тот же день.
 Проверка выполнена на `balance_chat` с PostgreSQL `chat_rag`, ready metadata
 bundle `2026.07.7` (`sha256:14eb8ca1cf8ac8ee5e74257a14a7fa58923864fcfec3a2fd0f6aafb32a86308b`), реальным staging PostgreSQL и

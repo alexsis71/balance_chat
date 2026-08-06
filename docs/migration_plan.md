@@ -52,7 +52,9 @@
     поддерживает явную смену либо peer comparison сущностей. Каждый начатый и
     каждый зафиксированный turn пишется в structured JSONL log.
 
-Финальный checkpoint выполнен 2026-08-03. Полный V2 regression: `84 passed`.
+Архитектурные checkpoint 1–11 реализованы, но это означает завершение
+механизмов, а не достижение продуктовой acceptance. Первоначальный checkpoint
+2026-08-03 дал полный V2 regression `84 passed`.
 DB-backed grouping acceptance: 100 физических строк сведены в 63 уникальных
 canonical GEO ID; повторные LLM/MCP/PostgreSQL вызовы для группировки сохранённого
 результата не выполняются. Полный regression sibling `pipeline`: `441 passed`,
@@ -62,3 +64,21 @@ HEAD` подтвердил 10 уже существующих падений; е
 `context extremum override`, `reverse direction`). Эти upstream failures не
 скрыты fallback и остаются явным блокером production cutover, но не нарушают
 запускаемость отдельного V2 backend.
+
+## Этап 12: contextual stabilization — выполняется
+
+Срез от 2026-08-06:
+
+- текущий локальный regression расширен до `226 passed`;
+- утверждённый DB-backed Golden P0 gate: `7/7 passed`;
+- широкий DB-backed acceptance: `0/12` полностью пройденных сценариев,
+  `267/308` отдельных checks, 41 result `ok` из 55 выполненных turn;
+- основные блокеры находятся в inheritance/reference исторических operands,
+  period comparison, reverse direction, business/GEO role stability,
+  grouping scope, clarification/no_data mapping и compound summary semantics.
+
+Этап 12 считается завершённым только после 100% утверждённого P0 Golden,
+отсутствия регрессии ранее поддержанного P1, `Success Rate >= 95%` и
+semantic/helpfulness acceptance не ниже 80% на согласованном DB-backed
+каталоге. До этого отдельный V2 backend остаётся демонстрационным/staging
+контуром; production cutover не объявляется.

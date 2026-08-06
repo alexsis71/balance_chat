@@ -2,6 +2,11 @@
 
 Дата: 2026-08-05
 
+> Исторический focused-отчёт. Его локальные 7/7 и 12/12 относятся к выбранному
+> набору этапов и не заменяют последующий широкий acceptance. Актуальный срез
+> от 2026-08-06: [`project_status.md`](project_status.md), Golden P0 `7/7`,
+> DB-backed acceptance `0/12` полностью пройденных сценариев.
+
 ## Область проверки
 
 - Этап 1: бизнес-сценарии из `acceptance/context_chat_business_scenarios.feature`.

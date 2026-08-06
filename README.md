@@ -4,7 +4,7 @@
 контракт диалога от текущего unified pipeline и позволяет переносить исполнение
 поэтапно, не меняя его бизнес-семантику.
 
-## Первый checkpoint
+## Реализованный контур
 
 - `ContextContractV2` хранит несколько операндов, периоды, группировки,
   сравнение, память сущностей и ссылки на результаты.
@@ -62,11 +62,30 @@ C:\Users\alexs\miniforge3\envs\ai_env\python.exe -m pytest -q
 [`docs/context_chat_acceptance_runner.md`](docs/context_chat_acceptance_runner.md).
 
 Неприкосновенное продуктовое ядро отдельно защищается вручную утверждёнными
-Golden Queries. Контракты `GQ-001…GQ-004` защищают полный баланс и три
-иерархических section snapshot на точную дату; отличие от широкого acceptance,
-структура каталога и блокирующий P0 merge gate описаны в
+Golden Queries. Контракты `GQ-001…GQ-007` защищают полный баланс, три
+иерархических section snapshot и три типизированных направленных потока на
+точную дату; отличие от широкого acceptance, структура каталога и блокирующий
+P0 merge gate описаны в
 [`docs/golden_queries.md`](docs/golden_queries.md). Acceptance-сценарии не
 становятся Golden Queries автоматически.
+
+## Текущий статус качества
+
+Checkpoint 2026-08-06 разделяет три разных уровня проверки:
+
+- локальный pytest: `226/226 passed`; это преимущественно unit/component tests
+  с fake runtime, PostgreSQL и HTTP client;
+- DB-backed Golden P0: `7/7 passed`, merge gate `PASS`;
+- широкий DB-backed Context Chat acceptance: `0/12` полностью пройденных
+  сценариев, `267/308` отдельных checks, 41 успешный result из 55 выполненных
+  turn. Один semantic mismatch делает весь многошаговый сценарий failed.
+
+Следовательно, точные P0 balance/section/directed-flow операции являются
+защищённым ядром, но произвольный диалог на 5–7 turn ещё не соответствует
+целевым `Success Rate >= 95%` и semantic/helpfulness acceptance `>= 80%`.
+Новые аналитические capability не должны приниматься ценой регрессии Golden P0.
+Актуальный checkpoint, подтверждённые запросы и открытые классы дефектов
+зафиксированы в [`docs/project_status.md`](docs/project_status.md).
 
 ## Staging-запуск V2
 
@@ -134,5 +153,5 @@ python .\run_gateway.py --config .\config.example.json --host 127.0.0.1 --port 8
 `http://127.0.0.1:8787/v2/api/v2/health`. Gateway только маршрутизирует HTTP и
 не добавляет fallback между legacy и V2 execution.
 
-Результаты staging-проверки и открытые ограничения описаны в
+Результаты текущей staging-проверки и открытые ограничения описаны в
 [`docs/context_chat_v2_staging_acceptance.md`](docs/context_chat_v2_staging_acceptance.md).
