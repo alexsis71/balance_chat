@@ -119,7 +119,10 @@ def load_golden_catalog(path: str | Path) -> GoldenCatalog:
     missing = sorted(required_root - set(raw))
     if missing:
         raise GoldenCatalogError(f"catalog misses required fields: {missing}")
-    queries = tuple(_parse_query(item) for item in raw["queries"])
+    queries = tuple(sorted(
+        (_parse_query(item) for item in raw["queries"]),
+        key=lambda item: int(item.query_id.rsplit("-", 1)[-1]),
+    ))
     ids = [item.query_id for item in queries]
     if not queries or len(ids) != len(set(ids)):
         raise GoldenCatalogError("Golden Query IDs must be present and unique")
@@ -198,6 +201,9 @@ def metadata_contract_checks(catalog: GoldenCatalog, query: GoldenQuery) -> list
     base = catalog.metadata_manifest.parent
     balances = _jsonl_by_id(base / manifest["catalogs"]["balances"], "balance_id")
     articles = _jsonl_by_id(base / manifest["catalogs"]["articles"], "article_id")
+    geos = _jsonl_by_text_id(
+        base / manifest["catalogs"]["geo_objects"], "geo_id"
+    )
     for entity in query.entities:
         entity_type = entity.get("entity_type")
         raw_id = _numeric_id(entity.get("canonical_id"))
@@ -223,6 +229,15 @@ def metadata_contract_checks(catalog: GoldenCatalog, query: GoldenQuery) -> list
                     "balance_id": actual.get("balance_id"),
                     "canonical_name": actual.get("canonical_name"),
                 } if actual else None),
+            ))
+        elif entity_type == "geo_object":
+            canonical_id = str(entity.get("canonical_id") or "")
+            actual = geos.get(canonical_id)
+            checks.append(_check(
+                "binding", f"canonical GEO {canonical_id} exists",
+                {"canonical_name": str(entity.get("canonical_name") or "").casefold()},
+                ({"canonical_name": str(actual.get("canonical_name") or "").casefold()}
+                 if actual else None),
             ))
     expected_balance = _numeric_id((query.canonical.get("balance_ids") or [None])[0])
     for control in query.controls:
@@ -511,6 +526,15 @@ def _jsonl_by_id(path: Path, key: str) -> dict[int, dict[str, Any]]:
     return result
 
 
+def _jsonl_by_text_id(path: Path, key: str) -> dict[str, dict[str, Any]]:
+    result: dict[str, dict[str, Any]] = {}
+    for line in path.read_text(encoding="utf-8").splitlines():
+        if line.strip():
+            item = json.loads(line)
+            result[str(item[key])] = item
+    return result
+
+
 def _numeric_id(value: Any) -> int | None:
     match = re.search(r"(\d+)$", str(value or ""))
     return int(match.group(1)) if match else None
@@ -536,6 +560,12 @@ def _infer_result_shape(intent: Mapping[str, Any]) -> str | None:
             return "section_snapshot"
         if operand.get("metric") == "balance" and "balance" in roles and "article" not in roles:
             return "balance_snapshot"
+        if (
+            operand.get("metric") in {"incoming", "distribution"}
+            and {"balance", "article"}.issubset(roles)
+            and bool({"source", "destination"}.intersection(roles))
+        ):
+            return "directed_flow_value"
     return None
 
 

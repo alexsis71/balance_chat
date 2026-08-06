@@ -131,8 +131,9 @@ def _rows_for_contract(query) -> list[dict]:
 def test_gq_001_catalog_is_explicit_and_canonical_metadata_is_valid() -> None:
     catalog = load_golden_catalog(CATALOG)
 
-    assert [item.query_id for item in catalog.queries] == [
+    assert sorted(item.query_id for item in catalog.queries) == [
         "GQ-001", "GQ-002", "GQ-003", "GQ-004",
+        "GQ-005", "GQ-006", "GQ-007",
     ]
     query = catalog.queries[0]
     assert query.approval_status == "approved"
@@ -157,6 +158,24 @@ def test_section_snapshot_contracts_are_canonical_and_complete(query_id: str) ->
 
     assert query.result_shape == "section_snapshot"
     assert query.metric == "balance_section"
+    assert all(item.passed for item in checks), [item for item in checks if not item.passed]
+
+
+@pytest.mark.parametrize("query_id", ["GQ-005", "GQ-006", "GQ-007"])
+def test_directed_flow_contracts_are_canonical_and_complete(query_id: str) -> None:
+    catalog = load_golden_catalog(CATALOG)
+    query = next(item for item in catalog.queries if item.query_id == query_id)
+    rows = _rows_for_contract(query)
+
+    checks = evaluate_golden_query(
+        query,
+        _contract_response(query, rows),
+        _audit(layer="unified_directed_flow", day="2025-06-25"),
+        metadata_checks=metadata_contract_checks(catalog, query),
+    )
+
+    assert query.result_shape == "directed_flow_value"
+    assert query.metric in {"incoming", "distribution"}
     assert all(item.passed for item in checks), [item for item in checks if not item.passed]
 
 

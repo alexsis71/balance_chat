@@ -8,7 +8,7 @@ Golden Queries — небольшой вручную утверждённый н
 
 Каталог находится в
 [`../golden/golden_queries.toml`](../golden/golden_queries.toml). Утверждены
-`GQ-001…GQ-004`; новые записи добавляются только отдельным решением.
+`GQ-001…GQ-007`; новые записи добавляются только отдельным решением.
 
 ## Чем Golden Queries отличаются от acceptance
 
@@ -63,9 +63,9 @@ BC-сценарий нельзя целиком объявить Golden Query. �
 10. Запас как point-in-time, без суммирования дней.
 11. Закачка ПХГ за месяц.
 12. Отбор ПХГ за месяц.
-13. Поступление от указанного source business object.
-14. Распределение в указанный destination business object.
-15. Распределение в указанный GEO object.
+13. Поступление от указанного source business object (`GQ-005`, утверждён).
+14. Распределение в указанный destination business object (`GQ-006`, утверждён).
+15. Распределение в указанный GEO object (`GQ-007`, утверждён).
 16. Продолжение «а на следующий день?» с наследованием объекта.
 17. Смена статьи с сохранением явно установленного периода.
 18. Смена баланса с сохранением явно установленной даты.
@@ -165,6 +165,35 @@ name — закрытую. Metadata не исправлялась; control вы�
 distribution за год, а exact date и section binding теряются. Общий
 metadata-driven section path устраняет это без списков специальных названий и
 без изменения PostgreSQL/MCP API.
+
+## GQ-005…GQ-007: типизированные направления
+
+Третий P0-блок фиксирует три однодневных направленных запроса:
+
+- поступление в `BAL:2010000039953` от source business object
+  `BAL:2010000040110` через `ART:2010000039714`;
+- распределение из `BAL:2010000039953` в destination business object
+  `BAL:2010000040110` через `ART:2010000039766`;
+- распределение из `BAL:2010000039953` в destination GEO
+  `geo:cdb5df36713e7e382d70` через `ART:2010000039808`.
+
+Во всех случаях период равен `[2025-06-25, 2025-06-26)`, результат содержит
+одну fact-строку в `тыс. м3`, а execution layer — `unified_directed_flow`.
+Canonical роли различаются: incoming хранит `balance + source + article`,
+business distribution — `balance + destination(balance) + article`, GEO
+distribution — `balance + destination(geo_object) + article`.
+
+Bundle не содержит отдельного business-flow relation edge для этих трёх
+связей: `relations.jsonl` фиксирует article/GEO hierarchy. Поэтому
+`relation_ids=[]` задан явно; runtime не изобретает relation ID и не выбирает
+article по нечёткому совпадению. Direction-bound article разрешается только
+при единственном точном normalized metadata match внутри правильного раздела.
+
+После binding выполняется ровно один существующий PostgreSQL contract
+`api.show_balance_day`, а canonical article фильтруется до публичной выдачи.
+Planner и LLM для этого deterministic exact-day пути не вызываются. На
+фиксированной БД контрольные значения равны `318349.277`, `2308.253` и
+`30927.714` соответственно.
 
 ## Запуск и merge gate
 

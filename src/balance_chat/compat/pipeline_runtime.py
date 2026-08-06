@@ -96,6 +96,39 @@ class PipelineRuntime:
             backend_override="unified_strict",
         )
 
+    def execute_balance_day(
+        self,
+        *,
+        balance_id: int,
+        day: str,
+        request_id: str | None = None,
+    ) -> dict[str, Any]:
+        """Execute the existing canonical daily-balance PostgreSQL contract.
+
+        This path is intentionally independent of Planner/LLM: callers already
+        hold a validated canonical balance ID and exact day.  It does not add a
+        fallback or alter the PostgreSQL API.
+        """
+
+        del request_id
+        client_module = self._import_pipeline_module("mcp_postgres_api_server")
+        dsn = self.pipeline_runtime().database_dsn
+        if not dsn:
+            raise PipelineRuntimeError("database DSN is missing")
+        rows = client_module.PostgresApiClient(dsn).show_balance_day(
+            int(balance_id), str(day)
+        )
+        public_rows = json.loads(json.dumps(rows, ensure_ascii=False, default=str))
+        return {
+            "status": "ok" if public_rows else "no_data",
+            "rows": public_rows,
+            "warnings": [],
+            "debug": {
+                "sql_function": "api.show_balance_day",
+                "params": {"balance_id": int(balance_id), "day": str(day)},
+            },
+        }
+
     def summarize_envelope(
         self,
         envelope: dict[str, Any],

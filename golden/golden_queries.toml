@@ -186,6 +186,255 @@ periods = [["2025-01-01", "2026-01-01"]]
 canonical_balance_ids = ["BAL:2010000297416"]
 
 [[queries]]
+id = "GQ-005"
+approval_status = "approved"
+priority = "P0 Core"
+title = "Поступление от указанного source business object"
+query = "Покажи поступление в ГП ТГ Москва от ГП ТГ Н.Новгород за 25.06.2025."
+result_shape = "directed_flow_value"
+value_mode = "fact"
+operation = "show"
+metric = "incoming"
+
+[queries.period]
+date_from = "2025-06-25"
+date_to = "2025-06-26"
+
+[[queries.entities]]
+mention = "ГП ТГ Москва"
+role = "balance"
+entity_type = "balance"
+canonical_id = "BAL:2010000039953"
+canonical_name = "ГП ТГ Москва суточный баланс"
+
+[[queries.entities]]
+mention = "ГП ТГ Н.Новгород"
+role = "source"
+entity_type = "balance"
+canonical_id = "BAL:2010000040110"
+canonical_name = "ГП ТГ Н.Новгород суточный баланс"
+
+[[queries.entities]]
+mention = "От ТГ Н.Новгород"
+role = "article"
+entity_type = "article"
+canonical_id = "ART:2010000039714"
+canonical_name = "От ТГ Н.Новгород"
+
+[queries.canonical]
+balance_ids = ["BAL:2010000039953", "BAL:2010000040110"]
+article_ids = ["ART:2010000039714"]
+geo_ids = []
+relation_ids = []
+
+[queries.execution]
+semantic_sql = '''
+SELECT ARTICLE("От ТГ Н.Новгород")
+FROM BALANCE("ГП ТГ Москва суточный баланс")
+WHERE PERIOD('2025-06-25','2025-06-26');
+'''
+allowed_layers = ["unified_directed_flow"]
+sql_function = "api.show_balance_day"
+required_params = { balance_id = 2010000039953, day = "2025-06-25" }
+forbidden_params = ["article_id", "article_ids"]
+source_execution_count = 1
+
+[queries.result]
+status = "ok"
+min_rows = 1
+row_count = 1
+required_columns = ["article_name", "article_indent", "gas_day", "fact_value", "unit"]
+required_sections = []
+unit = "тыс. м3"
+hierarchy_required = false
+source_order_required = true
+
+[[queries.controls]]
+row_index = 0
+canonical_article_id = "ART:2010000039714"
+article_name = "От ТГ Н.Новгород"
+article_indent = 4
+gas_day = "2025-06-25"
+fact_value = 318349.277
+tolerance = 0.001
+
+[queries.clarification]
+allowed = false
+questions = []
+
+[queries.forbidden]
+article_level = false
+scalar_result = false
+periods = [["2025-01-01", "2026-01-01"]]
+canonical_balance_ids = ["BAL:2010000297416"]
+
+[[queries]]
+id = "GQ-006"
+approval_status = "approved"
+priority = "P0 Core"
+title = "Распределение в указанный destination business object"
+query = "Покажи распределение из ГП ТГ Москва в ГП ТГ Н.Новгород за 25.06.2025."
+result_shape = "directed_flow_value"
+value_mode = "fact"
+operation = "show"
+metric = "distribution"
+
+[queries.period]
+date_from = "2025-06-25"
+date_to = "2025-06-26"
+
+[[queries.entities]]
+mention = "ГП ТГ Москва"
+role = "balance"
+entity_type = "balance"
+canonical_id = "BAL:2010000039953"
+canonical_name = "ГП ТГ Москва суточный баланс"
+
+[[queries.entities]]
+mention = "ГП ТГ Н.Новгород"
+role = "destination"
+entity_type = "balance"
+canonical_id = "BAL:2010000040110"
+canonical_name = "ГП ТГ Н.Новгород суточный баланс"
+
+[[queries.entities]]
+mention = "ТГ Н.-Новгород"
+role = "article"
+entity_type = "article"
+canonical_id = "ART:2010000039766"
+canonical_name = "ТГ Н.-Новгород"
+
+[queries.canonical]
+balance_ids = ["BAL:2010000039953", "BAL:2010000040110"]
+article_ids = ["ART:2010000039766"]
+geo_ids = []
+relation_ids = []
+
+[queries.execution]
+semantic_sql = '''
+SELECT ARTICLE("ТГ Н.-Новгород")
+FROM BALANCE("ГП ТГ Москва суточный баланс")
+WHERE PERIOD('2025-06-25','2025-06-26');
+'''
+allowed_layers = ["unified_directed_flow"]
+sql_function = "api.show_balance_day"
+required_params = { balance_id = 2010000039953, day = "2025-06-25" }
+forbidden_params = ["article_id", "article_ids"]
+source_execution_count = 1
+
+[queries.result]
+status = "ok"
+min_rows = 1
+row_count = 1
+required_columns = ["article_name", "article_indent", "gas_day", "fact_value", "unit"]
+required_sections = []
+unit = "тыс. м3"
+hierarchy_required = false
+source_order_required = true
+
+[[queries.controls]]
+row_index = 0
+canonical_article_id = "ART:2010000039766"
+article_name = "ТГ Н.-Новгород"
+article_indent = 4
+gas_day = "2025-06-25"
+fact_value = 2308.253
+tolerance = 0.001
+
+[queries.clarification]
+allowed = false
+questions = []
+
+[queries.forbidden]
+article_level = false
+scalar_result = false
+periods = [["2025-01-01", "2026-01-01"]]
+canonical_balance_ids = ["BAL:2010000297416"]
+
+[[queries]]
+id = "GQ-007"
+approval_status = "approved"
+priority = "P0 Core"
+title = "Распределение в указанный GEO object"
+query = "Покажи распределение из ГП ТГ Москва в Московскую область за 25.06.2025."
+result_shape = "directed_flow_value"
+value_mode = "fact"
+operation = "show"
+metric = "distribution"
+
+[queries.period]
+date_from = "2025-06-25"
+date_to = "2025-06-26"
+
+[[queries.entities]]
+mention = "ГП ТГ Москва"
+role = "balance"
+entity_type = "balance"
+canonical_id = "BAL:2010000039953"
+canonical_name = "ГП ТГ Москва суточный баланс"
+
+[[queries.entities]]
+mention = "Московская область"
+role = "destination"
+entity_type = "geo_object"
+canonical_id = "geo:cdb5df36713e7e382d70"
+canonical_name = "Московская область"
+
+[[queries.entities]]
+mention = "Московская обл."
+role = "article"
+entity_type = "article"
+canonical_id = "ART:2010000039808"
+canonical_name = "Московская обл."
+
+[queries.canonical]
+balance_ids = ["BAL:2010000039953"]
+article_ids = ["ART:2010000039808"]
+geo_ids = ["geo:cdb5df36713e7e382d70"]
+relation_ids = []
+
+[queries.execution]
+semantic_sql = '''
+SELECT ARTICLE("Московская обл.")
+FROM BALANCE("ГП ТГ Москва суточный баланс")
+WHERE PERIOD('2025-06-25','2025-06-26');
+'''
+allowed_layers = ["unified_directed_flow"]
+sql_function = "api.show_balance_day"
+required_params = { balance_id = 2010000039953, day = "2025-06-25" }
+forbidden_params = ["article_id", "article_ids"]
+source_execution_count = 1
+
+[queries.result]
+status = "ok"
+min_rows = 1
+row_count = 1
+required_columns = ["article_name", "article_indent", "gas_day", "fact_value", "unit"]
+required_sections = []
+unit = "тыс. м3"
+hierarchy_required = false
+source_order_required = true
+
+[[queries.controls]]
+row_index = 0
+canonical_article_id = "ART:2010000039808"
+article_name = "Московская обл."
+article_indent = 4
+gas_day = "2025-06-25"
+fact_value = 30927.714
+tolerance = 0.001
+
+[queries.clarification]
+allowed = false
+questions = []
+
+[queries.forbidden]
+article_level = false
+scalar_result = false
+periods = [["2025-01-01", "2026-01-01"]]
+canonical_balance_ids = ["BAL:2010000297416"]
+
+[[queries]]
 id = "GQ-003"
 approval_status = "approved"
 priority = "P0 Core"

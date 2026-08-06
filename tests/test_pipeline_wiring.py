@@ -11,6 +11,7 @@ from balance_chat.compat.envelope_translation import (
     EnvelopeTranslationError,
     PipelineEnvelopeTranslator,
 )
+from balance_chat.compat.pipeline_runtime import PipelineRuntime
 from balance_chat.contracts import (
     AnalysisIntent,
     AnalysisOperand,
@@ -107,6 +108,45 @@ def test_safe_execution_evidence_exposes_contract_without_raw_sql_or_rows() -> N
     assert evidence == {
         "sql_function": "api.show_balance_day",
         "sql_params": {"balance_id": 2010000039953, "day": "2025-06-25"},
+    }
+
+
+def test_canonical_balance_day_runtime_uses_postgres_api_without_planner() -> None:
+    calls = []
+
+    class Client:
+        def __init__(self, dsn):
+            assert dsn == "postgresql://configured"
+
+        def show_balance_day(self, balance_id, day):
+            calls.append((balance_id, day))
+            return [{
+                "article_id": 2,
+                "gas_day": "2025-06-25",
+                "fact_value": Decimal("12.5"),
+            }]
+
+    runtime = object.__new__(PipelineRuntime)
+    runtime._import_pipeline_module = lambda name: (
+        SimpleNamespace(PostgresApiClient=Client)
+        if name == "mcp_postgres_api_server"
+        else (_ for _ in ()).throw(AssertionError(name))
+    )
+    runtime.pipeline_runtime = lambda: SimpleNamespace(
+        database_dsn="postgresql://configured"
+    )
+
+    envelope = runtime.execute_balance_day(
+        balance_id=1,
+        day="2025-06-25",
+        request_id="safe-request",
+    )
+
+    assert calls == [(1, "2025-06-25")]
+    assert envelope["rows"][0]["fact_value"] == "12.5"
+    assert envelope["debug"] == {
+        "sql_function": "api.show_balance_day",
+        "params": {"balance_id": 1, "day": "2025-06-25"},
     }
 
 
@@ -891,6 +931,173 @@ def test_exact_day_balance_section_uses_one_full_snapshot_and_filters_metadata_s
     assert [row["article_name"].strip() for row in processed.response["rows"]] == expected_names
     assert [row["article_indent"] for row in processed.response["rows"]] == expected_indents
     assert processed.diagnostics["execution"]["layer"] == "unified_balance_section"
+    assert processed.diagnostics["execution"]["source_execution_count"] == 1
+
+
+@pytest.mark.parametrize(
+    ("message", "metric", "article_id", "direction_role", "direction_type"),
+    [
+        (
+            "Покажи поступление в ГП ТГ Москва от ГП ТГ Н.Новгород за 25.06.2025.",
+            "incoming", 2010000039714, "source", "balance",
+        ),
+        (
+            "Покажи распределение из ГП ТГ Москва в ГП ТГ Н.Новгород за 25.06.2025.",
+            "distribution", 2010000039766, "destination", "balance",
+        ),
+        (
+            "Покажи распределение из ГП ТГ Москва в Московскую область за 25.06.2025.",
+            "distribution", 2010000039808, "destination", "geo_object",
+        ),
+    ],
+)
+def test_exact_day_directed_flow_binds_typed_roles_and_one_canonical_article(
+    message, metric, article_id, direction_role, direction_type
+) -> None:
+    moscow = SimpleNamespace(
+        balance_id=2010000039953,
+        canonical_name="ГП ТГ Москва суточный баланс",
+        aliases=("гп тг москва", "тг москва"),
+    )
+    novgorod = SimpleNamespace(
+        balance_id=2010000040110,
+        canonical_name="ГП ТГ Н.Новгород суточный баланс",
+        aliases=("гп тг н новгород", "тг н новгород"),
+    )
+    moscow_region = SimpleNamespace(
+        geo_id="geo:cdb5df36713e7e382d70",
+        canonical_name="московская область",
+        aliases=("московская обл", "подмосковье"),
+    )
+    articles = (
+        SimpleNamespace(
+            article_id=2010000039714,
+            balance_id=moscow.balance_id,
+            canonical_name="От ТГ Н.Новгород",
+            aliases=(),
+            section="Ресурсы",
+            path=("Ресурсы", "Поступление", "От ТГ Н.Новгород"),
+        ),
+        SimpleNamespace(
+            article_id=2010000039766,
+            balance_id=moscow.balance_id,
+            canonical_name="ТГ Н.-Новгород",
+            aliases=(),
+            section="Распределение",
+            path=("Распределение", "За пределы", "ТГ Н.-Новгород"),
+        ),
+        SimpleNamespace(
+            article_id=2010000039808,
+            balance_id=moscow.balance_id,
+            canonical_name="Московская обл.",
+            aliases=(),
+            section="Распределение",
+            path=("Распределение", "Собственные потребители", "Московская обл."),
+        ),
+    )
+
+    class DirectedRuntime:
+        def __init__(self):
+            self.execute_calls = 0
+
+        def _import_pipeline_module(self, name):
+            if name == "pipeline_v2.nlp_ru":
+                return SimpleNamespace(normalize_query_lemmas=_test_normalize)
+            if name == "pipeline_v2.query_analyzer":
+                return SimpleNamespace(analyze_query=lambda query: SimpleNamespace(
+                    intent="show",
+                    metric=("incoming" if "поступление" in query.casefold() else "distribution"),
+                    article_policy=None,
+                    article_text=None,
+                ))
+            raise ImportError(name)
+
+        def execute_raw(self, *_args, **_kwargs):
+            raise AssertionError("directed flow must not use legacy standalone")
+
+        def execute(self, *_args, **_kwargs):
+            raise AssertionError("directed flow must not initialize Planner/LLM")
+
+        def execute_balance_day(self, *, balance_id, day, request_id=None):
+            self.execute_calls += 1
+            assert balance_id == moscow.balance_id
+            assert day == "2025-06-25"
+            assert request_id
+            return {
+                "status": "ok",
+                "rows": [
+                    {
+                        "article_id": item.article_id,
+                        "article_name": "    " + item.canonical_name,
+                        "article_indent": 4,
+                        "gas_day": "2025-06-25",
+                        "fact_value": str(index + 1),
+                    }
+                    for index, item in enumerate(articles)
+                ],
+                "debug": {
+                    "sql_function": "api.show_balance_day",
+                    "params": {"balance_id": moscow.balance_id, "day": "2025-06-25"},
+                },
+            }
+
+    class Registry:
+        geo_objects = (moscow_region,)
+        geo_groups = ()
+        routes = ()
+        manifest = SimpleNamespace(bundle_version="2026.08.1")
+
+        @staticmethod
+        def balance(value):
+            normalized = _test_normalize(value)
+            if "москва" in normalized and "область" not in normalized:
+                return moscow
+            if "новгород" in normalized:
+                return novgorod
+            return None
+
+        @staticmethod
+        def articles_for_balance(value):
+            return articles if int(value) == moscow.balance_id else ()
+
+        @staticmethod
+        def article(value):
+            return next((item for item in articles if item.article_id == int(value)), None)
+
+    runtime = DirectedRuntime()
+    registry = Registry()
+    processor = PipelineV2TurnProcessor(
+        runtime=runtime,
+        registry=registry,
+        interpreter=InvalidInterpreter(),
+        compiler=InterpretationMutationCompiler(RegistryEntityBinder(registry)),
+        executor=object(),
+        policy=NeverCalled(),
+    )
+
+    processed = processor.process(
+        ContextContractV2(session_id="session"),
+        message=message,
+        execute_db=True,
+        clarification=None,
+        request_id=f"directed-{article_id}",
+    )
+
+    operand = processed.mutation.replace_intent.operands[0]
+    assert runtime.execute_calls == 1
+    assert operand.metric == metric
+    assert [(item.role, item.entity.entity_type) for item in operand.entities] == [
+        ("balance", "balance"),
+        (direction_role, direction_type),
+        ("article", "article"),
+    ]
+    assert operand.entities[-1].entity.entity_id == f"ART:{article_id}"
+    assert len(processed.response["rows"]) == 1
+    assert processed.response["rows"][0]["article_name"].strip() == (
+        next(item.canonical_name for item in articles if item.article_id == article_id)
+    )
+    assert processed.response["rows"][0]["unit"] == "тыс. м3"
+    assert processed.diagnostics["execution"]["layer"] == "unified_directed_flow"
     assert processed.diagnostics["execution"]["source_execution_count"] == 1
 
 

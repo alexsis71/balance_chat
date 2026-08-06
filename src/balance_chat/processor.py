@@ -211,6 +211,25 @@ class PipelineV2TurnProcessor:
                 memory_chunks=[],
                 evidence_businesses=explicit_businesses,
             )
+        directed_flow = self._deterministic_directed_flow_mutation(
+            message,
+            explicit_businesses,
+            explicit_geos,
+            turn_id,
+        )
+        if directed_flow is not None:
+            return self._execute_mutation(
+                state,
+                directed_flow,
+                normalized_message=directed_flow.normalized_message or message,
+                execute_db=execute_db,
+                request_id=request_id,
+                started=started,
+                interpretation_mode="deterministic_directed_flow",
+                memory_chunks=[],
+                evidence_businesses=explicit_businesses,
+                evidence_geos=explicit_geos,
+            )
         mixed_metric_operands = self._matched_distribution_own_consumers(message)
         if mixed_metric_operands:
             return self._canonical_entity_comparison(
@@ -504,6 +523,25 @@ class PipelineV2TurnProcessor:
                 interpretation_mode="deterministic_full_balance",
                 memory_chunks=[],
                 evidence_businesses=explicit_businesses,
+            )
+        directed_flow = self._deterministic_directed_flow_mutation(
+            message,
+            explicit_businesses,
+            explicit_geos,
+            turn_id,
+        )
+        if directed_flow is not None:
+            return self._execute_mutation(
+                state,
+                directed_flow,
+                normalized_message=directed_flow.normalized_message or message,
+                execute_db=execute_db,
+                request_id=request_id,
+                started=started,
+                interpretation_mode="deterministic_directed_flow",
+                memory_chunks=[],
+                evidence_businesses=explicit_businesses,
+                evidence_geos=explicit_geos,
             )
         routing = self.gate.route(
             message,
@@ -1426,6 +1464,105 @@ class PipelineV2TurnProcessor:
             replace_intent=intent,
         )
 
+    def _deterministic_directed_flow_mutation(
+        self,
+        message: str,
+        balances: Sequence[Any],
+        geos: Sequence[Any],
+        turn_id: str,
+    ) -> ContextMutation | None:
+        """Bind an exact-day directed flow from typed metadata evidence.
+
+        The execution viewpoint is always explicit: incoming is read on the
+        destination balance, while distribution is read on the source balance.
+        The direction-bound article must exist uniquely in that balance.  No
+        relation or article is inferred from name similarity alone.
+        """
+
+        period = _explicit_single_day_period(message)
+        if period is None or self._analyze_query is None:
+            return None
+        try:
+            analyzed = self._analyze_query(message)
+        except Exception:
+            return None
+        if str(getattr(analyzed, "intent", "")).casefold() != "show":
+            return None
+        metric = str(getattr(analyzed, "metric", "")).casefold()
+        if metric not in {"incoming", "distribution"}:
+            return None
+
+        mentions = self._tagged_business_entity_mentions(message)
+        business_by_role: dict[str, Any] = {}
+        for mention in mentions:
+            record = self.registry.balance(mention.text)
+            if record is not None and mention.role not in business_by_role:
+                business_by_role[mention.role] = record
+
+        balance: Any | None = None
+        article: Any | None = None
+        directional: OperandEntityRef | None = None
+        if metric == "incoming" and not geos:
+            source = business_by_role.get("source")
+            destination = business_by_role.get("destination")
+            if source is None or destination is None or len(balances) != 2:
+                return None
+            balance = destination
+            article = _unique_direction_article(
+                self.registry,
+                balance=balance,
+                target=source,
+                metric=metric,
+            )
+            directional = _typed_entity("source", "balance", source)
+        elif metric == "distribution" and not geos:
+            source = business_by_role.get("source") or business_by_role.get("balance")
+            destination = business_by_role.get("destination")
+            if source is None or destination is None or len(balances) != 2:
+                return None
+            balance = source
+            article = _unique_direction_article(
+                self.registry,
+                balance=balance,
+                target=destination,
+                metric=metric,
+            )
+            directional = _typed_entity("destination", "balance", destination)
+        elif metric == "distribution" and len(balances) == 1 and len(geos) == 1:
+            balance = balances[0]
+            geo = geos[0]
+            article = _unique_direction_article(
+                self.registry,
+                balance=balance,
+                target=geo,
+                metric=metric,
+            )
+            directional = _typed_entity("destination", "geo_object", geo)
+        if balance is None or article is None or directional is None:
+            return None
+
+        intent = AnalysisIntent(
+            operation=Operation.SHOW,
+            operands=[AnalysisOperand(
+                operand_id="directed_flow",
+                metric=metric,
+                aggregate_type="sum",
+                unit=CANONICAL_VOLUME_UNIT,
+                entities=[
+                    _typed_entity("balance", "balance", balance),
+                    directional,
+                    _typed_entity("article", "article", article),
+                ],
+            )],
+            periods=[period],
+        )
+        return ContextMutation(
+            turn_id=turn_id,
+            user_message=message,
+            normalized_message=message,
+            replace_intent=intent,
+        )
+
     def _tagged_business_entity_mentions(self, message: str) -> list[EntityMention]:
         """Preserve every qualified business span and its local routing role."""
         if self._normalize_lemmas is None:
@@ -1838,7 +1975,11 @@ class PipelineV2TurnProcessor:
             explicit_geo_count=len(evidence_geos),
             pre_database=True,
         )
-        if _is_full_balance_show(intent) or _is_balance_section_show(intent):
+        if (
+            _is_full_balance_show(intent)
+            or _is_balance_section_show(intent)
+            or _is_directed_flow_show(intent)
+        ):
             return self._execute_full_balance_mutation(
                 state,
                 mutation,
@@ -1995,25 +2136,67 @@ class PipelineV2TurnProcessor:
     ) -> TurnProcessResult:
         """Preserve full-balance or metadata-section hierarchical rows."""
         execute = getattr(self.runtime, "execute", None)
-        if not callable(execute):
+        execute_balance_day = getattr(self.runtime, "execute_balance_day", None)
+        if not callable(execute) and not callable(execute_balance_day):
             raise TurnProcessingError(
                 "balance-level execution is unavailable",
                 code="balance_level_execution_unavailable",
             )
         section = _balance_section_article(intent, self.registry)
-        source_intent = _full_balance_source_intent(intent) if section is not None else intent
+        directed_article = _directed_flow_article(intent, self.registry)
+        source_intent = (
+            _full_balance_source_intent(intent)
+            if section is not None or directed_article is not None
+            else intent
+        )
         execution_layer = (
-            "unified_balance_section" if section is not None else "unified_balance_level"
+            "unified_balance_section"
+            if section is not None
+            else "unified_directed_flow"
+            if directed_article is not None
+            else "unified_balance_level"
         )
         try:
-            envelope = execute(
-                normalized_message,
-                source_intent,
-                execute_db=execute_db,
-                request_id=f"{request_id}:balance",
-                apply_summary=False,
-            )
+            if directed_article is not None:
+                if not callable(execute_balance_day):
+                    raise TurnProcessingError(
+                        "directed-flow execution is unavailable",
+                        code="directed_flow_execution_unavailable",
+                    )
+                balance_ref = source_intent.operands[0].entities[0].entity
+                period = source_intent.periods[0]
+                envelope = execute_balance_day(
+                    balance_id=_metadata_numeric_id(balance_ref.entity_id),
+                    day=period.date_from.isoformat(),
+                    request_id=f"{request_id}:balance",
+                ) if execute_db else {
+                    "status": "ok",
+                    "rows": [],
+                    "warnings": [],
+                    "debug": {
+                        "sql_function": "api.show_balance_day",
+                        "params": {
+                            "balance_id": _metadata_numeric_id(balance_ref.entity_id),
+                            "day": period.date_from.isoformat(),
+                        },
+                    },
+                }
+            else:
+                if not callable(execute):
+                    raise TurnProcessingError(
+                        "balance-level execution is unavailable",
+                        code="balance_level_execution_unavailable",
+                    )
+                envelope = execute(
+                    normalized_message,
+                    source_intent,
+                    execute_db=execute_db,
+                    request_id=f"{request_id}:balance",
+                    apply_summary=False,
+                )
         except Exception as exc:
+            if isinstance(exc, TurnProcessingError):
+                raise
             raise TurnProcessingError(
                 "balance-level execution failed",
                 code="balance_level_execution_failed",
@@ -2024,6 +2207,8 @@ class PipelineV2TurnProcessor:
                 section,
                 self.registry,
             )
+        if directed_article is not None:
+            envelope = _filter_directed_flow_envelope(envelope, directed_article)
         envelope = _normalize_full_balance_envelope(envelope, source_intent)
         status = str(envelope.get("status") or "error")
         outcome = _outcome(status)
@@ -2865,6 +3050,114 @@ def _balance_section_article(intent: AnalysisIntent, registry: Any) -> Any | Non
     return lookup(article_id)
 
 
+def _typed_entity(role: str, entity_type: str, record: Any) -> OperandEntityRef:
+    id_attributes = {
+        "balance": ("balance_id", "BAL:"),
+        "article": ("article_id", "ART:"),
+        "geo_object": ("geo_id", ""),
+        "route": ("route_id", ""),
+    }
+    attribute, prefix = id_attributes[entity_type]
+    raw_id = getattr(record, attribute)
+    name = getattr(record, "canonical_name")
+    return OperandEntityRef(
+        role=role,
+        entity=CanonicalEntityRef(
+            entity_id=f"{prefix}{raw_id}",
+            entity_type=entity_type,
+            display_name=(
+                _official_name(name) if entity_type == "geo_object" else name
+            ),
+        ),
+    )
+
+
+def _direction_target_labels(target: Any) -> set[str]:
+    labels = {
+        _normalize_text(value)
+        for value in (
+            getattr(target, "canonical_name", ""),
+            *(getattr(target, "aliases", ()) or ()),
+        )
+        if _normalize_text(value)
+    }
+    expanded = set(labels)
+    for label in labels:
+        compact = re.sub(r"\s+суточный\s+баланс$", "", label).strip()
+        expanded.add(compact)
+        for prefix in (
+            "гп ",
+            "ооо ",
+            "газпром трансгаз ",
+            "ооо газпром трансгаз ",
+        ):
+            if compact.startswith(prefix):
+                expanded.add(compact[len(prefix):].strip())
+    return {item for item in expanded if item}
+
+
+def _unique_direction_article(
+    registry: Any,
+    *,
+    balance: Any,
+    target: Any,
+    metric: str,
+) -> Any | None:
+    """Resolve one direction-bound article by exact normalized metadata names."""
+
+    articles_for_balance = getattr(registry, "articles_for_balance", None)
+    if not callable(articles_for_balance):
+        return None
+    target_labels = _direction_target_labels(target)
+    matches: dict[int, Any] = {}
+    for article in articles_for_balance(balance.balance_id):
+        article_label = _normalize_text(article.canonical_name)
+        path = {_normalize_text(item) for item in (article.path or ())}
+        if metric == "incoming":
+            if "поступление" not in path:
+                continue
+            article_label = re.sub(r"^от\s+", "", article_label).strip()
+        elif metric == "distribution":
+            if _normalize_text(article.section) != "распределение":
+                continue
+        else:
+            continue
+        if article_label in target_labels:
+            matches[int(article.article_id)] = article
+    return next(iter(matches.values())) if len(matches) == 1 else None
+
+
+def _is_directed_flow_show(intent: AnalysisIntent) -> bool:
+    if (
+        intent.operation != Operation.SHOW
+        or len(intent.operands) != 1
+        or intent.operands[0].metric not in {"incoming", "distribution"}
+        or intent.grouping
+        or intent.comparison is not None
+        or intent.formula is not None
+        or intent.ranking is not None
+    ):
+        return False
+    roles = [item.role for item in intent.operands[0].entities]
+    return (
+        roles in (["balance", "source", "article"], ["balance", "destination", "article"])
+        and intent.operands[0].aggregate_type == "sum"
+    )
+
+
+def _directed_flow_article(intent: AnalysisIntent, registry: Any) -> Any | None:
+    if not _is_directed_flow_show(intent):
+        return None
+    article_ref = next(
+        item.entity
+        for item in intent.operands[0].entities
+        if item.role == "article"
+    )
+    article_id = _numeric_metadata_id(article_ref.entity_id)
+    lookup = getattr(registry, "article", None)
+    return lookup(article_id) if article_id is not None and callable(lookup) else None
+
+
 def _full_balance_source_intent(intent: AnalysisIntent) -> AnalysisIntent:
     operand = intent.operands[0]
     balance = next(item for item in operand.entities if item.role == "balance")
@@ -2923,6 +3216,32 @@ def _filter_balance_section_envelope(
             "article_indent": max(0, _row_article_indent(row) - base_indent),
         })
     return {**envelope, "rows": normalized_rows}
+
+
+def _filter_directed_flow_envelope(
+    envelope: dict[str, Any],
+    article: Any,
+) -> dict[str, Any]:
+    selected = [
+        dict(row)
+        for row in (envelope.get("rows") or [])
+        if isinstance(row, Mapping)
+        and _metadata_numeric_id(row.get("article_id")) == int(article.article_id)
+    ]
+    rows = []
+    for row in selected:
+        name = str(row.get("article_name") or article.canonical_name).strip()
+        rows.append({
+            **row,
+            "article_name": name,
+            "article_scope": str(row.get("article_scope") or name).strip(),
+            "article_indent": _row_article_indent(row),
+        })
+    return {
+        **envelope,
+        "status": str(envelope.get("status") or "ok") if rows else "no_data",
+        "rows": rows,
+    }
 
 
 def _row_article_indent(row: Mapping[str, Any]) -> int:
