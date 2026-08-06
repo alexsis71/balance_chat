@@ -65,6 +65,17 @@ class PipelineEnvelopeTranslator:
         logical_operation = operation
         if plan.get("group_by"):
             logical_operation = Operation.GROUP
+        elif (
+            operation == Operation.COMPARE_PERIODS
+            and str(raw_intent.get("metric") or "").strip() == "flow_balance"
+            and len(expanded) > 1
+        ):
+            # A flow balance contains the two canonical sides of one business
+            # relation (incoming and distribution).  It is not a multi-source
+            # GEO projection and must not be collapsed into a scalar GEO
+            # operand.  Preserve both sides and both periods as an explicit
+            # composite contract matching the unified resolved plan.
+            logical_operation = Operation.MULTI_STEP
         elif operation == Operation.COMPARE_PERIODS and len(periods) > 2:
             logical_operation = Operation.MULTI_STEP
         logical_period_operand = self._logical_period_operand(

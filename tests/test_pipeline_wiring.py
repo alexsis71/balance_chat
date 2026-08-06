@@ -365,6 +365,226 @@ def test_multi_period_multi_source_comparison_is_preserved_as_multi_step() -> No
     assert len(intent.periods) == 3
 
 
+def test_flow_balance_period_comparison_preserves_both_canonical_sides() -> None:
+    envelope = _envelope()
+    plan = envelope["debug"]["resolved_plan"]
+    plan["_intent"].update({
+        "intent": "compare",
+        "metric": "flow_balance",
+        "periods": [
+            {"date_from": "2025-07-01", "date_to": "2025-08-01"},
+            {"date_from": "2025-06-01", "date_to": "2025-07-01"},
+        ],
+    })
+    plan["operation"] = "compare_periods"
+    plan["periods"] = [
+        ["2025-07-01", "2025-08-01"],
+        ["2025-06-01", "2025-07-01"],
+    ]
+    base = {**plan["expressions"][0], "geo": []}
+    plan["expressions"] = [
+        {
+            **base,
+            "canonical_metric": "incoming",
+            "article": {"id": "ART:11", "label": "от ТГ Сургут"},
+        },
+        {
+            **base,
+            "canonical_metric": "distribution",
+            "article": {"id": "ART:12", "label": "ТГ Сургут"},
+        },
+    ]
+
+    intent = PipelineEnvelopeTranslator().intent(envelope)
+
+    assert intent.operation == Operation.MULTI_STEP
+    assert [item.metric for item in intent.operands] == [
+        "incoming", "distribution",
+    ]
+    assert len(intent.periods) == 2
+
+
+@pytest.mark.parametrize(
+    ("message", "operation", "period_count"),
+    [
+        (
+            "Покажи баланс потоков между ГП ТГ Самара и ГП ТГ Казань "
+            "за период с 2025-01-10 по 2025-01-15",
+            "compare",
+            1,
+        ),
+    ],
+)
+def test_explicit_flow_balance_uses_unified_bridge_before_context_binding(
+    message, operation, period_count
+) -> None:
+    class Runtime:
+        def __init__(self):
+            self.calls = 0
+
+        def _import_pipeline_module(self, name):
+            if name == "pipeline_v2.query_analyzer":
+                return SimpleNamespace(analyze_query=lambda query: SimpleNamespace(
+                    metric="flow_balance",
+                    from_node=("ГП ТГ Томск" if "Томск" in query else "ГП ТГ Самара"),
+                    to_node=("ГП ТГ Сургут" if "Томск" in query else "ГП ТГ Казань"),
+                    date_from=("2025-06-01" if "Томск" in query else "2025-01-10"),
+                    date_to=("2025-08-01" if "Томск" in query else "2025-01-16"),
+                    periods=([1, 2] if "Томск" in query else []),
+                    needs_clarification=False,
+                ))
+            raise ImportError(name)
+
+        def execute_raw(self, _query, **_kwargs):
+            self.calls += 1
+            envelope = _envelope()
+            plan = envelope["debug"]["resolved_plan"]
+            plan["_intent"].update({
+                "intent": "compare" if operation == "compare_periods" else "show",
+                "metric": "flow_balance",
+                "date_from": "2025-06-01" if period_count == 2 else "2025-01-10",
+                "date_to": "2025-08-01" if period_count == 2 else "2025-01-16",
+            })
+            plan["operation"] = operation
+            plan["expressions"] = [
+                {
+                    "canonical_metric": metric,
+                    "balance": {"id": "BAL:1", "label": "Исходный баланс"},
+                    "article": {"id": f"ART:{index}", "label": label},
+                    "geo": [],
+                }
+                for index, (metric, label) in enumerate(
+                    (("incoming", "Поступление"), ("distribution", "Распределение")),
+                    start=1,
+                )
+            ]
+            if period_count == 2:
+                plan["periods"] = [
+                    ["2025-07-01", "2025-08-01"],
+                    ["2025-06-01", "2025-07-01"],
+                ]
+                plan["_intent"]["periods"] = [
+                    {"date_from": "2025-07-01", "date_to": "2025-08-01"},
+                    {"date_from": "2025-06-01", "date_to": "2025-07-01"},
+                ]
+            return envelope
+
+    class Registry:
+        geo_objects = ()
+        geo_groups = ()
+        routes = ()
+
+    runtime = Runtime()
+    processor = PipelineV2TurnProcessor(
+        runtime=runtime,
+        registry=Registry(),
+        interpreter=InvalidInterpreter(),
+        compiler=object(),
+        executor=object(),
+        policy=NeverCalled(),
+    )
+
+    processed = processor.process(
+        ContextContractV2(session_id="session"),
+        message=message,
+        execute_db=False,
+        clarification=None,
+        request_id="flow-balance-regression",
+    )
+
+    assert runtime.calls == 1
+    assert processed.diagnostics["interpretation"]["mode"] == (
+        "deterministic_flow_balance_bridge"
+    )
+    assert processed.mutation.replace_intent.operation.value == (
+        "multi_step" if operation == "compare_periods" else "compare"
+    )
+    assert len(processed.mutation.replace_intent.operands) == 2
+    assert len(processed.mutation.replace_intent.periods) == period_count
+
+
+def test_arrow_flow_uses_source_distribution_and_preserves_period_order() -> None:
+    source = SimpleNamespace(
+        balance_id=1,
+        canonical_name="ГП ТГ Томск суточный баланс",
+        aliases=("Томск",),
+    )
+    destination = SimpleNamespace(
+        balance_id=2,
+        canonical_name="ГП ТГ Сургут суточный баланс",
+        aliases=("Сургут",),
+    )
+    article = SimpleNamespace(
+        article_id=12,
+        balance_id=1,
+        canonical_name="ТГ Сургут",
+        aliases=(),
+        section="Распределение",
+        path=("Распределение", "За пределы", "ТГ Сургут"),
+    )
+
+    class Runtime:
+        def _import_pipeline_module(self, name):
+            if name == "pipeline_v2.query_analyzer":
+                return SimpleNamespace(analyze_query=lambda _query: SimpleNamespace(
+                    intent="compare",
+                    metric="flow_balance",
+                    aggregate_type="sum",
+                    from_node=source.canonical_name,
+                    to_node=destination.canonical_name,
+                    periods=[
+                        SimpleNamespace(date_from="2025-07-01", date_to="2025-08-01"),
+                        SimpleNamespace(date_from="2025-06-01", date_to="2025-07-01"),
+                    ],
+                    needs_clarification=False,
+                ))
+            raise ImportError(name)
+
+    class Registry:
+        geo_objects = ()
+        geo_groups = ()
+        routes = ()
+
+        @staticmethod
+        def balance(value):
+            if value == source.canonical_name:
+                return source
+            if value == destination.canonical_name:
+                return destination
+            return None
+
+        @staticmethod
+        def articles_for_balance(balance_id):
+            return (article,) if int(balance_id) == source.balance_id else ()
+
+    processor = PipelineV2TurnProcessor(
+        runtime=Runtime(),
+        registry=Registry(),
+        interpreter=InvalidInterpreter(),
+        compiler=object(),
+        executor=object(),
+        policy=NeverCalled(),
+    )
+
+    mutation = processor._deterministic_analyzed_flow_mutation(
+        "Сравни переток Томск → Сургут в июле и июне 2025.",
+        "turn",
+    )
+
+    assert mutation is not None
+    intent = mutation.replace_intent
+    assert intent.operation == Operation.COMPARE_PERIODS
+    assert intent.operands[0].metric == "distribution"
+    assert [item.entity.display_name for item in intent.operands[0].entities] == [
+        source.canonical_name,
+        destination.canonical_name,
+        article.canonical_name,
+    ]
+    assert [item.date_from.isoformat() for item in intent.periods] == [
+        "2025-07-01", "2025-06-01",
+    ]
+
+
 def test_pipeline_grouping_contract_is_preserved() -> None:
     envelope = _envelope()
     plan = envelope["debug"]["resolved_plan"]

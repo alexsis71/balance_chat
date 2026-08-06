@@ -157,6 +157,30 @@ class PipelineV2TurnProcessor:
                 interpretation_mode="deterministic_extremum_comparison",
                 memory_chunks=[],
             )
+        directed_flow_balance = self._deterministic_analyzed_flow_mutation(
+            message, turn_id
+        )
+        if directed_flow_balance is not None:
+            return self._execute_mutation(
+                state,
+                directed_flow_balance,
+                normalized_message=directed_flow_balance.normalized_message or message,
+                execute_db=execute_db,
+                request_id=request_id,
+                started=started,
+                interpretation_mode="deterministic_analyzed_directed_flow",
+                memory_chunks=[],
+            )
+        if self._is_explicit_flow_balance_query(message):
+            return self._standalone(
+                state,
+                message=message,
+                execute_db=execute_db,
+                request_id=request_id,
+                turn_id=turn_id,
+                started=started,
+                interpretation_mode="deterministic_flow_balance_bridge",
+            )
         explicit_geos = self._tagged_geo_objects(message)
         explicit_businesses = self._tagged_business_balances(message)
         business_mentions = self._tagged_business_entity_mentions(message)
@@ -487,6 +511,30 @@ class PipelineV2TurnProcessor:
         started: float,
     ) -> TurnProcessResult:
         """Interpret every active-session turn against the seven-turn ledger."""
+        directed_flow_balance = self._deterministic_analyzed_flow_mutation(
+            message, turn_id
+        )
+        if directed_flow_balance is not None:
+            return self._execute_mutation(
+                state,
+                directed_flow_balance,
+                normalized_message=directed_flow_balance.normalized_message or message,
+                execute_db=execute_db,
+                request_id=request_id,
+                started=started,
+                interpretation_mode="deterministic_analyzed_directed_flow",
+                memory_chunks=[],
+            )
+        if self._is_explicit_flow_balance_query(message):
+            return self._standalone(
+                state,
+                message=message,
+                execute_db=execute_db,
+                request_id=request_id,
+                turn_id=turn_id,
+                started=started,
+                interpretation_mode="deterministic_flow_balance_bridge",
+            )
         explicit_geos = self._tagged_geo_objects(message)
         explicit_businesses = self._tagged_business_balances(message)
         business_mentions = self._tagged_business_entity_mentions(message)
@@ -1359,6 +1407,121 @@ class PipelineV2TurnProcessor:
                 seen.add(key)
                 output.append(record)
         return output
+
+    def _is_explicit_flow_balance_query(self, message: str) -> bool:
+        """Recognize a complete V1 flow-balance contract before scalar binding.
+
+        ``flow_balance`` resolves two physical articles (incoming and
+        distribution) from one explicit business viewpoint.  It therefore
+        cannot pass through the scalar ContextResolver binder.  The existing
+        unified analyzer remains authoritative for detecting the capability;
+        only complete, unambiguous source/destination and period evidence is
+        admitted to the explicit compatibility bridge.
+        """
+
+        if self._analyze_query is None:
+            return False
+        try:
+            analyzed = self._analyze_query(message)
+        except Exception:
+            return False
+        if str(getattr(analyzed, "metric", "")).casefold() != "flow_balance":
+            return False
+        if bool(getattr(analyzed, "needs_clarification", False)):
+            return False
+        source = str(getattr(analyzed, "from_node", "") or "").strip()
+        destination = str(getattr(analyzed, "to_node", "") or "").strip()
+        if not source or not destination or source.casefold() == destination.casefold():
+            return False
+        periods = list(getattr(analyzed, "periods", None) or [])
+        has_period = bool(periods) or bool(
+            getattr(analyzed, "date_from", None)
+            and getattr(analyzed, "date_to", None)
+        )
+        return has_period
+
+    def _deterministic_analyzed_flow_mutation(
+        self,
+        message: str,
+        turn_id: str,
+    ) -> ContextMutation | None:
+        """Bind an explicitly directed flow resolved by the unified analyzer.
+
+        The analyzer historically names both an explicit directed transfer and
+        a two-sided "баланс потоков" as ``flow_balance``.  An arrow or an
+        ``из A в B`` construction is nevertheless one directed distribution
+        from the source viewpoint.  A phrase "между A и B" remains the
+        two-sided flow-balance compatibility contract.
+        """
+
+        normalized = message.casefold()
+        explicit_direction = bool(
+            re.search(r"(?:→|->)", message)
+            or re.search(r"\bиз\b.+\b(?:в|во)\b", normalized)
+        )
+        if not explicit_direction or re.search(r"\bмежду\b", normalized):
+            return None
+        if self._analyze_query is None:
+            return None
+        try:
+            analyzed = self._analyze_query(message)
+        except Exception:
+            return None
+        if (
+            str(getattr(analyzed, "metric", "")).casefold() != "flow_balance"
+            or bool(getattr(analyzed, "needs_clarification", False))
+        ):
+            return None
+        source = self.registry.balance(getattr(analyzed, "from_node", None))
+        destination = self.registry.balance(getattr(analyzed, "to_node", None))
+        if source is None or destination is None:
+            return None
+        article = _unique_direction_article(
+            self.registry,
+            balance=source,
+            target=destination,
+            metric="distribution",
+        )
+        if article is None:
+            return None
+        periods = [
+            PeriodRef(date_from=item.date_from, date_to=item.date_to)
+            for item in (getattr(analyzed, "periods", None) or [])
+        ]
+        if not periods:
+            date_from = getattr(analyzed, "date_from", None)
+            date_to = getattr(analyzed, "date_to", None)
+            if not date_from or not date_to:
+                return None
+            periods = [PeriodRef(date_from=date_from, date_to=date_to)]
+        operation = (
+            Operation.COMPARE_PERIODS
+            if len(periods) == 2
+            and str(getattr(analyzed, "intent", "")).casefold() == "compare"
+            else Operation.SHOW
+        )
+        return ContextMutation(
+            turn_id=turn_id,
+            user_message=message,
+            normalized_message=message,
+            replace_intent=AnalysisIntent(
+                operation=operation,
+                operands=[AnalysisOperand(
+                    operand_id="directed_flow",
+                    metric="distribution",
+                    aggregate_type=str(
+                        getattr(analyzed, "aggregate_type", None) or "sum"
+                    ),
+                    unit=CANONICAL_VOLUME_UNIT,
+                    entities=[
+                        _typed_entity("balance", "balance", source),
+                        _typed_entity("destination", "balance", destination),
+                        _typed_entity("article", "article", article),
+                    ],
+                )],
+                periods=periods,
+            ),
+        )
 
     def _deterministic_full_balance_mutation(
         self,
