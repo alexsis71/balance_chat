@@ -528,8 +528,7 @@ class InterpretationMutationCompiler:
             if len(graph.operands) == 2:
                 first, second = graph.operands
                 same_source = (
-                    first.source_operand_handle
-                    and first.source_operand_handle == second.source_operand_handle
+                    first.source_operand_handle == second.source_operand_handle
                 )
                 same_semantics = (
                     first.metric == second.metric

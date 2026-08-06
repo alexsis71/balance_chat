@@ -632,3 +632,58 @@ def test_compare_periods_collapses_duplicate_source_operands_to_canonical_shape(
         ("2025-03-01", "2025-06-01"),
         ("2025-06-01", "2025-09-01"),
     ]
+
+
+def test_standalone_compare_periods_collapses_llm_comparison_wrapper() -> None:
+    decision = InterpretationDecision.model_validate({
+        "mode": "standalone",
+        "normalized_message": "Сравни поставки в Казань весной и летом 2025?",
+        "confidence": 0.95,
+        "intent_graph": {
+            "operation": "compare_periods",
+            "operands": [
+                {
+                    "operand_id": "spring",
+                    "metric": "distribution",
+                    "aggregate_type": "sum",
+                    "periods": [
+                        {"date_from": "2025-03-01", "date_to": "2025-06-01"}
+                    ],
+                },
+                {
+                    "operand_id": "summer",
+                    "metric": "distribution",
+                    "aggregate_type": "sum",
+                    "periods": [
+                        {"date_from": "2025-06-01", "date_to": "2025-09-01"}
+                    ],
+                },
+            ],
+            "comparison": {
+                "baseline_operand_id": "spring",
+                "target_operand_id": "summer",
+            },
+        },
+        "metadata_bundle_version": "2026.08.1",
+    })
+
+    mutation = InterpretationMutationCompiler(RegistryEntityBinder(_registry())).compile(
+        decision,
+        ContextContractV2(session_id="session"),
+        turn_id="turn-standalone-compare-periods",
+        user_message=decision.normalized_message,
+        current_entity_mentions=[EntityMention(
+            text="Казань",
+            role="destination",
+        )],
+    )
+
+    intent = mutation.replace_intent
+    assert intent.operation == Operation.COMPARE_PERIODS
+    assert intent.comparison is None
+    assert len(intent.operands) == 1
+    assert intent.operands[0].entities[0].entity.display_name == "Казань"
+    assert [(item.date_from.isoformat(), item.date_to.isoformat()) for item in intent.periods] == [
+        ("2025-03-01", "2025-06-01"),
+        ("2025-06-01", "2025-09-01"),
+    ]
