@@ -33,8 +33,9 @@ baseline, and the feature branch descends from the architecture branch.
 
 - Added the `ExecutionAdapter` protocol and thin `ReducerExecutionAdapter`.
 - Delegated all mutation semantics to the existing `reduce_intent()`.
-- Added fail-closed rejection for an empty executable mutation so an active
-  intent cannot be silently re-executed.
+- Added fail-closed rejection when a patch-only executable mutation is empty
+  or contains only `KEEP` actions, so an active intent cannot be silently
+  re-executed. This is intentionally structural no-op detection only.
 - Injected the adapter into `PipelineV2TurnProcessor`; `bootstrap.py` constructs
   the production instance explicitly. Constructor defaulting is retained for
   existing unit fixtures.
@@ -48,6 +49,9 @@ baseline, and the feature branch descends from the architecture branch.
 - Added a fail-closed post-normalization check: execution does not proceed if a
   mutation would reduce to a committed intent different from the normalized
   intent about to be executed.
+- Mapped materialization `ContextReductionError` to the existing
+  `TurnProcessingError` contract with code `context_reduction_failed` and HTTP
+  422. Processing failure occurs before store commit.
 
 ## What did NOT change
 
@@ -60,8 +64,9 @@ baseline, and the feature branch descends from the architecture branch.
 - **reducer:** `reduce_intent()` and `apply_context_transition()` are unchanged.
 - **planner:** no planner code or semantics changed.
 - **executor:** no executor code or semantics changed.
-- **API:** endpoints, request/response contracts, and error mapping are
-  unchanged.
+- **API:** endpoints and response models are unchanged. The existing
+  `TurnProcessingError` HTTP 422 mapping now also covers materialization
+  failures through `context_reduction_failed`.
 - **stores:** InMemory, SQLite, and PostgreSQL stores are unchanged.
 - **PATCH producers:** none were added; all production producers remain full
   replacements.
@@ -102,12 +107,22 @@ The added tests cover:
 - replacement-only materialization;
 - replacement plus patch reducer precedence;
 - missing base and reducer error propagation;
-- fail-closed empty mutation;
+- fail-closed empty and all-KEEP mutations;
+- allowed `SET` and `REFERENCE` actions;
 - state and mutation immutability;
 - replace-only planner input and `TurnProcessResult.mutation` preservation;
 - patch-only scalar and grouping dispatch;
 - patch-only execution, store commit, and reload equivalence;
 - fail-closed normalization when a retained patch would make commit diverge.
+
+## Deferred boundaries
+
+Before enabling the first production PATCH producer, PR2 must resolve how
+execution-time normalization synchronizes a normalized replacement with the
+retained original patch. PR1a deliberately does not clear or rewrite patches.
+
+`IntentPatch` also has no `formula` or `ranking` fields. Transitions that must
+set or clear those values remain a PR2+ contract boundary.
 
 ## Behavioral equivalence
 

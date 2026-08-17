@@ -73,30 +73,43 @@ producer
 ```
 
 `ReducerExecutionAdapter` delegates mutation semantics to `reduce_intent()`.
-The adapter adds only execution-boundary fail-closed validation for an empty
-mutation (`replace_intent is None` and every patch field is unset), because the
-reducer intentionally treats that mutation as reuse of the active intent.
+The adapter adds only execution-boundary fail-closed validation when
+`replace_intent is None` and the patch has no meaningful action. This rejects
+both an empty patch and a patch whose present `FieldMutation` values are all
+`KEEP`. Existing `SET`, `ADD`, `REMOVE`, `CLEAR`, and `REFERENCE` actions are
+meaningful and are delegated unchanged to the reducer. This is structural
+no-op detection only; PR1a does not add a generic semantic diff engine.
 
-Every executable mutation is materialized through one processor helper. If an
-evidence repair returns a different mutation, that new mutation is materialized
-once and replaces the rejected materialization.
+Every dispatched mutation execution path is materialized through one processor
+helper. If an evidence repair returns a different mutation, that new mutation
+is materialized once and replaces the rejected materialization. The pre-existing
+`_standalone()` path owns and executes its locally translated full intent and is
+intentionally outside this seam; clarification-only returns are not execution
+paths. PR1a does not refactor either case.
 
 Existing execution-time normalization currently synchronizes the normalized
 intent back into the full replacement mutation so commit reduces to the intent
 that was executed. PR1 preserves that behavior and re-materializes the
 synchronized mutation before planning; if an existing non-empty patch would
 make commit reduce to a different intent, execution fails closed with
-`ContextReductionError`. This verifies the invariant:
+the controlled `context_reduction_failed` application error. This verifies the
+invariant:
 
 ```text
 executed effective intent == committed effective intent
 ```
 
+Before enabling the first production PATCH producer in PR2, normalization
+versus retained-patch synchronization semantics must be resolved explicitly.
+PR1a does not clear, rewrite, or compile patches during normalization. In
+addition, `IntentPatch` cannot currently mutate `formula` or `ranking`; those
+operation transitions remain a PR2+ contract boundary.
+
 ## Production files to modify
 
 | File | Reason | Expected change | Risk |
 | --- | --- | ---: | --- |
-| `src/balance_chat/execution_adapter.py` | Add the protocol and thin reducer-backed implementation with fail-closed empty-mutation validation. | ~30 lines | Low: isolated delegation boundary. |
+| `src/balance_chat/execution_adapter.py` | Add the protocol and thin reducer-backed implementation with fail-closed empty/all-KEEP validation. | ~35 lines | Low: isolated delegation boundary. |
 | `src/balance_chat/processor.py` | Inject the adapter, centralize materialization/dispatch, and replace execution reads with an explicit `effective_intent`. | Small, localized edits across existing dispatch and execution methods | Medium: many routes converge in this large file. |
 | `src/balance_chat/bootstrap.py` | Construct `ReducerExecutionAdapter` in the composition layer and inject it into the processor. | 2-4 lines | Low: wiring only. |
 
@@ -117,6 +130,10 @@ planner, executor, service, store, or API production file is planned for change.
   the input intent source changes.
 - **Normalization:** existing normalizers and their ordering are unchanged.
   Existing replacement synchronization is preserved for commit equivalence.
+- **Application errors:** `ContextReductionError` raised while materializing a
+  dispatched mutation is mapped to the existing `TurnProcessingError` pattern
+  with code `context_reduction_failed`; the API exposes the existing HTTP 422
+  shape and does not return an unmanaged HTTP 500.
 - **Commit:** the service still commits `TurnProcessResult.mutation` through the
   selected store.
 - **Reducer:** `reduce_intent()` and `apply_context_transition()` are unchanged
