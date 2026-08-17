@@ -3,8 +3,6 @@ from __future__ import annotations
 from decimal import Decimal
 from types import SimpleNamespace
 
-import pytest
-
 from balance_chat.contracts import (
     AnalysisIntent,
     AnalysisOperand,
@@ -21,7 +19,7 @@ from balance_chat.execution import NativeExecutionResult, ScalarFact, TaskExecut
 from balance_chat.execution_adapter import ReducerExecutionAdapter
 from balance_chat.planning import NativeMultiOperandPlanner
 from balance_chat.processor import PipelineV2TurnProcessor
-from balance_chat.service import TurnProcessingError
+from balance_chat.reducer import reduce_intent
 from balance_chat.store import InMemoryContextStore
 
 
@@ -32,6 +30,37 @@ def _intent() -> AnalysisIntent:
         periods=[PeriodRef(date_from="2025-06-01", date_to="2025-07-01")],
         grain="total",
     )
+
+
+def _aggregate_intent() -> AnalysisIntent:
+    return AnalysisIntent(
+        operation=Operation.AGGREGATE,
+        operands=[
+            AnalysisOperand(
+                operand_id="supply",
+                metric="distribution",
+                aggregate_type="avg",
+            )
+        ],
+        periods=[PeriodRef(date_from="2025-06-01", date_to="2025-07-01")],
+        grain="total",
+    )
+
+
+def _store_with_active_intent(intent: AnalysisIntent):
+    store = InMemoryContextStore()
+    store.create("session-1")
+    state = store.commit(
+        "session-1",
+        0,
+        ContextMutation(
+            turn_id="turn-1",
+            user_message="initial",
+            replace_intent=intent,
+        ),
+        TransitionOutcome.SUCCESS,
+    )
+    return store, state
 
 
 class _CapturingAdapter(ReducerExecutionAdapter):
@@ -226,19 +255,71 @@ def test_patch_only_grouping_routes_from_the_effective_intent() -> None:
     assert calls[0][1].grouping == [GroupingSpec(dimension="geo_group")]
 
 
-def test_normalization_fails_closed_if_patch_would_change_committed_intent() -> None:
-    store = InMemoryContextStore()
-    store.create("session-1")
-    state = store.commit(
-        "session-1",
-        0,
-        ContextMutation(
-            turn_id="turn-1",
-            user_message="june",
-            replace_intent=_intent(),
+def test_unchanged_normalization_preserves_original_patch_only_mutation() -> None:
+    _, state = _store_with_active_intent(_intent())
+    mutation = ContextMutation(
+        turn_id="turn-2",
+        user_message="july",
+        normalized_message="july",
+        patch=IntentPatch(
+            periods=FieldMutation(
+                action=MutationAction.SET,
+                value=[PeriodRef(date_from="2025-07-01", date_to="2025-08-01")],
+            )
         ),
-        TransitionOutcome.SUCCESS,
     )
+    effective = ReducerExecutionAdapter().effective_intent(state, mutation)
+
+    synchronized = _processor()._synchronize_effective_intent(
+        state,
+        mutation,
+        previous_effective_intent=effective,
+        normalized_effective_intent=effective.model_copy(deep=True),
+    )
+
+    assert synchronized is mutation
+    assert synchronized.replace_intent is None
+    assert synchronized.patch == mutation.patch
+
+
+def test_changed_patched_field_collapses_to_normalized_replacement() -> None:
+    _, state = _store_with_active_intent(_intent())
+    mutation = ContextMutation(
+        turn_id="turn-2",
+        user_message="july",
+        normalized_message="july",
+        patch=IntentPatch(
+            periods=FieldMutation(
+                action=MutationAction.SET,
+                value=[PeriodRef(date_from="2025-07-01", date_to="2025-08-01")],
+            )
+        ),
+    )
+    effective = ReducerExecutionAdapter().effective_intent(state, mutation)
+    normalized = effective.model_copy(
+        update={
+            "periods": [PeriodRef(date_from="2025-08-01", date_to="2025-09-01")]
+        },
+        deep=True,
+    )
+
+    synchronized = _processor()._synchronize_effective_intent(
+        state,
+        mutation,
+        previous_effective_intent=effective,
+        normalized_effective_intent=normalized,
+    )
+
+    assert synchronized.turn_id == mutation.turn_id
+    assert synchronized.user_message == mutation.user_message
+    assert synchronized.normalized_message == mutation.normalized_message
+    assert synchronized.replace_intent == normalized
+    assert synchronized.patch == IntentPatch()
+    assert reduce_intent(state, synchronized) == normalized
+
+
+def test_any_normalization_change_collapses_even_when_patch_touched_another_field() -> None:
+    _, state = _store_with_active_intent(_intent())
     mutation = ContextMutation(
         turn_id="turn-2",
         user_message="july",
@@ -249,16 +330,103 @@ def test_normalization_fails_closed_if_patch_would_change_committed_intent() -> 
             )
         ),
     )
-    normalized = _intent().model_copy(
-        update={
-            "periods": [PeriodRef(date_from="2025-08-01", date_to="2025-09-01")]
-        },
-        deep=True,
+    effective = ReducerExecutionAdapter().effective_intent(state, mutation)
+    normalized = effective.model_copy(update={"grain": "month"}, deep=True)
+
+    synchronized = _processor()._synchronize_effective_intent(
+        state,
+        mutation,
+        previous_effective_intent=effective,
+        normalized_effective_intent=normalized,
     )
 
-    with pytest.raises(
-        TurnProcessingError,
-        match="executed effective intent would differ from committed intent",
-    ) as exc_info:
-        _processor()._synchronize_effective_intent(state, mutation, normalized)
-    assert exc_info.value.code == "context_reduction_failed"
+    assert synchronized.replace_intent == normalized
+    assert synchronized.patch == IntentPatch()
+    assert reduce_intent(state, synchronized) == normalized
+
+
+def test_unchanged_replace_only_normalization_preserves_original_mutation() -> None:
+    state = InMemoryContextStore().create("session-1")
+    mutation = ContextMutation(
+        turn_id="turn-1",
+        user_message="june",
+        replace_intent=_intent(),
+    )
+
+    synchronized = _processor()._synchronize_effective_intent(
+        state,
+        mutation,
+        previous_effective_intent=mutation.replace_intent,
+        normalized_effective_intent=mutation.replace_intent.model_copy(deep=True),
+    )
+
+    assert synchronized is mutation
+
+
+def test_changed_replace_only_normalization_commits_normalized_replacement() -> None:
+    state = InMemoryContextStore().create("session-1")
+    mutation = ContextMutation(
+        turn_id="turn-1",
+        user_message="june",
+        replace_intent=_intent(),
+    )
+    normalized = mutation.replace_intent.model_copy(
+        update={"grain": "month"}, deep=True
+    )
+
+    synchronized = _processor()._synchronize_effective_intent(
+        state,
+        mutation,
+        previous_effective_intent=mutation.replace_intent,
+        normalized_effective_intent=normalized,
+    )
+
+    assert synchronized.replace_intent == normalized
+    assert synchronized.patch == IntentPatch()
+    assert reduce_intent(state, synchronized) == normalized
+
+
+def test_normalized_patch_execution_matches_committed_and_reloaded_intent() -> None:
+    store, state = _store_with_active_intent(_aggregate_intent())
+    periods = [PeriodRef(date_from="2025-07-01", date_to="2025-08-01")]
+    mutation = ContextMutation(
+        turn_id="turn-2",
+        user_message="среднемесячное распределение за июль",
+        normalized_message="среднемесячное распределение за июль",
+        patch=IntentPatch(
+            periods=FieldMutation(action=MutationAction.SET, value=periods)
+        ),
+    )
+    adapter = _CapturingAdapter()
+    planner = _CapturingPlanner()
+    executor = _SuccessfulExecutor()
+    processor = _processor(adapter=adapter, planner=planner, executor=executor)
+    effective = adapter.effective_intent(state, mutation)
+    normalized = effective.model_copy(update={"grain": "month"}, deep=True)
+    adapter.calls = 0
+
+    processed = processor._dispatch_mutation(
+        state,
+        mutation,
+        normalized_message=mutation.normalized_message,
+        execute_db=False,
+        request_id="request-2",
+        started=0,
+        interpretation_mode="mutation",
+    )
+    committed = store.commit(
+        "session-1",
+        state.revision,
+        processed.mutation,
+        processed.outcome,
+        result=processed.result_reference,
+    )
+    reloaded = store.get("session-1")
+
+    assert adapter.calls == 2
+    assert planner.intent == normalized
+    assert executor.plan == planner.output_plan
+    assert processed.mutation.replace_intent == normalized
+    assert processed.mutation.patch == IntentPatch()
+    assert committed.active_dialog_scope.intent == normalized
+    assert reloaded.active_dialog_scope.intent == normalized
