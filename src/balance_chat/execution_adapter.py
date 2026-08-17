@@ -2,7 +2,12 @@ from __future__ import annotations
 
 from typing import Protocol
 
-from .contracts import AnalysisIntent, ContextContractV2, ContextMutation
+from .contracts import (
+    AnalysisIntent,
+    ContextContractV2,
+    ContextMutation,
+    MutationAction,
+)
 from .reducer import ContextReductionError, reduce_intent
 
 
@@ -21,7 +26,9 @@ class ReducerExecutionAdapter:
         mutation: ContextMutation,
     ) -> AnalysisIntent:
         if mutation.replace_intent is None and not any(
-            field_mutation is not None for _, field_mutation in mutation.patch
+            field_mutation is not None
+            and field_mutation.action != MutationAction.KEEP
+            for _, field_mutation in mutation.patch
         ):
             raise ContextReductionError("empty executable mutation")
         return reduce_intent(state, mutation)

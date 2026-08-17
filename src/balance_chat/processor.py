@@ -108,7 +108,13 @@ class PipelineV2TurnProcessor:
         state: ContextContractV2,
         mutation: ContextMutation,
     ) -> AnalysisIntent:
-        return self.execution_adapter.effective_intent(state, mutation)
+        try:
+            return self.execution_adapter.effective_intent(state, mutation)
+        except ContextReductionError as exc:
+            raise TurnProcessingError(
+                "context mutation reduction failed",
+                code="context_reduction_failed",
+            ) from exc
 
     def _dispatch_mutation(
         self,
@@ -169,8 +175,9 @@ class PipelineV2TurnProcessor:
             update={"replace_intent": effective_intent}, deep=True
         )
         if self._materialize_mutation(state, synchronized) != effective_intent:
-            raise ContextReductionError(
-                "executed effective intent would differ from committed intent"
+            raise TurnProcessingError(
+                "executed effective intent would differ from committed intent",
+                code="context_reduction_failed",
             )
         return synchronized
 

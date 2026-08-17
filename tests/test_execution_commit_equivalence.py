@@ -21,7 +21,7 @@ from balance_chat.execution import NativeExecutionResult, ScalarFact, TaskExecut
 from balance_chat.execution_adapter import ReducerExecutionAdapter
 from balance_chat.planning import NativeMultiOperandPlanner
 from balance_chat.processor import PipelineV2TurnProcessor
-from balance_chat.reducer import ContextReductionError
+from balance_chat.service import TurnProcessingError
 from balance_chat.store import InMemoryContextStore
 
 
@@ -257,7 +257,8 @@ def test_normalization_fails_closed_if_patch_would_change_committed_intent() -> 
     )
 
     with pytest.raises(
-        ContextReductionError,
+        TurnProcessingError,
         match="executed effective intent would differ from committed intent",
-    ):
+    ) as exc_info:
         _processor()._synchronize_effective_intent(state, mutation, normalized)
+    assert exc_info.value.code == "context_reduction_failed"
