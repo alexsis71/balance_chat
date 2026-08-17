@@ -11,6 +11,7 @@ from .binding import InterpretationMutationCompiler, RegistryEntityBinder
 from .compat import PipelineInterpretationBackend, PipelineRuntime, RuntimeConfig
 from .compat.envelope_translation import PipelineEnvelopeTranslator
 from .execution import NativeExecutor, PipelineScalarTaskRunner
+from .execution_adapter import ReducerExecutionAdapter
 from .interpretation import UnifiedInterpreter
 from .observability import configure_logging
 from .processor import PipelineV2TurnProcessor, metadata_ref
@@ -45,6 +46,7 @@ def build_application(config_path: str | Path):
         interpreter=UnifiedInterpreter(PipelineInterpretationBackend(runtime)),
         compiler=InterpretationMutationCompiler(RegistryEntityBinder(registry)),
         executor=executor,
+        execution_adapter=ReducerExecutionAdapter(),
         result_memory=memory,
     )
     service = BalanceChatService(

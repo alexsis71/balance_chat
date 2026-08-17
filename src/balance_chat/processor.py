@@ -38,6 +38,7 @@ from .contracts import (
 )
 from .domain_invariants import CANONICAL_VOLUME_UNIT, FORBIDDEN_PLAN_FIELDS
 from .execution import NativeExecutor
+from .execution_adapter import ExecutionAdapter, ReducerExecutionAdapter
 from .gating import EvidenceCompletenessError, RoutingEvidenceGate
 from .grouping import CanonicalGroupAggregator, GroupingError, member_facts_from_rows
 from .interpretation import HybridInterpretationPolicy, InterpretationError, UnifiedInterpreter
@@ -76,6 +77,7 @@ class PipelineV2TurnProcessor:
         planner: NativeMultiOperandPlanner | None = None,
         policy: HybridInterpretationPolicy | None = None,
         gate: RoutingEvidenceGate | None = None,
+        execution_adapter: ExecutionAdapter | None = None,
     ) -> None:
         self.runtime = runtime
         self.registry = registry
@@ -85,6 +87,7 @@ class PipelineV2TurnProcessor:
         self.result_memory = result_memory
         self.planner = planner or NativeMultiOperandPlanner()
         self.gate = gate or RoutingEvidenceGate(policy)
+        self.execution_adapter = execution_adapter or ReducerExecutionAdapter()
         self.translator = PipelineEnvelopeTranslator(registry)
         try:
             self._normalize_lemmas = runtime._import_pipeline_module(
@@ -98,6 +101,62 @@ class PipelineV2TurnProcessor:
             ).analyze_query
         except Exception:
             self._analyze_query = None
+
+    def _materialize_mutation(
+        self,
+        state: ContextContractV2,
+        mutation: ContextMutation,
+    ) -> AnalysisIntent:
+        return self.execution_adapter.effective_intent(state, mutation)
+
+    def _dispatch_mutation(
+        self,
+        state: ContextContractV2,
+        mutation: ContextMutation,
+        *,
+        normalized_message,
+        execute_db,
+        request_id,
+        started,
+        interpretation_mode,
+        memory_chunks=(),
+        decision=None,
+        evidence_businesses=(),
+        evidence_geos=(),
+        effective_intent: AnalysisIntent | None = None,
+    ) -> TurnProcessResult:
+        intent = effective_intent
+        if intent is None:
+            intent = self._materialize_mutation(state, mutation)
+        if intent.grouping or intent.operation == Operation.GROUP:
+            return self._execute_grouping_mutation(
+                state,
+                mutation,
+                effective_intent=intent,
+                normalized_message=normalized_message,
+                execute_db=execute_db,
+                request_id=request_id,
+                started=started,
+                interpretation_mode=interpretation_mode,
+                decision=decision,
+                memory_chunks=memory_chunks,
+                evidence_businesses=evidence_businesses,
+                evidence_geos=evidence_geos,
+            )
+        return self._execute_mutation(
+            state,
+            mutation,
+            effective_intent=intent,
+            normalized_message=normalized_message,
+            execute_db=execute_db,
+            request_id=request_id,
+            started=started,
+            interpretation_mode=interpretation_mode,
+            memory_chunks=memory_chunks,
+            decision=decision,
+            evidence_businesses=evidence_businesses,
+            evidence_geos=evidence_geos,
+        )
 
     def process(
         self,
@@ -127,11 +186,12 @@ class PipelineV2TurnProcessor:
             mutation, relation_found = reverse
             if not relation_found:
                 return self._reverse_no_data(
+                    state,
                     mutation,
                     request_id=request_id,
                     started=started,
                 )
-            return self._execute_mutation(
+            return self._dispatch_mutation(
                 state,
                 mutation,
                 normalized_message=mutation.normalized_message or message,
@@ -147,7 +207,7 @@ class PipelineV2TurnProcessor:
             turn_id,
         )
         if extremum_comparison is not None:
-            return self._execute_mutation(
+            return self._dispatch_mutation(
                 state,
                 extremum_comparison,
                 normalized_message=extremum_comparison.normalized_message or message,
@@ -161,7 +221,7 @@ class PipelineV2TurnProcessor:
             message, turn_id
         )
         if direction_comparison is not None:
-            return self._execute_mutation(
+            return self._dispatch_mutation(
                 state,
                 direction_comparison,
                 normalized_message=direction_comparison.normalized_message or message,
@@ -176,7 +236,7 @@ class PipelineV2TurnProcessor:
             message, turn_id
         )
         if directed_flow_balance is not None:
-            return self._execute_mutation(
+            return self._dispatch_mutation(
                 state,
                 directed_flow_balance,
                 normalized_message=directed_flow_balance.normalized_message or message,
@@ -222,7 +282,7 @@ class PipelineV2TurnProcessor:
             turn_id,
         )
         if balance_section is not None:
-            return self._execute_mutation(
+            return self._dispatch_mutation(
                 state,
                 balance_section,
                 normalized_message=balance_section.normalized_message or message,
@@ -239,7 +299,7 @@ class PipelineV2TurnProcessor:
             turn_id,
         )
         if full_balance is not None:
-            return self._execute_mutation(
+            return self._dispatch_mutation(
                 state,
                 full_balance,
                 normalized_message=full_balance.normalized_message or message,
@@ -257,7 +317,7 @@ class PipelineV2TurnProcessor:
             turn_id,
         )
         if directed_flow is not None:
-            return self._execute_mutation(
+            return self._dispatch_mutation(
                 state,
                 directed_flow,
                 normalized_message=directed_flow.normalized_message or message,
@@ -324,7 +384,7 @@ class PipelineV2TurnProcessor:
                     grouping=[GroupingSpec(dimension="geo_group")],
                 ),
             )
-            return self._execute_grouping_mutation(
+            return self._dispatch_mutation(
                 state,
                 mutation,
                 normalized_message=grouping_query,
@@ -340,7 +400,7 @@ class PipelineV2TurnProcessor:
             deterministic = self._deterministic_geo_mutation(state, message, turn_id)
             deterministic_mode = "deterministic_geo"
         if deterministic is not None:
-            return self._execute_mutation(
+            return self._dispatch_mutation(
                 state,
                 deterministic,
                 normalized_message=deterministic.normalized_message or message,
@@ -462,6 +522,7 @@ class PipelineV2TurnProcessor:
                 replace_intent=attempted,
             )
             return self._reverse_no_data(
+                state,
                 mutation,
                 request_id=request_id,
                 started=started,
@@ -473,7 +534,8 @@ class PipelineV2TurnProcessor:
                 "interpretation could not be bound to canonical metadata",
                 code="interpretation_binding_failed",
             ) from exc
-        decision, mutation = self._repair_incomplete_evidence(
+        effective_intent = self._materialize_mutation(state, mutation)
+        decision, mutation, effective_intent = self._repair_incomplete_evidence(
             state,
             message=message,
             turn_id=turn_id,
@@ -485,24 +547,12 @@ class PipelineV2TurnProcessor:
             memory_chunks=memory_chunks,
             clarification=clarification,
             request_id=request_id,
+            effective_intent=effective_intent,
         )
-        if mutation.replace_intent.grouping or mutation.replace_intent.operation == Operation.GROUP:
-            return self._execute_grouping_mutation(
-                state,
-                mutation,
-                normalized_message=decision.normalized_message,
-                execute_db=execute_db,
-                request_id=request_id,
-                started=started,
-                interpretation_mode=decision.mode.value,
-                decision=decision,
-                memory_chunks=memory_chunks,
-                evidence_businesses=explicit_businesses,
-                evidence_geos=explicit_geos,
-            )
-        return self._execute_mutation(
+        return self._dispatch_mutation(
             state,
             mutation,
+            effective_intent=effective_intent,
             normalized_message=decision.normalized_message,
             execute_db=execute_db,
             request_id=request_id,
@@ -530,7 +580,7 @@ class PipelineV2TurnProcessor:
             message, turn_id
         )
         if direction_comparison is not None:
-            return self._execute_mutation(
+            return self._dispatch_mutation(
                 state,
                 direction_comparison,
                 normalized_message=direction_comparison.normalized_message or message,
@@ -545,7 +595,7 @@ class PipelineV2TurnProcessor:
             message, turn_id
         )
         if directed_flow_balance is not None:
-            return self._execute_mutation(
+            return self._dispatch_mutation(
                 state,
                 directed_flow_balance,
                 normalized_message=directed_flow_balance.normalized_message or message,
@@ -574,7 +624,7 @@ class PipelineV2TurnProcessor:
             turn_id,
         )
         if balance_section is not None:
-            return self._execute_mutation(
+            return self._dispatch_mutation(
                 state,
                 balance_section,
                 normalized_message=balance_section.normalized_message or message,
@@ -591,7 +641,7 @@ class PipelineV2TurnProcessor:
             turn_id,
         )
         if full_balance is not None:
-            return self._execute_mutation(
+            return self._dispatch_mutation(
                 state,
                 full_balance,
                 normalized_message=full_balance.normalized_message or message,
@@ -609,7 +659,7 @@ class PipelineV2TurnProcessor:
             turn_id,
         )
         if directed_flow is not None:
-            return self._execute_mutation(
+            return self._dispatch_mutation(
                 state,
                 directed_flow,
                 normalized_message=directed_flow.normalized_message or message,
@@ -733,6 +783,7 @@ class PipelineV2TurnProcessor:
             base = state.active_dialog_scope.intent
             attempted = _single_operand_attempt(base, exc.operand)
             return self._reverse_no_data(
+                state,
                 ContextMutation(
                     turn_id=turn_id,
                     user_message=message,
@@ -757,7 +808,8 @@ class PipelineV2TurnProcessor:
                 "interpretation could not be bound to canonical metadata",
                 code="interpretation_binding_failed",
             ) from exc
-        decision, mutation = self._repair_incomplete_evidence(
+        effective_intent = self._materialize_mutation(state, mutation)
+        decision, mutation, effective_intent = self._repair_incomplete_evidence(
             state,
             message=message,
             turn_id=turn_id,
@@ -769,24 +821,12 @@ class PipelineV2TurnProcessor:
             memory_chunks=memory_chunks,
             clarification=clarification,
             request_id=request_id,
+            effective_intent=effective_intent,
         )
-        if mutation.replace_intent.grouping or mutation.replace_intent.operation == Operation.GROUP:
-            return self._execute_grouping_mutation(
-                state,
-                mutation,
-                normalized_message=decision.normalized_message,
-                execute_db=execute_db,
-                request_id=request_id,
-                started=started,
-                interpretation_mode="conversation_graph",
-                decision=decision,
-                memory_chunks=memory_chunks,
-                evidence_businesses=explicit_businesses,
-                evidence_geos=explicit_geos,
-            )
-        return self._execute_mutation(
+        return self._dispatch_mutation(
             state,
             mutation,
+            effective_intent=effective_intent,
             normalized_message=decision.normalized_message,
             execute_db=execute_db,
             request_id=request_id,
@@ -812,15 +852,16 @@ class PipelineV2TurnProcessor:
         memory_chunks,
         clarification,
         request_id,
+        effective_intent,
     ):
         initial_issues: list[str]
         try:
             self.gate.validate_bound_intent(
-                mutation.replace_intent,
+                effective_intent,
                 explicit_businesses=explicit_businesses,
                 explicit_geos=explicit_geos,
             )
-            return decision, mutation
+            return decision, mutation, effective_intent
         except EvidenceCompletenessError as initial_error:
             initial_issues = list(initial_error.issues)
             log_event(
@@ -894,8 +935,9 @@ class PipelineV2TurnProcessor:
                     ],
                 ],
             )
+            repaired_intent = self._materialize_mutation(state, repaired_mutation)
             self.gate.validate_bound_intent(
-                repaired_mutation.replace_intent,
+                repaired_intent,
                 explicit_businesses=explicit_businesses,
                 explicit_geos=explicit_geos,
             )
@@ -918,16 +960,17 @@ class PipelineV2TurnProcessor:
             logging.INFO,
             "routing_evidence_repair_accepted",
             request_id=request_id,
-            operation=repaired_mutation.replace_intent.operation.value,
+            operation=repaired_intent.operation.value,
             pre_database=True,
         )
-        return repaired, repaired_mutation
+        return repaired, repaired_mutation, repaired_intent
 
     def _execute_grouping_mutation(
         self,
         state,
         mutation,
         *,
+        effective_intent,
         normalized_message,
         execute_db,
         request_id,
@@ -938,7 +981,7 @@ class PipelineV2TurnProcessor:
         evidence_businesses=(),
         evidence_geos=(),
     ):
-        intent = mutation.replace_intent
+        intent = effective_intent
         normalized_intent = _normalize_temporal_grouping_intent(
             intent, normalized_message
         )
@@ -963,6 +1006,7 @@ class PipelineV2TurnProcessor:
             return self._execute_mutation(
                 state,
                 mutation,
+                effective_intent=intent,
                 normalized_message=normalized_message,
                 execute_db=execute_db,
                 request_id=request_id,
@@ -1294,8 +1338,9 @@ class PipelineV2TurnProcessor:
             relation_found,
         )
 
-    @staticmethod
     def _reverse_no_data(
+        self,
+        state,
         mutation,
         *,
         request_id,
@@ -1303,6 +1348,7 @@ class PipelineV2TurnProcessor:
         interpretation_mode="deterministic_reverse",
         interpretation_source="deterministic",
     ):
+        effective_intent = self._materialize_mutation(state, mutation)
         log_event(
             LOGGER,
             logging.INFO,
@@ -1314,7 +1360,7 @@ class PipelineV2TurnProcessor:
             mutation=mutation,
             outcome=TransitionOutcome.NO_DATA,
             response={
-                "operation": mutation.replace_intent.operation.value,
+                "operation": effective_intent.operation.value,
                 "status": "no_data",
                 "facts": [],
                 "warnings": [
@@ -1975,6 +2021,7 @@ class PipelineV2TurnProcessor:
             balance=balance,
             geos=geos,
         )
+        effective_intent = self._materialize_mutation(state, mutation)
         log_event(
             LOGGER,
             logging.INFO,
@@ -1982,15 +2029,16 @@ class PipelineV2TurnProcessor:
             request_id=request_id,
             balance_id=str(balance.balance_id),
             geo_ids=[str(item.geo_id) for item in geos],
-            operation=mutation.replace_intent.operation.value,
+            operation=effective_intent.operation.value,
             periods=[
                 item.model_dump(mode="json")
-                for item in mutation.replace_intent.periods
+                for item in effective_intent.periods
             ],
         )
-        return self._execute_mutation(
+        return self._dispatch_mutation(
             state,
             mutation,
+            effective_intent=effective_intent,
             normalized_message=message,
             execute_db=execute_db,
             request_id=request_id,
@@ -2045,7 +2093,7 @@ class PipelineV2TurnProcessor:
             normalized_message=message,
             replace_intent=intent,
         )
-        return self._execute_mutation(
+        return self._dispatch_mutation(
             state,
             mutation,
             normalized_message=message,
@@ -2162,6 +2210,7 @@ class PipelineV2TurnProcessor:
         state,
         mutation,
         *,
+        effective_intent,
         normalized_message,
         execute_db,
         request_id,
@@ -2172,7 +2221,7 @@ class PipelineV2TurnProcessor:
         evidence_businesses=(),
         evidence_geos=(),
     ):
-        intent = mutation.replace_intent
+        intent = effective_intent
         normalized_comparison = _normalize_same_scope_period_comparison_intent(intent)
         if normalized_comparison is not intent:
             intent = normalized_comparison

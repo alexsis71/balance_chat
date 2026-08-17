@@ -1529,7 +1529,7 @@ def test_contextual_full_balance_preserves_hierarchical_rows() -> None:
         policy=NeverCalled(),
     )
 
-    processed = processor._execute_mutation(
+    processed = processor._dispatch_mutation(
         ContextContractV2(session_id="session"),
         mutation,
         normalized_message=mutation.normalized_message,
