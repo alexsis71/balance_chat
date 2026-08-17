@@ -24,6 +24,7 @@ from balance_chat.processor import (
     _detect_period_followup,
     _deterministic_period_patch,
 )
+from balance_chat.planning import NativeMultiOperandPlanner
 from balance_chat.reducer import apply_context_transition, reduce_intent
 from balance_chat.store import InMemoryContextStore
 
@@ -139,16 +140,11 @@ def test_period_patch_preserves_every_non_period_field(
 
     assert mutation is not None
     assert mutation.replace_intent is None
-    assert mutation.patch == IntentPatch.model_validate(
-        {
-            "periods": {
-                "action": MutationAction.SET,
-                "value": [
-                    {"date_from": "2025-04-01", "date_to": "2025-05-01"}
-                ],
-            }
-        }
-    )
+    assert mutation.patch.periods.action == MutationAction.SET
+    assert mutation.patch.periods.value == [
+        PeriodRef(date_from="2025-04-01", date_to="2025-05-01")
+    ]
+    assert mutation.patch.model_copy(update={"periods": None}) == IntentPatch()
     effective = reduce_intent(state, mutation)
     assert effective.model_copy(update={"periods": active.periods}, deep=True) == active
     assert effective.periods == [
@@ -232,6 +228,15 @@ class _SuccessfulExecutor:
         )
 
 
+class _CapturingPlanner:
+    def __init__(self) -> None:
+        self.intent = None
+
+    def plan(self, intent):
+        self.intent = intent
+        return NativeMultiOperandPlanner().plan(intent)
+
+
 class _NoInterpretationPolicy:
     def should_invoke(self, *_args, **_kwargs):
         return False
@@ -240,6 +245,7 @@ class _NoInterpretationPolicy:
 class _GoldenRuntime:
     def __init__(self) -> None:
         self.calls = 0
+        self.summary_calls = 0
 
     def _import_pipeline_module(self, _name):
         raise ImportError
@@ -278,12 +284,17 @@ class _GoldenRuntime:
             },
         }
 
+    def summarize_envelope(self, envelope, **_kwargs):
+        self.summary_calls += 1
+        return envelope
 
-def _processor(runtime, interpreter, executor):
+
+def _processor(runtime, interpreter, executor, *, planner=None):
     registry = SimpleNamespace(
         geo_objects=(),
         geo_groups=(),
         routes=(),
+        manifest=SimpleNamespace(bundle_version="test"),
     )
     return PipelineV2TurnProcessor(
         runtime=runtime,
@@ -291,6 +302,7 @@ def _processor(runtime, interpreter, executor):
         interpreter=interpreter,
         compiler=object(),
         executor=executor,
+        planner=planner,
         policy=_NoInterpretationPolicy(),
     )
 
@@ -301,7 +313,8 @@ def test_golden_period_transition_uses_patch_without_llm_and_persists() -> None:
     runtime = _GoldenRuntime()
     interpreter = _CountingInterpreter()
     executor = _SuccessfulExecutor()
-    processor = _processor(runtime, interpreter, executor)
+    planner = _CapturingPlanner()
+    processor = _processor(runtime, interpreter, executor, planner=planner)
 
     initial = processor.process(
         initial_state,
@@ -322,11 +335,11 @@ def test_golden_period_transition_uses_patch_without_llm_and_persists() -> None:
     followup = processor.process(
         may_state,
         message="А за апрель?",
-        execute_db=False,
+        execute_db=True,
         clarification=None,
         request_id="followup",
     )
-    executed_intent = executor.plan.tasks[0].scalar_intent
+    executed_intent = planner.intent
     committed = store.commit(
         "session",
         may_state.revision,
@@ -337,6 +350,7 @@ def test_golden_period_transition_uses_patch_without_llm_and_persists() -> None:
     reloaded = store.get("session")
 
     assert runtime.calls == 1
+    assert runtime.summary_calls == 0
     assert interpreter.calls == 0
     assert followup.mutation.replace_intent is None
     assert followup.mutation.patch.periods.action == MutationAction.SET
@@ -350,7 +364,7 @@ def test_golden_period_transition_uses_patch_without_llm_and_persists() -> None:
     ]
     assert committed.active_dialog_scope.intent == reloaded.active_dialog_scope.intent
     assert committed.active_dialog_scope.intent == reduce_intent(may_state, followup.mutation)
-    assert committed.active_dialog_scope.intent.periods == executed_intent.periods
+    assert committed.active_dialog_scope.intent == executed_intent
     assert committed.active_dialog_scope.intent.model_copy(
         update={"periods": may_intent.periods}, deep=True
     ) == may_intent
