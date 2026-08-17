@@ -99,6 +99,70 @@ def test_empty_mutation_fails_closed_instead_of_reexecuting_active_intent() -> N
         ReducerExecutionAdapter().effective_intent(state, mutation)
 
 
+def test_patch_with_one_keep_fails_closed() -> None:
+    state = _active_state()
+    mutation = ContextMutation(
+        turn_id="turn-2",
+        user_message="repeat",
+        patch=IntentPatch(
+            operation=FieldMutation(action=MutationAction.KEEP)
+        ),
+    )
+
+    with pytest.raises(ContextReductionError, match="empty executable mutation"):
+        ReducerExecutionAdapter().effective_intent(state, mutation)
+
+
+def test_patch_with_multiple_keep_actions_fails_closed() -> None:
+    state = _active_state()
+    mutation = ContextMutation(
+        turn_id="turn-2",
+        user_message="repeat",
+        patch=IntentPatch(
+            operation=FieldMutation(action=MutationAction.KEEP),
+            periods=FieldMutation(action=MutationAction.KEEP),
+            grain=FieldMutation(action=MutationAction.KEEP),
+        ),
+    )
+
+    with pytest.raises(ContextReductionError, match="empty executable mutation"):
+        ReducerExecutionAdapter().effective_intent(state, mutation)
+
+
+def test_patch_with_set_is_executable() -> None:
+    state = _active_state()
+    periods = [PeriodRef(date_from="2025-07-01", date_to="2025-08-01")]
+    mutation = ContextMutation(
+        turn_id="turn-2",
+        user_message="july",
+        patch=IntentPatch(
+            periods=FieldMutation(action=MutationAction.SET, value=periods)
+        ),
+    )
+
+    effective = ReducerExecutionAdapter().effective_intent(state, mutation)
+
+    assert effective.periods == periods
+
+
+def test_patch_with_reference_reaches_reducer() -> None:
+    state = _active_state()
+    mutation = ContextMutation(
+        turn_id="turn-2",
+        user_message="same period",
+        patch=IntentPatch(
+            periods=FieldMutation(
+                action=MutationAction.REFERENCE,
+                value="last_successful_scope.intent.periods",
+            )
+        ),
+    )
+
+    effective = ReducerExecutionAdapter().effective_intent(state, mutation)
+
+    assert effective.periods == state.last_successful_scope.intent.periods
+
+
 def test_reducer_errors_propagate_without_masking() -> None:
     state = _active_state()
     mutation = ContextMutation(

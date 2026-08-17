@@ -14,6 +14,8 @@ from balance_chat.contracts import (
     TransitionOutcome,
 )
 from balance_chat.service import BalanceChatService, TurnProcessResult, TurnProcessingError
+from balance_chat.processor import PipelineV2TurnProcessor
+from balance_chat.reducer import ContextReductionError
 from balance_chat.store import InMemoryContextStore
 
 
@@ -65,6 +67,35 @@ class InvalidContractProcessor:
             "interpretation contract validation failed",
             code="interpretation_contract_invalid",
         )
+
+
+class CommitTrackingStore(InMemoryContextStore):
+    def __init__(self) -> None:
+        super().__init__()
+        self.commit_calls = 0
+
+    def commit(self, *args, **kwargs):
+        self.commit_calls += 1
+        return super().commit(*args, **kwargs)
+
+
+class ReductionFailureAdapter:
+    @staticmethod
+    def effective_intent(_state, _mutation):
+        raise ContextReductionError("materialization failed")
+
+
+class MaterializationFailureProcessor:
+    def __init__(self) -> None:
+        self.pipeline = object.__new__(PipelineV2TurnProcessor)
+        self.pipeline.execution_adapter = ReductionFailureAdapter()
+
+    def process(self, state, *, message, **_kwargs):
+        self.pipeline._materialize_mutation(
+            state,
+            ContextMutation(turn_id="turn-reduction", user_message=message),
+        )
+        raise AssertionError("materialization failure was not propagated")
 
 
 def _intent() -> AnalysisIntent:
@@ -367,6 +398,27 @@ def test_invalid_interpretation_contract_returns_http_422() -> None:
 
     assert response.status_code == 422
     assert response.json()["detail"]["code"] == "interpretation_contract_invalid"
+
+
+def test_context_reduction_failure_returns_controlled_http_422_without_commit() -> None:
+    store = CommitTrackingStore()
+    service = BalanceChatService(store, MaterializationFailureProcessor())
+    client = TestClient(create_app(service))
+    session_id = client.post("/api/v2/chat/sessions").json()["session"]["session_id"]
+
+    response = client.post(
+        "/api/v2/chat",
+        json={
+            "session_id": session_id,
+            "expected_revision": 0,
+            "message": "invalid mutation",
+        },
+    )
+
+    assert response.status_code == 422
+    assert response.json()["detail"]["code"] == "context_reduction_failed"
+    assert store.commit_calls == 0
+    assert store.get(session_id).revision == 0
 
 
 def test_helpfulness_feedback_is_bound_to_existing_session_and_request() -> None:
