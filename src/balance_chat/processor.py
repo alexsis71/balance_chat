@@ -2439,7 +2439,7 @@ class PipelineV2TurnProcessor:
         }
         summarize = getattr(self.runtime, "summarize_envelope", None)
         if (
-            interpretation_mode != "deterministic_period_patch"
+            _should_summarize(interpretation_mode)
             and outcome == TransitionOutcome.SUCCESS
             and execute_db
             and callable(summarize)
@@ -2646,7 +2646,12 @@ class PipelineV2TurnProcessor:
             "execution_layer": execution_layer,
         }
         summarize = getattr(self.runtime, "summarize_envelope", None)
-        if outcome == TransitionOutcome.SUCCESS and execute_db and callable(summarize):
+        if (
+            _should_summarize(interpretation_mode)
+            and outcome == TransitionOutcome.SUCCESS
+            and execute_db
+            and callable(summarize)
+        ):
             summary_diagnostics["requested"] = True
             try:
                 envelope = summarize(
@@ -2755,7 +2760,12 @@ class PipelineV2TurnProcessor:
             "execution_layer": "unified_strict",
         }
         summarize = getattr(self.runtime, "summarize_envelope", None)
-        if status in {"ok", "partial"} and execute_db and callable(summarize):
+        if (
+            _should_summarize(interpretation_mode)
+            and status in {"ok", "partial"}
+            and execute_db
+            and callable(summarize)
+        ):
             summary_diagnostics["requested"] = True
             try:
                 envelope = summarize(
@@ -4446,6 +4456,10 @@ def _diagnostics(decision, chunks, task_count, started):
             "elapsed_ms": int((perf_counter() - started) * 1000),
         },
     }
+
+
+def _should_summarize(interpretation_mode: str) -> bool:
+    return interpretation_mode != "deterministic_period_patch"
 
 
 _MONTHS = (
