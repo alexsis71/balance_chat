@@ -157,6 +157,8 @@ class _Runtime:
     def __init__(self) -> None:
         self.summary_calls = 0
         self.execution_queries: list[str] = []
+        self.balance_day_calls: list[dict] = []
+        self.standalone_calls = 0
 
     @staticmethod
     def _import_pipeline_module(name):
@@ -167,6 +169,61 @@ class _Runtime:
     def execute(self, query, _intent, **_kwargs):
         self.execution_queries.append(query)
         return {"status": "ok", "rows": [{"fact_value": "12.5"}]}
+
+    def execute_raw(self, _query, **_kwargs):
+        self.standalone_calls += 1
+        return {
+            "status": "ok",
+            "unit": "тыс. м3",
+            "rows": [{"fact_value": "12.5", "unit": "тыс. м3"}],
+            "debug": {
+                "resolved_plan": {
+                    "_intent": {
+                        "intent": "show",
+                        "metric": "distribution",
+                        "date_from": "2025-05-01",
+                        "date_to": "2025-06-01",
+                    },
+                    "expressions": [
+                        {
+                            "canonical_metric": "distribution",
+                            "geo": [
+                                {
+                                    "id": ROSTOV.geo_id,
+                                    "label": ROSTOV.canonical_name,
+                                }
+                            ],
+                        }
+                    ],
+                }
+            },
+        }
+
+    def execute_balance_day(self, **kwargs):
+        self.balance_day_calls.append(kwargs)
+        return {
+            "status": "ok",
+            "unit": "тыс. м3",
+            "rows": [
+                {
+                    "article_id": 11,
+                    "article_name": ROSTOV_ARTICLE.canonical_name,
+                    "article_scope": ROSTOV_ARTICLE.canonical_name,
+                    "article_indent": 1,
+                    "fact_value": "5.0",
+                    "unit": "тыс. м3",
+                },
+                {
+                    "article_id": 12,
+                    "article_name": SAMARA_ARTICLE.canonical_name,
+                    "article_scope": SAMARA_ARTICLE.canonical_name,
+                    "article_indent": 1,
+                    "fact_value": "7.5",
+                    "unit": "тыс. м3",
+                },
+            ],
+            "warnings": [],
+        }
 
     def summarize_envelope(self, envelope, **_kwargs):
         self.summary_calls += 1
@@ -514,6 +571,28 @@ def test_missing_or_non_geo_destination_falls_back() -> None:
     assert _candidate(processor, "А по Москве?", business_destination) is None
 
 
+@pytest.mark.parametrize(
+    "active",
+    [
+        _intent(
+            metric="balance",
+            entities=[_entity("balance", "balance", "BAL:1", BALANCE.canonical_name)],
+        ),
+        _intent(
+            metric="balance_section",
+            entities=[
+                _entity("balance", "balance", "BAL:1", BALANCE.canonical_name),
+                _entity("article", "article", "ART:11", "Распределение"),
+            ],
+        ),
+    ],
+)
+def test_full_balance_and_section_shapes_fall_back(active: AnalysisIntent) -> None:
+    processor, *_ = _processor()
+
+    assert _candidate(processor, "А по Самарской области?", active) is None
+
+
 def test_unresolvable_distribution_article_falls_back() -> None:
     processor, *_ = _processor(registry=_Registry(articles=(ROSTOV_ARTICLE,)))
     active = _intent(
@@ -581,16 +660,50 @@ def test_geo_patch_changes_planner_and_scalar_execution_geo_without_llm() -> Non
     assert "Ростовская область" not in runtime.execution_queries[-1]
 
 
+def test_directed_flow_geo_patch_rebinds_execution_article_without_llm() -> None:
+    registry = _Registry(articles=(ROSTOV_ARTICLE, SAMARA_ARTICLE))
+    processor, runtime, interpreter, planner = _processor(registry=registry)
+    active = _intent(
+        entities=[
+            _entity("balance", "balance", "BAL:1", BALANCE.canonical_name),
+            _entity("destination", "geo_object", ROSTOV.geo_id, ROSTOV.canonical_name),
+            _entity("article", "article", "ART:11", ROSTOV_ARTICLE.canonical_name),
+        ]
+    )
+
+    processed = processor.process(
+        _state(active),
+        message="А по Самарской области?",
+        execute_db=True,
+        clarification=None,
+        request_id="directed-geo",
+    )
+
+    executed = planner.intents[-1]
+    by_role = {item.role: item.entity for item in executed.operands[0].entities}
+    assert processed.outcome == TransitionOutcome.SUCCESS
+    assert processed.diagnostics["execution"]["layer"] == "unified_directed_flow"
+    assert by_role["destination"].entity_id == SAMARA.geo_id
+    assert by_role["article"].entity_id == "ART:12"
+    assert processed.response["rows"][0]["article_name"] == SAMARA_ARTICLE.canonical_name
+    assert len(runtime.balance_day_calls) == 1
+    assert runtime.summary_calls == interpreter.calls == 0
+
+
 def test_period_then_geo_then_period_persists_executed_intent() -> None:
     store = InMemoryContextStore()
-    store.create("session")
-    initial = ContextMutation(
-        turn_id="turn-initial",
-        user_message="Покажи распределение газа в Ростовскую область за май 2025",
-        replace_intent=_intent(),
-    )
-    state = store.commit("session", 0, initial, TransitionOutcome.SUCCESS)
+    empty = store.create("session")
     processor, runtime, interpreter, planner = _processor()
+    initial = processor.process(
+        empty,
+        message="Покажи распределение газа в Ростовскую область за май 2025",
+        execute_db=False,
+        clarification=None,
+        request_id="initial",
+    )
+    state = store.commit(
+        "session", 0, initial.mutation, initial.outcome
+    )
 
     period_april = processor.process(
         state,
@@ -644,6 +757,7 @@ def test_period_then_geo_then_period_persists_executed_intent() -> None:
     assert period_april.diagnostics["interpretation"]["mode"] == "deterministic_period_patch"
     assert geo_samara.diagnostics["interpretation"]["mode"] == "deterministic_geo_patch"
     assert period_may.diagnostics["interpretation"]["mode"] == "deterministic_period_patch"
+    assert runtime.standalone_calls == 1
     assert runtime.summary_calls == 0
     assert interpreter.calls == 0
 
