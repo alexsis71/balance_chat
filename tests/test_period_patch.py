@@ -146,6 +146,10 @@ def test_period_patch_preserves_every_non_period_field(
     ]
     assert mutation.patch.model_copy(update={"periods": None}) == IntentPatch()
     effective = reduce_intent(state, mutation)
+    serialized_mutation = ContextMutation.model_validate(
+        mutation.model_dump(mode="json")
+    )
+    assert reduce_intent(state, serialized_mutation) == effective
     assert effective.model_copy(update={"periods": active.periods}, deep=True) == active
     assert effective.periods == [
         PeriodRef(date_from="2025-04-01", date_to="2025-05-01")
