@@ -637,6 +637,32 @@ class PipelineV2TurnProcessor:
                 interpretation_mode="deterministic_period_patch",
                 memory_chunks=[],
             )
+        geo_patch = (
+            self._deterministic_geo_patch(state, message, turn_id)
+            if clarification is None and state.pending_clarification is None
+            else None
+        )
+        if geo_patch is not None:
+            mutation, candidate = geo_patch
+            log_event(
+                LOGGER,
+                logging.INFO,
+                "deterministic_geo_patch_recognized",
+                request_id=request_id,
+                mutation_mode="geo_patch",
+                geo_id=str(candidate.geo.geo_id),
+            )
+            return self._dispatch_mutation(
+                state,
+                mutation,
+                normalized_message=mutation.normalized_message or message,
+                execute_db=execute_db,
+                request_id=request_id,
+                started=started,
+                interpretation_mode="deterministic_geo_patch",
+                memory_chunks=[],
+                evidence_geos=[candidate.geo],
+            )
         direction_comparison = self._deterministic_direction_comparison_mutation(
             message, turn_id
         )
@@ -1552,6 +1578,127 @@ class PipelineV2TurnProcessor:
                 seen.add(key)
                 output.append(record)
         return output
+
+    def _detect_geo_followup(
+        self,
+        message: str,
+        active_intent: AnalysisIntent,
+    ) -> GeoPatchCandidate | None:
+        """Resolve one conservative GEO replacement from canonical metadata."""
+        if (
+            active_intent.operation not in {Operation.SHOW, Operation.AGGREGATE}
+            or len(active_intent.operands) != 1
+            or active_intent.grouping
+            or active_intent.comparison is not None
+            or active_intent.formula is not None
+            or active_intent.ranking is not None
+            or self._normalize_lemmas is None
+        ):
+            return None
+        operand = active_intent.operands[0]
+        if operand.metric not in {"distribution", "export"}:
+            return None
+        followup = re.fullmatch(
+            r"(?:а\s+)?(?:по|для)\s+(?P<geo>.+)",
+            _normalize_text(message),
+        )
+        if followup is None:
+            return None
+        mention = followup.group("geo")
+        balance_lookup = getattr(self.registry, "balance", None)
+        if callable(balance_lookup) and balance_lookup(mention) is not None:
+            return None
+        matches = self._tagged_geo_objects(mention)
+        if (
+            len(matches) != 1
+            or not _whole_geo_mention_matches(
+                mention,
+                matches[0],
+                self._normalize_lemmas,
+            )
+        ):
+            return None
+        geo = matches[0]
+        destinations = [
+            (index, item)
+            for index, item in enumerate(operand.entities)
+            if item.role == "destination"
+            and item.entity.entity_type == "geo_object"
+        ]
+        roles = {item.role for item in operand.entities}
+        if len(destinations) != 1 or roles & {"source", "route"}:
+            return None
+        article_indexes = [
+            index
+            for index, item in enumerate(operand.entities)
+            if item.role == "article"
+        ]
+        entities = [item.model_copy(deep=True) for item in operand.entities]
+        destination_index, _destination = destinations[0]
+        entities[destination_index] = _typed_entity(
+            "destination", "geo_object", geo
+        )
+        if article_indexes:
+            balances = [
+                item
+                for item in operand.entities
+                if item.role == "balance" and item.entity.entity_type == "balance"
+            ]
+            if (
+                operand.metric != "distribution"
+                or len(article_indexes) != 1
+                or len(balances) != 1
+                or not callable(balance_lookup)
+            ):
+                return None
+            balance = balance_lookup(
+                _metadata_numeric_id(balances[0].entity.entity_id)
+            )
+            article = (
+                _unique_direction_article(
+                    self.registry,
+                    balance=balance,
+                    target=geo,
+                    metric="distribution",
+                )
+                if balance is not None
+                else None
+            )
+            if article is None:
+                return None
+            entities[article_indexes[0]] = _typed_entity(
+                "article", "article", article
+            )
+        updated_operand = operand.model_copy(
+            update={"entities": entities},
+            deep=True,
+        )
+        return GeoPatchCandidate(geo=geo, operands=(updated_operand,))
+
+    def _deterministic_geo_patch(
+        self,
+        state: ContextContractV2,
+        message: str,
+        turn_id: str,
+    ) -> tuple[ContextMutation, GeoPatchCandidate] | None:
+        scope = state.active_dialog_scope
+        if scope is None:
+            return None
+        candidate = self._detect_geo_followup(message, scope.intent)
+        if candidate is None:
+            return None
+        mutation = ContextMutation(
+            turn_id=turn_id,
+            user_message=message,
+            normalized_message=message,
+            patch=IntentPatch(
+                operands=FieldMutation(
+                    action=MutationAction.SET,
+                    value=list(candidate.operands),
+                )
+            ),
+        )
+        return mutation, candidate
 
     def _is_explicit_flow_balance_query(self, message: str) -> bool:
         """Recognize a complete V1 flow-balance contract before scalar binding.
@@ -4459,7 +4606,10 @@ def _diagnostics(decision, chunks, task_count, started):
 
 
 def _should_summarize(interpretation_mode: str) -> bool:
-    return interpretation_mode != "deterministic_period_patch"
+    return interpretation_mode not in {
+        "deterministic_period_patch",
+        "deterministic_geo_patch",
+    }
 
 
 _MONTHS = (
@@ -4481,6 +4631,42 @@ _SEASONS = (
 @dataclass(frozen=True, slots=True)
 class PeriodPatchCandidate:
     periods: tuple[PeriodRef, ...]
+
+
+@dataclass(frozen=True, slots=True)
+class GeoPatchCandidate:
+    geo: Any
+    operands: tuple[AnalysisOperand, ...]
+
+
+def _whole_geo_mention_matches(
+    mention: str,
+    geo: Any,
+    normalize_lemmas: Any,
+) -> bool:
+    """Require the whole follow-up payload to name one metadata GEO."""
+
+    def _tokens(value: str) -> list[str]:
+        region_types = {"область": "обл", "област": "обл"}
+        return [
+            region_types.get(token, token)
+            for token in normalize_lemmas(value).split()
+        ]
+
+    mention_tokens = _tokens(mention)
+    if not mention_tokens:
+        return False
+    for label in (geo.canonical_name, *(geo.aliases or ())):
+        label_tokens = _tokens(label)
+        if len(label_tokens) != len(mention_tokens):
+            continue
+        threshold = 0.84 if len(label_tokens) == 1 else 0.76
+        if all(
+            SequenceMatcher(None, left, right).ratio() >= threshold
+            for left, right in zip(mention_tokens, label_tokens)
+        ):
+            return True
+    return False
 
 
 def _detect_period_followup(
