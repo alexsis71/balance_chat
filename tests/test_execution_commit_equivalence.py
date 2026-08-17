@@ -3,6 +3,8 @@ from __future__ import annotations
 from decimal import Decimal
 from types import SimpleNamespace
 
+import pytest
+
 from balance_chat.contracts import (
     AnalysisIntent,
     AnalysisOperand,
@@ -19,6 +21,7 @@ from balance_chat.execution import NativeExecutionResult, ScalarFact, TaskExecut
 from balance_chat.execution_adapter import ReducerExecutionAdapter
 from balance_chat.planning import NativeMultiOperandPlanner
 from balance_chat.processor import PipelineV2TurnProcessor
+from balance_chat.reducer import ContextReductionError
 from balance_chat.store import InMemoryContextStore
 
 
@@ -221,3 +224,40 @@ def test_patch_only_grouping_routes_from_the_effective_intent() -> None:
     assert calls[0][0] == mutation
     assert calls[0][1].operation == Operation.GROUP
     assert calls[0][1].grouping == [GroupingSpec(dimension="geo_group")]
+
+
+def test_normalization_fails_closed_if_patch_would_change_committed_intent() -> None:
+    store = InMemoryContextStore()
+    store.create("session-1")
+    state = store.commit(
+        "session-1",
+        0,
+        ContextMutation(
+            turn_id="turn-1",
+            user_message="june",
+            replace_intent=_intent(),
+        ),
+        TransitionOutcome.SUCCESS,
+    )
+    mutation = ContextMutation(
+        turn_id="turn-2",
+        user_message="july",
+        patch=IntentPatch(
+            periods=FieldMutation(
+                action=MutationAction.SET,
+                value=[PeriodRef(date_from="2025-07-01", date_to="2025-08-01")],
+            )
+        ),
+    )
+    normalized = _intent().model_copy(
+        update={
+            "periods": [PeriodRef(date_from="2025-08-01", date_to="2025-09-01")]
+        },
+        deep=True,
+    )
+
+    with pytest.raises(
+        ContextReductionError,
+        match="executed effective intent would differ from committed intent",
+    ):
+        _processor()._synchronize_effective_intent(state, mutation, normalized)

@@ -45,6 +45,7 @@ from .interpretation import HybridInterpretationPolicy, InterpretationError, Uni
 from .domain import interpretation_capabilities, metric_definition
 from .observability import log_event
 from .planning import NativeMultiOperandPlanner, PlanningError
+from .reducer import ContextReductionError
 from .result_memory import PipelineResultMemoryAdapter
 from .service import TurnProcessResult, TurnProcessingError
 
@@ -157,6 +158,21 @@ class PipelineV2TurnProcessor:
             evidence_businesses=evidence_businesses,
             evidence_geos=evidence_geos,
         )
+
+    def _synchronize_effective_intent(
+        self,
+        state: ContextContractV2,
+        mutation: ContextMutation,
+        effective_intent: AnalysisIntent,
+    ) -> ContextMutation:
+        synchronized = mutation.model_copy(
+            update={"replace_intent": effective_intent}, deep=True
+        )
+        if self._materialize_mutation(state, synchronized) != effective_intent:
+            raise ContextReductionError(
+                "executed effective intent would differ from committed intent"
+            )
+        return synchronized
 
     def process(
         self,
@@ -987,9 +1003,7 @@ class PipelineV2TurnProcessor:
         )
         if normalized_intent is not intent:
             intent = normalized_intent
-            mutation = mutation.model_copy(
-                update={"replace_intent": intent}, deep=True
-            )
+            mutation = self._synchronize_effective_intent(state, mutation, intent)
             log_event(
                 LOGGER,
                 logging.INFO,
@@ -1092,9 +1106,7 @@ class PipelineV2TurnProcessor:
                 update={"unit": canonical_unit}, deep=True
             )
             intent = intent.model_copy(update={"operands": [operand]}, deep=True)
-            mutation = mutation.model_copy(
-                update={"replace_intent": intent}, deep=True
-            )
+            mutation = self._synchronize_effective_intent(state, mutation, intent)
         status = str(envelope.get("status") or "error")
         outcome = _outcome(status)
         grouped = []
@@ -2225,9 +2237,7 @@ class PipelineV2TurnProcessor:
         normalized_comparison = _normalize_same_scope_period_comparison_intent(intent)
         if normalized_comparison is not intent:
             intent = normalized_comparison
-            mutation = mutation.model_copy(
-                update={"replace_intent": intent}, deep=True
-            )
+            mutation = self._synchronize_effective_intent(state, mutation, intent)
             log_event(
                 LOGGER,
                 logging.INFO,
@@ -2242,9 +2252,7 @@ class PipelineV2TurnProcessor:
         )
         if normalized_intent is not intent:
             intent = normalized_intent
-            mutation = mutation.model_copy(
-                update={"replace_intent": intent}, deep=True
-            )
+            mutation = self._synchronize_effective_intent(state, mutation, intent)
             log_event(
                 LOGGER,
                 logging.INFO,
