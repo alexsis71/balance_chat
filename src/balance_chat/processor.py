@@ -27,6 +27,7 @@ from .contracts import (
     ContextMutation,
     EntityMention,
     GroupingSpec,
+    IntentPatch,
     InterpretationMode,
     MetadataVersionRef,
     OperandEntityRef,
@@ -169,12 +170,23 @@ class PipelineV2TurnProcessor:
         self,
         state: ContextContractV2,
         mutation: ContextMutation,
-        effective_intent: AnalysisIntent,
+        *,
+        previous_effective_intent: AnalysisIntent,
+        normalized_effective_intent: AnalysisIntent,
     ) -> ContextMutation:
+        if normalized_effective_intent == previous_effective_intent:
+            return mutation
         synchronized = mutation.model_copy(
-            update={"replace_intent": effective_intent}, deep=True
+            update={
+                "replace_intent": normalized_effective_intent,
+                "patch": IntentPatch(),
+            },
+            deep=True,
         )
-        if self._materialize_mutation(state, synchronized) != effective_intent:
+        if (
+            self._materialize_mutation(state, synchronized)
+            != normalized_effective_intent
+        ):
             raise TurnProcessingError(
                 "executed effective intent would differ from committed intent",
                 code="context_reduction_failed",
@@ -1008,9 +1020,15 @@ class PipelineV2TurnProcessor:
         normalized_intent = _normalize_temporal_grouping_intent(
             intent, normalized_message
         )
-        if normalized_intent is not intent:
-            intent = normalized_intent
-            mutation = self._synchronize_effective_intent(state, mutation, intent)
+        normalization_changed = normalized_intent != intent
+        mutation = self._synchronize_effective_intent(
+            state,
+            mutation,
+            previous_effective_intent=intent,
+            normalized_effective_intent=normalized_intent,
+        )
+        intent = normalized_intent
+        if normalization_changed:
             log_event(
                 LOGGER,
                 logging.INFO,
@@ -1109,11 +1127,17 @@ class PipelineV2TurnProcessor:
             envelope.get("rows") or [],
         )
         if canonical_unit and intent.operands[0].unit != canonical_unit:
+            previous_intent = intent
             operand = intent.operands[0].model_copy(
                 update={"unit": canonical_unit}, deep=True
             )
             intent = intent.model_copy(update={"operands": [operand]}, deep=True)
-            mutation = self._synchronize_effective_intent(state, mutation, intent)
+            mutation = self._synchronize_effective_intent(
+                state,
+                mutation,
+                previous_effective_intent=previous_intent,
+                normalized_effective_intent=intent,
+            )
         status = str(envelope.get("status") or "error")
         outcome = _outcome(status)
         grouped = []
@@ -2242,9 +2266,15 @@ class PipelineV2TurnProcessor:
     ):
         intent = effective_intent
         normalized_comparison = _normalize_same_scope_period_comparison_intent(intent)
-        if normalized_comparison is not intent:
-            intent = normalized_comparison
-            mutation = self._synchronize_effective_intent(state, mutation, intent)
+        comparison_normalization_changed = normalized_comparison != intent
+        mutation = self._synchronize_effective_intent(
+            state,
+            mutation,
+            previous_effective_intent=intent,
+            normalized_effective_intent=normalized_comparison,
+        )
+        intent = normalized_comparison
+        if comparison_normalization_changed:
             log_event(
                 LOGGER,
                 logging.INFO,
@@ -2257,9 +2287,15 @@ class PipelineV2TurnProcessor:
         normalized_intent = _normalize_series_reduction_intent(
             state, intent, normalized_message
         )
-        if normalized_intent is not intent:
-            intent = normalized_intent
-            mutation = self._synchronize_effective_intent(state, mutation, intent)
+        series_normalization_changed = normalized_intent != intent
+        mutation = self._synchronize_effective_intent(
+            state,
+            mutation,
+            previous_effective_intent=intent,
+            normalized_effective_intent=normalized_intent,
+        )
+        intent = normalized_intent
+        if series_normalization_changed:
             log_event(
                 LOGGER,
                 logging.INFO,
