@@ -4,6 +4,7 @@ import hashlib
 import json
 import logging
 import re
+from dataclasses import dataclass
 from difflib import SequenceMatcher
 from datetime import date, timedelta
 from decimal import Decimal, ROUND_HALF_UP
@@ -26,10 +27,12 @@ from .contracts import (
     ContextContractV2,
     ContextMutation,
     EntityMention,
+    FieldMutation,
     GroupingSpec,
     IntentPatch,
     InterpretationMode,
     MetadataVersionRef,
+    MutationAction,
     OperandEntityRef,
     Operation,
     PeriodRef,
@@ -611,6 +614,29 @@ class PipelineV2TurnProcessor:
         started: float,
     ) -> TurnProcessResult:
         """Interpret every active-session turn against the seven-turn ledger."""
+        period_patch = (
+            _deterministic_period_patch(state, message, turn_id)
+            if clarification is None and state.pending_clarification is None
+            else None
+        )
+        if period_patch is not None:
+            log_event(
+                LOGGER,
+                logging.INFO,
+                "deterministic_period_patch_recognized",
+                request_id=request_id,
+                mutation_mode="period_patch",
+            )
+            return self._dispatch_mutation(
+                state,
+                period_patch,
+                normalized_message=period_patch.normalized_message or message,
+                execute_db=execute_db,
+                request_id=request_id,
+                started=started,
+                interpretation_mode="deterministic_period_patch",
+                memory_chunks=[],
+            )
         direction_comparison = self._deterministic_direction_comparison_mutation(
             message, turn_id
         )
@@ -2412,7 +2438,12 @@ class PipelineV2TurnProcessor:
             "execution_layer": "native_deterministic",
         }
         summarize = getattr(self.runtime, "summarize_envelope", None)
-        if outcome == TransitionOutcome.SUCCESS and execute_db and callable(summarize):
+        if (
+            _should_summarize(interpretation_mode)
+            and outcome == TransitionOutcome.SUCCESS
+            and execute_db
+            and callable(summarize)
+        ):
             summary_diagnostics["requested"] = True
             try:
                 summary_envelope = summarize(
@@ -2615,7 +2646,12 @@ class PipelineV2TurnProcessor:
             "execution_layer": execution_layer,
         }
         summarize = getattr(self.runtime, "summarize_envelope", None)
-        if outcome == TransitionOutcome.SUCCESS and execute_db and callable(summarize):
+        if (
+            _should_summarize(interpretation_mode)
+            and outcome == TransitionOutcome.SUCCESS
+            and execute_db
+            and callable(summarize)
+        ):
             summary_diagnostics["requested"] = True
             try:
                 envelope = summarize(
@@ -2724,7 +2760,12 @@ class PipelineV2TurnProcessor:
             "execution_layer": "unified_strict",
         }
         summarize = getattr(self.runtime, "summarize_envelope", None)
-        if status in {"ok", "partial"} and execute_db and callable(summarize):
+        if (
+            _should_summarize(interpretation_mode)
+            and status in {"ok", "partial"}
+            and execute_db
+            and callable(summarize)
+        ):
             summary_diagnostics["requested"] = True
             try:
                 envelope = summarize(
@@ -4417,6 +4458,10 @@ def _diagnostics(decision, chunks, task_count, started):
     }
 
 
+def _should_summarize(interpretation_mode: str) -> bool:
+    return interpretation_mode != "deterministic_period_patch"
+
+
 _MONTHS = (
     (r"\bянвар\w*", 1), (r"\bфеврал\w*", 2), (r"\bмарт\w*", 3),
     (r"\bапрел\w*", 4), (r"\bма(?:й|я|е|ю|ем)\b", 5),
@@ -4431,6 +4476,89 @@ _SEASONS = (
     (r"\bосен\w*", 9, 12, "осень"),
     (r"\bзим\w*", 12, 3, "зима"),
 )
+
+
+@dataclass(frozen=True, slots=True)
+class PeriodPatchCandidate:
+    periods: tuple[PeriodRef, ...]
+
+
+def _detect_period_followup(
+    message: str,
+    active_intent: AnalysisIntent,
+) -> PeriodPatchCandidate | None:
+    if (
+        active_intent.operation not in {Operation.SHOW, Operation.AGGREGATE}
+        or len(active_intent.operands) != 1
+        or len(active_intent.periods) != 1
+        or any(operand.periods for operand in active_intent.operands)
+    ):
+        return None
+    text = _normalize_text(message)
+    followup = re.fullmatch(
+        r"(?:а\s+)?(?:покажи\s+)?за\s+(?P<period>.+)",
+        text,
+    )
+    if followup is None:
+        return None
+    period_text = followup.group("period")
+    for month_pattern, month in _MONTHS:
+        explicit_day = re.fullmatch(
+            rf"[0-3]?\d\s+{month_pattern}\s+20\d{{2}}(?:\s+г(?:од(?:а)?)?)?",
+            period_text,
+        )
+        if explicit_day is not None:
+            period = _explicit_single_day_period(period_text)
+            return (
+                PeriodPatchCandidate(periods=(period,))
+                if period is not None
+                else None
+            )
+        named_month = re.fullmatch(
+            rf"{month_pattern}(?:\s+(20\d{{2}})(?:\s+г(?:од(?:а)?)?)?)?",
+            period_text,
+        )
+        if named_month is None:
+            continue
+        year = (
+            int(named_month.group(1))
+            if named_month.group(1)
+            else active_intent.periods[0].date_from.year
+        )
+        date_from = date(year, month, 1)
+        date_to = (
+            date(year + 1, 1, 1)
+            if month == 12
+            else date(year, month + 1, 1)
+        )
+        return PeriodPatchCandidate(
+            periods=(PeriodRef(date_from=date_from, date_to=date_to),)
+        )
+    return None
+
+
+def _deterministic_period_patch(
+    state: ContextContractV2,
+    message: str,
+    turn_id: str,
+) -> ContextMutation | None:
+    scope = state.active_dialog_scope
+    if scope is None:
+        return None
+    candidate = _detect_period_followup(message, scope.intent)
+    if candidate is None:
+        return None
+    return ContextMutation(
+        turn_id=turn_id,
+        user_message=message,
+        normalized_message=message,
+        patch=IntentPatch(
+            periods=FieldMutation(
+                action=MutationAction.SET,
+                value=list(candidate.periods),
+            )
+        ),
+    )
 
 
 def _deterministic_period_mutation(state, message: str, turn_id: str):
