@@ -1606,7 +1606,17 @@ class PipelineV2TurnProcessor:
             return None
         mention = followup.group("geo")
         balance_lookup = getattr(self.registry, "balance", None)
-        if callable(balance_lookup) and balance_lookup(mention) is not None:
+        mention_tokens = self._normalize_lemmas(mention).split()
+        qualified_business = (
+            "тг" in mention_tokens
+            or mention_tokens[:2] == ["газпром", "трансгаз"]
+            or mention_tokens[:3] == ["ооо", "газпром", "трансгаз"]
+        )
+        if (
+            qualified_business
+            and callable(balance_lookup)
+            and balance_lookup(mention) is not None
+        ):
             return None
         matches = self._tagged_geo_objects(mention)
         if (

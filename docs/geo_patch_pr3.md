@@ -60,9 +60,11 @@ whole follow-up payload
 → canonical GEO ID/display name
 ```
 
-Before GEO lookup, the entire payload is checked with the existing metadata
-balance lookup. This gives a known business entity priority over a geographic
-substring. Tests reject all of:
+Before GEO lookup, an explicitly business-qualified payload (`ТГ`,
+`Газпром трансгаз`) is checked with the existing metadata balance lookup. This
+gives a known business entity priority over a geographic substring while
+leaving bare `Москва` available as the requested GEO even though the same
+registry can resolve it as a short balance alias. Tests reject all of:
 
 - `А для ГП ТГ Москва?`
 - `А по Газпром трансгаз Москва?`
