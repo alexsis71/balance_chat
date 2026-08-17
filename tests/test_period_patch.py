@@ -272,10 +272,6 @@ class _GoldenRuntime:
                         {
                             "canonical_metric": "distribution",
                             "balance": {"id": "balance:1", "label": "Баланс"},
-                            "article": {
-                                "id": "article:1",
-                                "label": "Распределение",
-                            },
                             "geo": [
                                 {
                                     "id": "geo:rostov",
@@ -293,8 +289,8 @@ class _GoldenRuntime:
         return envelope
 
 
-def _processor(runtime, interpreter, executor, *, planner=None):
-    registry = SimpleNamespace(
+def _processor(runtime, interpreter, executor, *, planner=None, registry=None):
+    registry = registry or SimpleNamespace(
         geo_objects=(),
         geo_groups=(),
         routes=(),
@@ -309,6 +305,218 @@ def _processor(runtime, interpreter, executor, *, planner=None):
         planner=planner,
         policy=_NoInterpretationPolicy(),
     )
+
+
+def _entity(role: str, entity_type: str, entity_id: str) -> OperandEntityRef:
+    return OperandEntityRef(
+        role=role,
+        entity=CanonicalEntityRef(
+            entity_id=entity_id,
+            entity_type=entity_type,
+            display_name=f"Production {role}",
+        ),
+    )
+
+
+def _full_balance_family_intent(shape: str) -> AnalysisIntent:
+    balance = _entity("balance", "balance", "BAL:1")
+    if shape == "balance_snapshot":
+        metric = "balance"
+        entities = [balance]
+    elif shape == "balance_section":
+        metric = "balance_section"
+        entities = [balance, _entity("article", "article", "ART:11")]
+    elif shape == "directed_flow":
+        metric = "distribution"
+        entities = [
+            balance,
+            _entity("destination", "geo_object", "geo:rostov"),
+            _entity("article", "article", "ART:12"),
+        ]
+    else:
+        raise AssertionError(shape)
+    return AnalysisIntent(
+        operation=Operation.SHOW,
+        operands=[
+            AnalysisOperand(
+                operand_id="production_shape",
+                metric=metric,
+                aggregate_type="sum",
+                entities=entities,
+            )
+        ],
+        periods=[PeriodRef(date_from="2025-05-01", date_to="2025-06-01")],
+    )
+
+
+class _FullBalanceFamilyRuntime:
+    def __init__(self) -> None:
+        self.summary_calls = 0
+        self.execute_calls = 0
+        self.balance_day_calls = 0
+
+    def _import_pipeline_module(self, _name):
+        raise ImportError
+
+    @staticmethod
+    def _envelope():
+        return {
+            "status": "ok",
+            "unit": "тыс. м3",
+            "rows": [
+                {
+                    "article_id": 11,
+                    "article_name": "Распределение",
+                    "article_scope": "Распределение",
+                    "article_indent": 0,
+                    "fact_value": "12.5",
+                    "unit": "тыс. м3",
+                },
+                {
+                    "article_id": 12,
+                    "article_name": "Ростовская область",
+                    "article_scope": "Ростовская область",
+                    "article_indent": 1,
+                    "fact_value": "7.5",
+                    "unit": "тыс. м3",
+                },
+            ],
+            "warnings": [],
+        }
+
+    def execute(self, *_args, **_kwargs):
+        self.execute_calls += 1
+        return self._envelope()
+
+    def execute_balance_day(self, **_kwargs):
+        self.balance_day_calls += 1
+        return self._envelope()
+
+    def summarize_envelope(self, envelope, **_kwargs):
+        self.summary_calls += 1
+        return {
+            **envelope,
+            "summary": {"generated_by": "llm", "text": "LLM summary"},
+        }
+
+
+def _full_balance_registry():
+    section = SimpleNamespace(
+        article_id=11,
+        balance_id=1,
+        canonical_name="Распределение",
+        section="Распределение",
+        path=("Распределение",),
+    )
+    directed = SimpleNamespace(
+        article_id=12,
+        balance_id=1,
+        canonical_name="Ростовская область",
+        section="Распределение",
+        path=("Распределение", "Ростовская область"),
+    )
+    articles = {11: section, 12: directed}
+    return SimpleNamespace(
+        geo_objects=(),
+        geo_groups=(),
+        routes=(),
+        manifest=SimpleNamespace(bundle_version="test"),
+        article=lambda article_id: articles.get(article_id),
+        articles_for_balance=lambda balance_id: (
+            (section, directed) if balance_id == 1 else ()
+        ),
+    )
+
+
+def test_native_scalar_period_patch_skips_llm_summary() -> None:
+    runtime = _FullBalanceFamilyRuntime()
+    processor = _processor(
+        runtime,
+        _CountingInterpreter(),
+        _SuccessfulExecutor(),
+    )
+
+    processed = processor.process(
+        _state(_intent()),
+        message="А за апрель?",
+        execute_db=True,
+        clarification=None,
+        request_id="native-period-patch",
+    )
+
+    assert processed.outcome == TransitionOutcome.SUCCESS
+    assert runtime.summary_calls == 0
+    assert processed.diagnostics["summary"]["requested"] is False
+
+
+@pytest.mark.parametrize(
+    ("shape", "execution_layer"),
+    [
+        ("balance_snapshot", "unified_balance_level"),
+        ("balance_section", "unified_balance_section"),
+        ("directed_flow", "unified_directed_flow"),
+    ],
+)
+def test_full_balance_family_period_patch_skips_llm_summary(
+    shape: str,
+    execution_layer: str,
+) -> None:
+    runtime = _FullBalanceFamilyRuntime()
+    intent = _full_balance_family_intent(shape)
+    processor = _processor(
+        runtime,
+        _CountingInterpreter(),
+        _SuccessfulExecutor(),
+        registry=_full_balance_registry(),
+    )
+
+    processed = processor.process(
+        _state(intent),
+        message="А за апрель?",
+        execute_db=True,
+        clarification=None,
+        request_id=f"{shape}-period-patch",
+    )
+
+    assert processed.outcome == TransitionOutcome.SUCCESS
+    assert runtime.summary_calls == 0
+    assert processed.diagnostics["execution"]["layer"] == execution_layer
+    assert processed.diagnostics["summary"]["requested"] is False
+    if shape == "directed_flow":
+        assert [
+            entity.role for entity in intent.operands[0].entities
+        ] == ["balance", "destination", "article"]
+
+
+def test_non_patch_full_balance_execution_still_invokes_summary_once() -> None:
+    runtime = _FullBalanceFamilyRuntime()
+    intent = _full_balance_family_intent("balance_snapshot")
+    processor = _processor(
+        runtime,
+        _CountingInterpreter(),
+        _SuccessfulExecutor(),
+        registry=_full_balance_registry(),
+    )
+    mutation = ContextMutation(
+        turn_id="turn-1",
+        user_message="Покажи баланс за май 2025",
+        replace_intent=intent,
+    )
+
+    processed = processor._dispatch_mutation(
+        ContextContractV2(session_id="session"),
+        mutation,
+        normalized_message=mutation.user_message,
+        execute_db=True,
+        request_id="non-patch-full-balance",
+        started=0,
+        interpretation_mode="standalone",
+        memory_chunks=[],
+    )
+
+    assert processed.outcome == TransitionOutcome.SUCCESS
+    assert runtime.summary_calls == 1
+    assert processed.diagnostics["summary"]["requested"] is True
 
 
 def test_golden_period_transition_uses_patch_without_llm_and_persists() -> None:
