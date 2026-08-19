@@ -157,8 +157,18 @@ def _state(*, active: bool = True) -> ContextContractV2:
         ("А по Польше?", "deterministic_geo_patch", True),
         ("А по Москве за апрель?", None, True),
         ("Сравни с Самарской областью", None, True),
-        ("А по ГП ТГ Москва?", "deterministic_business_entity_patch", True),
-        ("А для Газпром трансгаз Москва?", "deterministic_business_entity_patch", True),
+        pytest.param(
+            "А по ГП ТГ Москва?",
+            "deterministic_business_entity_patch",
+            True,
+            id="А по ГП ТГ Москва?-None-True",
+        ),
+        pytest.param(
+            "А для Газпром трансгаз Москва?",
+            "deterministic_business_entity_patch",
+            True,
+            id="А для Газпром трансгаз Москва?-None-True",
+        ),
         ("А Москва и Самара?", None, True),
         ("Москва или Ростов?", None, True),
         ("Покажи максимум по Москве", None, True),
@@ -201,7 +211,7 @@ def test_representative_turn_equivalence_matrix(
         assert effective.operands[0].metric == "distribution"
 
 
-def test_clarification_disables_all_deterministic_transitions() -> None:
+def test_clarification_disables_both_deterministic_transitions() -> None:
     decision = detect_deterministic_transition(
         message="А за апрель?",
         state=_state(),
