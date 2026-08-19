@@ -18,12 +18,19 @@ from ..contracts import (
 from .types import TransitionDecision, TransitionKind
 
 
-MONTH_PATTERNS = (
+_MONTH_PATTERNS = (
     (r"\bянвар\w*", 1), (r"\bфеврал\w*", 2), (r"\bмарт\w*", 3),
     (r"\bапрел\w*", 4), (r"\bма(?:й|я|е|ю|ем)\b", 5),
     (r"\bиюн\w*", 6), (r"\bиюл\w*", 7), (r"\bавгуст\w*", 8),
     (r"\bсентябр\w*", 9), (r"\bоктябр\w*", 10),
     (r"\bноябр\w*", 11), (r"\bдекабр\w*", 12),
+)
+
+_SEASON_PATTERNS = (
+    (r"\bвесн\w*", 3, 6, "весна"),
+    (r"\bлет\w*", 6, 9, "лето"),
+    (r"\bосен\w*", 9, 12, "осень"),
+    (r"\bзим\w*", 12, 3, "зима"),
 )
 
 _RUSSIAN_MONTHS = {
@@ -104,7 +111,7 @@ def detect_period_followup(
     if followup is None:
         return None
     period_text = followup.group("period")
-    for month_pattern, month in MONTH_PATTERNS:
+    for month_pattern, month in _MONTH_PATTERNS:
         explicit_day = re.fullmatch(
             rf"[0-3]?\d\s+{month_pattern}\s+20\d{{2}}(?:\s+г(?:од(?:а)?)?)?",
             period_text,
@@ -127,6 +134,56 @@ def detect_period_followup(
         date_to = date(year + 1, 1, 1) if month == 12 else date(year, month + 1, 1)
         return PeriodPatchCandidate((PeriodRef(date_from=date_from, date_to=date_to),))
     return None
+
+
+def find_month_number(text: str) -> int | None:
+    return next(
+        (number for pattern, number in _MONTH_PATTERNS if re.search(pattern, text)),
+        None,
+    )
+
+
+def named_comparison_periods(
+    intent: AnalysisIntent,
+    text: str,
+) -> list[PeriodRef]:
+    years = [int(item) for item in re.findall(r"\b(20\d{2})\b", text)]
+    if years:
+        year = years[0]
+    else:
+        candidates = [period.date_from.year for period in intent.periods]
+        year = min(candidates) if candidates else date.today().year
+    matches: list[tuple[int, PeriodRef]] = []
+    for pattern, start_month, end_month, label in _SEASON_PATTERNS:
+        for match in re.finditer(pattern, text):
+            end_year = year + 1 if end_month <= start_month else year
+            matches.append((
+                match.start(),
+                PeriodRef(
+                    date_from=date(year, start_month, 1),
+                    date_to=date(end_year, end_month, 1),
+                    label=label,
+                ),
+            ))
+    if len(matches) < 2:
+        for pattern, month in _MONTH_PATTERNS:
+            for match in re.finditer(pattern, text):
+                next_month = month % 12 + 1
+                next_year = year + 1 if month == 12 else year
+                matches.append((
+                    match.start(),
+                    PeriodRef(
+                        date_from=date(year, month, 1),
+                        date_to=date(next_year, next_month, 1),
+                    ),
+                ))
+    ordered = [period for _position, period in sorted(matches, key=lambda item: item[0])]
+    unique: list[PeriodRef] = []
+    for period in ordered:
+        key = (period.date_from, period.date_to)
+        if key not in {(item.date_from, item.date_to) for item in unique}:
+            unique.append(period)
+    return unique[:2]
 
 
 def detect_period_transition(
