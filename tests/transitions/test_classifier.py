@@ -18,6 +18,7 @@ from balance_chat.contracts import (
 )
 from balance_chat.reducer import apply_context_transition, reduce_intent
 from balance_chat.transitions import (
+    BusinessEntityTransitionServices,
     GeoTransitionServices,
     TransitionKind,
     detect_deterministic_transition,
@@ -34,6 +35,11 @@ GEOS = tuple(
         ("germany", "Германия", ()),
         ("poland", "Польша", ()),
     )
+)
+BUSINESS = SimpleNamespace(
+    balance_id=1,
+    canonical_name="ГП ТГ Москва суточный баланс",
+    aliases=("ГП ТГ Москва", "ТГ Москва", "Газпром трансгаз Москва"),
 )
 
 _FORMS = {
@@ -53,10 +59,11 @@ def _normalize(value) -> str:
 
 
 def _entity(role: str, entity_type: str, record) -> OperandEntityRef:
+    raw_id = record.geo_id if entity_type == "geo_object" else record.balance_id
     return OperandEntityRef(
         role=role,
         entity=CanonicalEntityRef(
-            entity_id=record.geo_id,
+            entity_id=(raw_id if entity_type == "geo_object" else f"BAL:{raw_id}"),
             entity_type=entity_type,
             display_name=record.canonical_name,
         ),
@@ -78,11 +85,32 @@ def _services() -> GeoTransitionServices:
     return GeoTransitionServices(
         normalize_lemmas=_normalize,
         resolve_geo_objects=resolve,
-        lookup_balance=lambda value: (
-            object()
-            if "тг" in _normalize(value).split()
-            or _normalize(value).startswith("газпром трансгаз ")
-            else None
+        lookup_balance=_lookup_balance,
+        resolve_direction_article=lambda _balance, _target, _metric: None,
+        make_entity=_entity,
+    )
+
+
+def _lookup_balance(value):
+    normalized = _normalize(value)
+    return BUSINESS if normalized in {
+        _normalize(BUSINESS.canonical_name),
+        *(_normalize(alias) for alias in BUSINESS.aliases),
+    } else None
+
+
+def _business_services() -> BusinessEntityTransitionServices:
+    return BusinessEntityTransitionServices(
+        lookup_balance=_lookup_balance,
+        lookup_geo=lambda value: next(
+            (
+                geo for geo in GEOS
+                if _normalize(value) in {
+                    _normalize(geo.geo_id),
+                    _normalize(geo.canonical_name),
+                }
+            ),
+            None,
         ),
         resolve_direction_article=lambda _balance, _target, _metric: None,
         make_entity=_entity,
@@ -129,8 +157,18 @@ def _state(*, active: bool = True) -> ContextContractV2:
         ("А по Польше?", "deterministic_geo_patch", True),
         ("А по Москве за апрель?", None, True),
         ("Сравни с Самарской областью", None, True),
-        ("А по ГП ТГ Москва?", None, True),
-        ("А для Газпром трансгаз Москва?", None, True),
+        pytest.param(
+            "А по ГП ТГ Москва?",
+            "deterministic_business_entity_patch",
+            True,
+            id="А по ГП ТГ Москва?-None-True",
+        ),
+        pytest.param(
+            "А для Газпром трансгаз Москва?",
+            "deterministic_business_entity_patch",
+            True,
+            id="А для Газпром трансгаз Москва?-None-True",
+        ),
         ("А Москва и Самара?", None, True),
         ("Москва или Ростов?", None, True),
         ("Покажи максимум по Москве", None, True),
@@ -160,6 +198,7 @@ def test_representative_turn_equivalence_matrix(
         turn_id="turn-2",
         clarification_provided=False,
         geo_services=_services(),
+        business_services=_business_services(),
     )
 
     assert decision.interpretation_mode == expected_mode
@@ -179,6 +218,7 @@ def test_clarification_disables_both_deterministic_transitions() -> None:
         turn_id="turn-2",
         clarification_provided=True,
         geo_services=_services(),
+        business_services=_business_services(),
     )
 
     assert decision.kind == TransitionKind.NO_MATCH

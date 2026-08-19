@@ -50,6 +50,7 @@ from .reducer import ContextReductionError
 from .result_memory import PipelineResultMemoryAdapter
 from .service import TurnProcessResult, TurnProcessingError
 from .transitions import (
+    BusinessEntityTransitionServices,
     GeoTransitionServices,
     TransitionKind,
     detect_deterministic_transition,
@@ -640,6 +641,19 @@ class PipelineV2TurnProcessor:
                 ),
                 make_entity=_typed_entity,
             ),
+            business_services=BusinessEntityTransitionServices(
+                lookup_balance=getattr(self.registry, "balance", None),
+                lookup_geo=getattr(self.registry, "geo", None),
+                resolve_direction_article=lambda balance, target, metric: (
+                    _unique_direction_article(
+                        self.registry,
+                        balance=balance,
+                        target=target,
+                        metric=metric,
+                    )
+                ),
+                make_entity=_typed_entity,
+            ),
         )
         if (
             transition.kind == TransitionKind.PATCH
@@ -662,6 +676,7 @@ class PipelineV2TurnProcessor:
                 started=started,
                 interpretation_mode=transition.interpretation_mode,
                 memory_chunks=[],
+                evidence_businesses=transition.evidence_businesses,
                 evidence_geos=transition.evidence_geos,
             )
         direction_comparison = self._deterministic_direction_comparison_mutation(
@@ -4428,6 +4443,7 @@ def _should_summarize(interpretation_mode: str) -> bool:
     return interpretation_mode not in {
         "deterministic_period_patch",
         "deterministic_geo_patch",
+        "deterministic_business_entity_patch",
     }
 
 

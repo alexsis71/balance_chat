@@ -18,6 +18,7 @@ class TransitionDecision:
     kind: TransitionKind
     mutation: ContextMutation | None = None
     interpretation_mode: str | None = None
+    evidence_businesses: tuple[Any, ...] = ()
     evidence_geos: tuple[Any, ...] = ()
     diagnostic_event: str | None = None
     diagnostic_fields: Mapping[str, Any] = field(
