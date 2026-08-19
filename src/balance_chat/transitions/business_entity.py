@@ -62,7 +62,7 @@ def _metadata_id(value: Any) -> str:
 
 def _lookup_geo(reference: OperandEntityRef, services: BusinessEntityTransitionServices):
     lookup = services.lookup_geo
-    if lookup is None:
+    if not callable(lookup):
         return None
     for value in (reference.entity.entity_id, reference.entity.display_name):
         if (record := lookup(value)) is not None:
@@ -160,7 +160,7 @@ def detect_business_entity_followup(
         or active_intent.comparison is not None
         or active_intent.formula is not None
         or active_intent.ranking is not None
-        or services.lookup_balance is None
+        or not callable(services.lookup_balance)
     ):
         return None
     match = _FOLLOWUP.fullmatch(_normalize_text(message))
