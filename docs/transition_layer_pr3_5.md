@@ -275,15 +275,22 @@ and the available acceptance flow has external state/cleanup effects.
 ## 14. LOC and responsibility comparison
 
 ```text
-processor.py before: 4773 LOC
-processor.py after:  4431 LOC
+                         physical lines   nonblank LOC
+processor.py before:              5031           4773
+processor.py after:               4665           4431
+reduction:                          366            342
 
-classifier.py:  21 LOC
-period.py:     197 LOC
-geo.py:        181 LOC
-types.py:       22 LOC
-__init__.py:     9 LOC
+classifier.py:                       24             21
+period.py:                          217            197
+geo.py:                             198            181
+types.py:                            29             22
+__init__.py:                         10              9
 ```
+
+`period.py` is 197 nonblank LOC and 217 physical lines. The latter is slightly
+above the non-binding 200-line guideline because the extracted production
+grammar and parsing remain explicit; no behavior was compressed or split into
+an otherwise unnecessary sixth module to optimize the count.
 
 Before, processor owned nine transition responsibilities: period recognition,
 period parsing/inheritance, period mutation, GEO grammar/shape checks, GEO
