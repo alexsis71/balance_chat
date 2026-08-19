@@ -27,4 +27,3 @@ class TransitionDecision:
     @classmethod
     def no_match(cls) -> "TransitionDecision":
         return cls(kind=TransitionKind.NO_MATCH)
-
