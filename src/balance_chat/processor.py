@@ -4,7 +4,6 @@ import hashlib
 import json
 import logging
 import re
-from dataclasses import dataclass
 from difflib import SequenceMatcher
 from datetime import date, timedelta
 from decimal import Decimal, ROUND_HALF_UP
@@ -27,12 +26,10 @@ from .contracts import (
     ContextContractV2,
     ContextMutation,
     EntityMention,
-    FieldMutation,
     GroupingSpec,
     IntentPatch,
     InterpretationMode,
     MetadataVersionRef,
-    MutationAction,
     OperandEntityRef,
     Operation,
     PeriodRef,
@@ -52,6 +49,16 @@ from .planning import NativeMultiOperandPlanner, PlanningError
 from .reducer import ContextReductionError
 from .result_memory import PipelineResultMemoryAdapter
 from .service import TurnProcessResult, TurnProcessingError
+from .transitions import (
+    GeoTransitionServices,
+    TransitionKind,
+    detect_deterministic_transition,
+)
+from .transitions.period import (
+    explicit_single_day_period as _explicit_single_day_period,
+    find_month_number,
+    named_comparison_periods,
+)
 
 
 LOGGER = logging.getLogger("balance_chat.processor")
@@ -614,28 +621,48 @@ class PipelineV2TurnProcessor:
         started: float,
     ) -> TurnProcessResult:
         """Interpret every active-session turn against the seven-turn ledger."""
-        period_patch = (
-            _deterministic_period_patch(state, message, turn_id)
-            if clarification is None and state.pending_clarification is None
-            else None
+        transition = detect_deterministic_transition(
+            message=message,
+            state=state,
+            turn_id=turn_id,
+            clarification_provided=clarification is not None,
+            geo_services=GeoTransitionServices(
+                normalize_lemmas=self._normalize_lemmas,
+                resolve_geo_objects=self._tagged_geo_objects,
+                lookup_balance=getattr(self.registry, "balance", None),
+                resolve_direction_article=lambda balance, target, metric: (
+                    _unique_direction_article(
+                        self.registry,
+                        balance=balance,
+                        target=target,
+                        metric=metric,
+                    )
+                ),
+                make_entity=_typed_entity,
+            ),
         )
-        if period_patch is not None:
+        if (
+            transition.kind == TransitionKind.PATCH
+            and transition.mutation is not None
+            and transition.interpretation_mode is not None
+        ):
             log_event(
                 LOGGER,
                 logging.INFO,
-                "deterministic_period_patch_recognized",
+                transition.diagnostic_event or "deterministic_transition_recognized",
                 request_id=request_id,
-                mutation_mode="period_patch",
+                **dict(transition.diagnostic_fields),
             )
             return self._dispatch_mutation(
                 state,
-                period_patch,
-                normalized_message=period_patch.normalized_message or message,
+                transition.mutation,
+                normalized_message=transition.mutation.normalized_message or message,
                 execute_db=execute_db,
                 request_id=request_id,
                 started=started,
-                interpretation_mode="deterministic_period_patch",
+                interpretation_mode=transition.interpretation_mode,
                 memory_chunks=[],
+                evidence_geos=transition.evidence_geos,
             )
         direction_comparison = self._deterministic_direction_comparison_mutation(
             message, turn_id
@@ -3360,67 +3387,6 @@ def _normalize_same_scope_period_comparison_intent(
     )
 
 
-_RUSSIAN_MONTHS = {
-    r"январ\w*": 1,
-    r"феврал\w*": 2,
-    r"март\w*": 3,
-    r"апрел\w*": 4,
-    r"ма(?:й|я|е)": 5,
-    r"июн\w*": 6,
-    r"июл\w*": 7,
-    r"август\w*": 8,
-    r"сентябр\w*": 9,
-    r"октябр\w*": 10,
-    r"ноябр\w*": 11,
-    r"декабр\w*": 12,
-}
-
-
-def _explicit_single_day_period(message: str) -> PeriodRef | None:
-    """Parse one explicit calendar day using bounded generic date forms."""
-
-    text = str(message)
-    candidates: list[date] = []
-    occupied: list[tuple[int, int]] = []
-    for match in re.finditer(r"(?<!\d)(20\d{2})-(\d{1,2})-(\d{1,2})(?!\d)", text):
-        try:
-            candidates.append(
-                date(int(match.group(1)), int(match.group(2)), int(match.group(3)))
-            )
-            occupied.append(match.span())
-        except ValueError:
-            return None
-    for match in re.finditer(
-        r"(?<!\d)([0-3]?\d)[./-]([01]?\d)[./-](20\d{2})(?!\d)",
-        text,
-    ):
-        if any(start <= match.start() < end for start, end in occupied):
-            continue
-        try:
-            candidates.append(
-                date(int(match.group(3)), int(match.group(2)), int(match.group(1)))
-            )
-        except ValueError:
-            return None
-    normalized = _normalize_text(text)
-    for month_pattern, month in _RUSSIAN_MONTHS.items():
-        match = re.search(
-            rf"\b([0-3]?\d)\s+{month_pattern}\s+(20\d{{2}})\b",
-            normalized,
-        )
-        if not match:
-            continue
-        try:
-            candidates.append(date(int(match.group(2)), month, int(match.group(1))))
-        except ValueError:
-            return None
-    unique = list(dict.fromkeys(candidates))
-    if len(unique) != 1:
-        return None
-    start = unique[0]
-    return PeriodRef(date_from=start, date_to=start + timedelta(days=1))
-
-
 _SECTION_MARKER = re.compile(r"\bраздел[а-я]*\b", re.IGNORECASE)
 
 
@@ -4459,106 +4425,10 @@ def _diagnostics(decision, chunks, task_count, started):
 
 
 def _should_summarize(interpretation_mode: str) -> bool:
-    return interpretation_mode != "deterministic_period_patch"
-
-
-_MONTHS = (
-    (r"\bянвар\w*", 1), (r"\bфеврал\w*", 2), (r"\bмарт\w*", 3),
-    (r"\bапрел\w*", 4), (r"\bма(?:й|я|е|ю|ем)\b", 5),
-    (r"\bиюн\w*", 6), (r"\bиюл\w*", 7), (r"\bавгуст\w*", 8),
-    (r"\bсентябр\w*", 9), (r"\bоктябр\w*", 10),
-    (r"\bноябр\w*", 11), (r"\bдекабр\w*", 12),
-)
-
-_SEASONS = (
-    (r"\bвесн\w*", 3, 6, "весна"),
-    (r"\bлет\w*", 6, 9, "лето"),
-    (r"\bосен\w*", 9, 12, "осень"),
-    (r"\bзим\w*", 12, 3, "зима"),
-)
-
-
-@dataclass(frozen=True, slots=True)
-class PeriodPatchCandidate:
-    periods: tuple[PeriodRef, ...]
-
-
-def _detect_period_followup(
-    message: str,
-    active_intent: AnalysisIntent,
-) -> PeriodPatchCandidate | None:
-    if (
-        active_intent.operation not in {Operation.SHOW, Operation.AGGREGATE}
-        or len(active_intent.operands) != 1
-        or len(active_intent.periods) != 1
-        or any(operand.periods for operand in active_intent.operands)
-    ):
-        return None
-    text = _normalize_text(message)
-    followup = re.fullmatch(
-        r"(?:а\s+)?(?:покажи\s+)?за\s+(?P<period>.+)",
-        text,
-    )
-    if followup is None:
-        return None
-    period_text = followup.group("period")
-    for month_pattern, month in _MONTHS:
-        explicit_day = re.fullmatch(
-            rf"[0-3]?\d\s+{month_pattern}\s+20\d{{2}}(?:\s+г(?:од(?:а)?)?)?",
-            period_text,
-        )
-        if explicit_day is not None:
-            period = _explicit_single_day_period(period_text)
-            return (
-                PeriodPatchCandidate(periods=(period,))
-                if period is not None
-                else None
-            )
-        named_month = re.fullmatch(
-            rf"{month_pattern}(?:\s+(20\d{{2}})(?:\s+г(?:од(?:а)?)?)?)?",
-            period_text,
-        )
-        if named_month is None:
-            continue
-        year = (
-            int(named_month.group(1))
-            if named_month.group(1)
-            else active_intent.periods[0].date_from.year
-        )
-        date_from = date(year, month, 1)
-        date_to = (
-            date(year + 1, 1, 1)
-            if month == 12
-            else date(year, month + 1, 1)
-        )
-        return PeriodPatchCandidate(
-            periods=(PeriodRef(date_from=date_from, date_to=date_to),)
-        )
-    return None
-
-
-def _deterministic_period_patch(
-    state: ContextContractV2,
-    message: str,
-    turn_id: str,
-) -> ContextMutation | None:
-    scope = state.active_dialog_scope
-    if scope is None:
-        return None
-    candidate = _detect_period_followup(message, scope.intent)
-    if candidate is None:
-        return None
-    return ContextMutation(
-        turn_id=turn_id,
-        user_message=message,
-        normalized_message=message,
-        patch=IntentPatch(
-            periods=FieldMutation(
-                action=MutationAction.SET,
-                value=list(candidate.periods),
-            )
-        ),
-    )
+    return interpretation_mode not in {
+        "deterministic_period_patch",
+        "deterministic_geo_patch",
+    }
 
 
 def _deterministic_period_mutation(state, message: str, turn_id: str):
@@ -4567,7 +4437,7 @@ def _deterministic_period_mutation(state, message: str, turn_id: str):
         return None
     text = str(message).strip().lower().replace("ё", "е")
     if re.search(r"\bсравн\w*", text):
-        named = _named_comparison_periods(scope.intent, text)
+        named = named_comparison_periods(scope.intent, text)
         if len(named) == 2:
             intent = scope.intent.model_copy(
                 update={
@@ -4586,7 +4456,7 @@ def _deterministic_period_mutation(state, message: str, turn_id: str):
             )
     if not re.search(r"\bсравн\w*\s+с\b", text):
         return None
-    month = next((number for pattern, number in _MONTHS if re.search(pattern, text)), None)
+    month = find_month_number(text)
     if month is None:
         return None
     year_match = re.search(r"\b(20\d{2})\b", text)
@@ -4617,46 +4487,6 @@ def _deterministic_period_mutation(state, message: str, turn_id: str):
         normalized_message=message,
         replace_intent=intent,
     )
-
-
-def _named_comparison_periods(intent: AnalysisIntent, text: str) -> list[Any]:
-    years = [int(item) for item in re.findall(r"\b(20\d{2})\b", text)]
-    if years:
-        year = years[0]
-    else:
-        candidates = [period.date_from.year for period in intent.periods]
-        year = min(candidates) if candidates else date.today().year
-    matches: list[tuple[int, Any]] = []
-    for pattern, start_month, end_month, label in _SEASONS:
-        for match in re.finditer(pattern, text):
-            end_year = year + 1 if end_month <= start_month else year
-            matches.append((
-                match.start(),
-                PeriodRef(
-                    date_from=date(year, start_month, 1),
-                    date_to=date(end_year, end_month, 1),
-                    label=label,
-                ),
-            ))
-    if len(matches) < 2:
-        for pattern, month in _MONTHS:
-            for match in re.finditer(pattern, text):
-                next_month = month % 12 + 1
-                next_year = year + 1 if month == 12 else year
-                matches.append((
-                    match.start(),
-                    PeriodRef(
-                        date_from=date(year, month, 1),
-                        date_to=date(next_year, next_month, 1),
-                    ),
-                ))
-    ordered = [period for _position, period in sorted(matches, key=lambda item: item[0])]
-    unique = []
-    for period in ordered:
-        key = (period.date_from, period.date_to)
-        if key not in {(item.date_from, item.date_to) for item in unique}:
-            unique.append(period)
-    return unique[:2]
 
 
 def _official_name(value: str) -> str:

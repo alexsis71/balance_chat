@@ -19,14 +19,14 @@ from balance_chat.contracts import (
     TransitionOutcome,
 )
 from balance_chat.execution import NativeExecutionResult, ScalarFact, TaskExecutionResult
-from balance_chat.processor import (
-    PipelineV2TurnProcessor,
-    _detect_period_followup,
-    _deterministic_period_patch,
-)
+from balance_chat.processor import PipelineV2TurnProcessor
 from balance_chat.planning import NativeMultiOperandPlanner
 from balance_chat.reducer import apply_context_transition, reduce_intent
 from balance_chat.store import InMemoryContextStore
+from balance_chat.transitions.period import (
+    detect_period_followup,
+    detect_period_transition,
+)
 
 
 def _intent(
@@ -92,7 +92,7 @@ def test_period_followup_resolves_canonical_period(
     date_from: str,
     date_to: str,
 ) -> None:
-    candidate = _detect_period_followup(message, _intent())
+    candidate = detect_period_followup(message, _intent())
 
     assert candidate is not None
     assert candidate.periods == (
@@ -136,7 +136,10 @@ def test_period_patch_preserves_every_non_period_field(
     )
     state = _state(active)
 
-    mutation = _deterministic_period_patch(state, "А за апрель?", "turn-2")
+    decision = detect_period_transition(state, "А за апрель?", "turn-2")
+    assert decision is not None
+    mutation = decision.mutation
+    assert mutation is not None
 
     assert mutation is not None
     assert mutation.replace_intent is None
@@ -170,7 +173,7 @@ def test_period_patch_preserves_every_non_period_field(
     ],
 )
 def test_ambiguous_or_mixed_followup_is_not_intercepted(message: str) -> None:
-    assert _detect_period_followup(message, _intent()) is None
+    assert detect_period_followup(message, _intent()) is None
 
 
 @pytest.mark.parametrize(
@@ -188,11 +191,11 @@ def test_complex_active_operation_is_not_intercepted(operation: Operation) -> No
     active = _intent()
     active = active.model_copy(update={"operation": operation}, deep=True)
 
-    assert _detect_period_followup("А за апрель?", active) is None
+    assert detect_period_followup("А за апрель?", active) is None
 
 
 def test_period_patch_requires_active_analytical_state() -> None:
-    assert _deterministic_period_patch(
+    assert detect_period_transition(
         _state(), "А за апрель?", "turn-1"
     ) is None
 
