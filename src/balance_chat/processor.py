@@ -4,7 +4,6 @@ import hashlib
 import json
 import logging
 import re
-from dataclasses import dataclass
 from difflib import SequenceMatcher
 from datetime import date, timedelta
 from decimal import Decimal, ROUND_HALF_UP
@@ -27,12 +26,10 @@ from .contracts import (
     ContextContractV2,
     ContextMutation,
     EntityMention,
-    FieldMutation,
     GroupingSpec,
     IntentPatch,
     InterpretationMode,
     MetadataVersionRef,
-    MutationAction,
     OperandEntityRef,
     Operation,
     PeriodRef,
@@ -52,6 +49,15 @@ from .planning import NativeMultiOperandPlanner, PlanningError
 from .reducer import ContextReductionError
 from .result_memory import PipelineResultMemoryAdapter
 from .service import TurnProcessResult, TurnProcessingError
+from .transitions import (
+    GeoTransitionServices,
+    TransitionKind,
+    detect_deterministic_transition,
+)
+from .transitions.period import (
+    MONTH_PATTERNS,
+    explicit_single_day_period as _explicit_single_day_period,
+)
 
 
 LOGGER = logging.getLogger("balance_chat.processor")
@@ -614,54 +620,48 @@ class PipelineV2TurnProcessor:
         started: float,
     ) -> TurnProcessResult:
         """Interpret every active-session turn against the seven-turn ledger."""
-        period_patch = (
-            _deterministic_period_patch(state, message, turn_id)
-            if clarification is None and state.pending_clarification is None
-            else None
+        transition = detect_deterministic_transition(
+            message=message,
+            state=state,
+            turn_id=turn_id,
+            clarification_provided=clarification is not None,
+            geo_services=GeoTransitionServices(
+                normalize_lemmas=self._normalize_lemmas,
+                resolve_geo_objects=self._tagged_geo_objects,
+                lookup_balance=getattr(self.registry, "balance", None),
+                resolve_direction_article=lambda balance, target, metric: (
+                    _unique_direction_article(
+                        self.registry,
+                        balance=balance,
+                        target=target,
+                        metric=metric,
+                    )
+                ),
+                make_entity=_typed_entity,
+            ),
         )
-        if period_patch is not None:
+        if (
+            transition.kind == TransitionKind.PATCH
+            and transition.mutation is not None
+            and transition.interpretation_mode is not None
+        ):
             log_event(
                 LOGGER,
                 logging.INFO,
-                "deterministic_period_patch_recognized",
+                transition.diagnostic_event or "deterministic_transition_recognized",
                 request_id=request_id,
-                mutation_mode="period_patch",
+                **dict(transition.diagnostic_fields),
             )
             return self._dispatch_mutation(
                 state,
-                period_patch,
-                normalized_message=period_patch.normalized_message or message,
+                transition.mutation,
+                normalized_message=transition.mutation.normalized_message or message,
                 execute_db=execute_db,
                 request_id=request_id,
                 started=started,
-                interpretation_mode="deterministic_period_patch",
+                interpretation_mode=transition.interpretation_mode,
                 memory_chunks=[],
-            )
-        geo_patch = (
-            self._deterministic_geo_patch(state, message, turn_id)
-            if clarification is None and state.pending_clarification is None
-            else None
-        )
-        if geo_patch is not None:
-            mutation, candidate = geo_patch
-            log_event(
-                LOGGER,
-                logging.INFO,
-                "deterministic_geo_patch_recognized",
-                request_id=request_id,
-                mutation_mode="geo_patch",
-                geo_id=str(candidate.geo.geo_id),
-            )
-            return self._dispatch_mutation(
-                state,
-                mutation,
-                normalized_message=mutation.normalized_message or message,
-                execute_db=execute_db,
-                request_id=request_id,
-                started=started,
-                interpretation_mode="deterministic_geo_patch",
-                memory_chunks=[],
-                evidence_geos=[candidate.geo],
+                evidence_geos=transition.evidence_geos,
             )
         direction_comparison = self._deterministic_direction_comparison_mutation(
             message, turn_id
@@ -1578,137 +1578,6 @@ class PipelineV2TurnProcessor:
                 seen.add(key)
                 output.append(record)
         return output
-
-    def _detect_geo_followup(
-        self,
-        message: str,
-        active_intent: AnalysisIntent,
-    ) -> GeoPatchCandidate | None:
-        """Resolve one conservative GEO replacement from canonical metadata."""
-        if (
-            active_intent.operation not in {Operation.SHOW, Operation.AGGREGATE}
-            or len(active_intent.operands) != 1
-            or active_intent.grouping
-            or active_intent.comparison is not None
-            or active_intent.formula is not None
-            or active_intent.ranking is not None
-            or self._normalize_lemmas is None
-        ):
-            return None
-        operand = active_intent.operands[0]
-        if operand.metric not in {"distribution", "export"}:
-            return None
-        followup = re.fullmatch(
-            r"(?:а\s+)?(?:по|для)\s+(?P<geo>.+)",
-            _normalize_text(message),
-        )
-        if followup is None:
-            return None
-        mention = followup.group("geo")
-        balance_lookup = getattr(self.registry, "balance", None)
-        mention_tokens = self._normalize_lemmas(mention).split()
-        qualified_business = (
-            "тг" in mention_tokens
-            or mention_tokens[:2] == ["газпром", "трансгаз"]
-            or mention_tokens[:3] == ["ооо", "газпром", "трансгаз"]
-        )
-        if (
-            qualified_business
-            and callable(balance_lookup)
-            and balance_lookup(mention) is not None
-        ):
-            return None
-        matches = self._tagged_geo_objects(mention)
-        if (
-            len(matches) != 1
-            or not _whole_geo_mention_matches(
-                mention,
-                matches[0],
-                self._normalize_lemmas,
-            )
-        ):
-            return None
-        geo = matches[0]
-        destinations = [
-            (index, item)
-            for index, item in enumerate(operand.entities)
-            if item.role == "destination"
-            and item.entity.entity_type == "geo_object"
-        ]
-        roles = {item.role for item in operand.entities}
-        if len(destinations) != 1 or roles & {"source", "route"}:
-            return None
-        article_indexes = [
-            index
-            for index, item in enumerate(operand.entities)
-            if item.role == "article"
-        ]
-        entities = [item.model_copy(deep=True) for item in operand.entities]
-        destination_index, _destination = destinations[0]
-        entities[destination_index] = _typed_entity(
-            "destination", "geo_object", geo
-        )
-        if article_indexes:
-            balances = [
-                item
-                for item in operand.entities
-                if item.role == "balance" and item.entity.entity_type == "balance"
-            ]
-            if (
-                operand.metric != "distribution"
-                or len(article_indexes) != 1
-                or len(balances) != 1
-                or not callable(balance_lookup)
-            ):
-                return None
-            balance = balance_lookup(
-                _metadata_numeric_id(balances[0].entity.entity_id)
-            )
-            article = (
-                _unique_direction_article(
-                    self.registry,
-                    balance=balance,
-                    target=geo,
-                    metric="distribution",
-                )
-                if balance is not None
-                else None
-            )
-            if article is None:
-                return None
-            entities[article_indexes[0]] = _typed_entity(
-                "article", "article", article
-            )
-        updated_operand = operand.model_copy(
-            update={"entities": entities},
-            deep=True,
-        )
-        return GeoPatchCandidate(geo=geo, operands=(updated_operand,))
-
-    def _deterministic_geo_patch(
-        self,
-        state: ContextContractV2,
-        message: str,
-        turn_id: str,
-    ) -> tuple[ContextMutation, GeoPatchCandidate] | None:
-        scope = state.active_dialog_scope
-        if scope is None:
-            return None
-        candidate = self._detect_geo_followup(message, scope.intent)
-        if candidate is None:
-            return None
-        mutation = ContextMutation(
-            turn_id=turn_id,
-            user_message=message,
-            normalized_message=message,
-            patch=IntentPatch(
-                operands=FieldMutation(
-                    action=MutationAction.SET,
-                    value=list(candidate.operands),
-                )
-            ),
-        )
-        return mutation, candidate
 
     def _is_explicit_flow_balance_query(self, message: str) -> bool:
         """Recognize a complete V1 flow-balance contract before scalar binding.
@@ -3517,67 +3386,6 @@ def _normalize_same_scope_period_comparison_intent(
     )
 
 
-_RUSSIAN_MONTHS = {
-    r"январ\w*": 1,
-    r"феврал\w*": 2,
-    r"март\w*": 3,
-    r"апрел\w*": 4,
-    r"ма(?:й|я|е)": 5,
-    r"июн\w*": 6,
-    r"июл\w*": 7,
-    r"август\w*": 8,
-    r"сентябр\w*": 9,
-    r"октябр\w*": 10,
-    r"ноябр\w*": 11,
-    r"декабр\w*": 12,
-}
-
-
-def _explicit_single_day_period(message: str) -> PeriodRef | None:
-    """Parse one explicit calendar day using bounded generic date forms."""
-
-    text = str(message)
-    candidates: list[date] = []
-    occupied: list[tuple[int, int]] = []
-    for match in re.finditer(r"(?<!\d)(20\d{2})-(\d{1,2})-(\d{1,2})(?!\d)", text):
-        try:
-            candidates.append(
-                date(int(match.group(1)), int(match.group(2)), int(match.group(3)))
-            )
-            occupied.append(match.span())
-        except ValueError:
-            return None
-    for match in re.finditer(
-        r"(?<!\d)([0-3]?\d)[./-]([01]?\d)[./-](20\d{2})(?!\d)",
-        text,
-    ):
-        if any(start <= match.start() < end for start, end in occupied):
-            continue
-        try:
-            candidates.append(
-                date(int(match.group(3)), int(match.group(2)), int(match.group(1)))
-            )
-        except ValueError:
-            return None
-    normalized = _normalize_text(text)
-    for month_pattern, month in _RUSSIAN_MONTHS.items():
-        match = re.search(
-            rf"\b([0-3]?\d)\s+{month_pattern}\s+(20\d{{2}})\b",
-            normalized,
-        )
-        if not match:
-            continue
-        try:
-            candidates.append(date(int(match.group(2)), month, int(match.group(1))))
-        except ValueError:
-            return None
-    unique = list(dict.fromkeys(candidates))
-    if len(unique) != 1:
-        return None
-    start = unique[0]
-    return PeriodRef(date_from=start, date_to=start + timedelta(days=1))
-
-
 _SECTION_MARKER = re.compile(r"\bраздел[а-я]*\b", re.IGNORECASE)
 
 
@@ -4622,139 +4430,12 @@ def _should_summarize(interpretation_mode: str) -> bool:
     }
 
 
-_MONTHS = (
-    (r"\bянвар\w*", 1), (r"\bфеврал\w*", 2), (r"\bмарт\w*", 3),
-    (r"\bапрел\w*", 4), (r"\bма(?:й|я|е|ю|ем)\b", 5),
-    (r"\bиюн\w*", 6), (r"\bиюл\w*", 7), (r"\bавгуст\w*", 8),
-    (r"\bсентябр\w*", 9), (r"\bоктябр\w*", 10),
-    (r"\bноябр\w*", 11), (r"\bдекабр\w*", 12),
-)
-
 _SEASONS = (
     (r"\bвесн\w*", 3, 6, "весна"),
     (r"\bлет\w*", 6, 9, "лето"),
     (r"\bосен\w*", 9, 12, "осень"),
     (r"\bзим\w*", 12, 3, "зима"),
 )
-
-
-@dataclass(frozen=True, slots=True)
-class PeriodPatchCandidate:
-    periods: tuple[PeriodRef, ...]
-
-
-@dataclass(frozen=True, slots=True)
-class GeoPatchCandidate:
-    geo: Any
-    operands: tuple[AnalysisOperand, ...]
-
-
-def _whole_geo_mention_matches(
-    mention: str,
-    geo: Any,
-    normalize_lemmas: Any,
-) -> bool:
-    """Require the whole follow-up payload to name one metadata GEO."""
-
-    def _tokens(value: str) -> list[str]:
-        region_types = {"область": "обл", "област": "обл"}
-        return [
-            region_types.get(token, token)
-            for token in normalize_lemmas(value).split()
-        ]
-
-    mention_tokens = _tokens(mention)
-    if not mention_tokens:
-        return False
-    for label in (geo.canonical_name, *(geo.aliases or ())):
-        label_tokens = _tokens(label)
-        if len(label_tokens) != len(mention_tokens):
-            continue
-        threshold = 0.84 if len(label_tokens) == 1 else 0.76
-        if all(
-            SequenceMatcher(None, left, right).ratio() >= threshold
-            for left, right in zip(mention_tokens, label_tokens)
-        ):
-            return True
-    return False
-
-
-def _detect_period_followup(
-    message: str,
-    active_intent: AnalysisIntent,
-) -> PeriodPatchCandidate | None:
-    if (
-        active_intent.operation not in {Operation.SHOW, Operation.AGGREGATE}
-        or len(active_intent.operands) != 1
-        or len(active_intent.periods) != 1
-        or any(operand.periods for operand in active_intent.operands)
-    ):
-        return None
-    text = _normalize_text(message)
-    followup = re.fullmatch(
-        r"(?:а\s+)?(?:покажи\s+)?за\s+(?P<period>.+)",
-        text,
-    )
-    if followup is None:
-        return None
-    period_text = followup.group("period")
-    for month_pattern, month in _MONTHS:
-        explicit_day = re.fullmatch(
-            rf"[0-3]?\d\s+{month_pattern}\s+20\d{{2}}(?:\s+г(?:од(?:а)?)?)?",
-            period_text,
-        )
-        if explicit_day is not None:
-            period = _explicit_single_day_period(period_text)
-            return (
-                PeriodPatchCandidate(periods=(period,))
-                if period is not None
-                else None
-            )
-        named_month = re.fullmatch(
-            rf"{month_pattern}(?:\s+(20\d{{2}})(?:\s+г(?:од(?:а)?)?)?)?",
-            period_text,
-        )
-        if named_month is None:
-            continue
-        year = (
-            int(named_month.group(1))
-            if named_month.group(1)
-            else active_intent.periods[0].date_from.year
-        )
-        date_from = date(year, month, 1)
-        date_to = (
-            date(year + 1, 1, 1)
-            if month == 12
-            else date(year, month + 1, 1)
-        )
-        return PeriodPatchCandidate(
-            periods=(PeriodRef(date_from=date_from, date_to=date_to),)
-        )
-    return None
-
-
-def _deterministic_period_patch(
-    state: ContextContractV2,
-    message: str,
-    turn_id: str,
-) -> ContextMutation | None:
-    scope = state.active_dialog_scope
-    if scope is None:
-        return None
-    candidate = _detect_period_followup(message, scope.intent)
-    if candidate is None:
-        return None
-    return ContextMutation(
-        turn_id=turn_id,
-        user_message=message,
-        normalized_message=message,
-        patch=IntentPatch(
-            periods=FieldMutation(
-                action=MutationAction.SET,
-                value=list(candidate.periods),
-            )
-        ),
-    )
 
 
 def _deterministic_period_mutation(state, message: str, turn_id: str):
@@ -4782,7 +4463,10 @@ def _deterministic_period_mutation(state, message: str, turn_id: str):
             )
     if not re.search(r"\bсравн\w*\s+с\b", text):
         return None
-    month = next((number for pattern, number in _MONTHS if re.search(pattern, text)), None)
+    month = next(
+        (number for pattern, number in MONTH_PATTERNS if re.search(pattern, text)),
+        None,
+    )
     if month is None:
         return None
     year_match = re.search(r"\b(20\d{2})\b", text)
@@ -4835,7 +4519,7 @@ def _named_comparison_periods(intent: AnalysisIntent, text: str) -> list[Any]:
                 ),
             ))
     if len(matches) < 2:
-        for pattern, month in _MONTHS:
+        for pattern, month in MONTH_PATTERNS:
             for match in re.finditer(pattern, text):
                 next_month = month % 12 + 1
                 next_year = year + 1 if month == 12 else year

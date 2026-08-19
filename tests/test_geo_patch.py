@@ -25,9 +25,18 @@ from balance_chat.execution import (
     ScalarFact,
 )
 from balance_chat.planning import NativeMultiOperandPlanner
-from balance_chat.processor import PipelineV2TurnProcessor
+from balance_chat.processor import (
+    PipelineV2TurnProcessor,
+    _typed_entity,
+    _unique_direction_article,
+)
 from balance_chat.reducer import reduce_intent
 from balance_chat.store import InMemoryContextStore
+from balance_chat.transitions.geo import (
+    GeoTransitionServices,
+    detect_geo_followup,
+    detect_geo_transition,
+)
 
 
 _LEMMA_MAP = {
@@ -331,7 +340,25 @@ def _state(intent: AnalysisIntent | None = None) -> ContextContractV2:
 
 
 def _candidate(processor, message: str, intent: AnalysisIntent | None = None):
-    return processor._detect_geo_followup(message, intent or _intent())
+    return detect_geo_followup(message, intent or _intent(), _services(processor))
+
+
+def _services(processor: PipelineV2TurnProcessor) -> GeoTransitionServices:
+    registry = processor.registry
+    return GeoTransitionServices(
+        normalize_lemmas=processor._normalize_lemmas,
+        resolve_geo_objects=processor._tagged_geo_objects,
+        lookup_balance=getattr(registry, "balance", None),
+        resolve_direction_article=lambda balance, target, metric: (
+            _unique_direction_article(
+                registry,
+                balance=balance,
+                target=target,
+                metric=metric,
+            )
+        ),
+        make_entity=_typed_entity,
+    )
 
 
 def _intent_with_operation(operation: Operation) -> AnalysisIntent:
@@ -371,20 +398,24 @@ def test_geo_patch_is_patch_only_and_changes_only_operands() -> None:
     processor, *_ = _processor()
     state = _state(_intent())
 
-    produced = processor._deterministic_geo_patch(
-        state, "А по Самарской области?", "turn-2"
+    decision = detect_geo_transition(
+        state,
+        "А по Самарской области?",
+        "turn-2",
+        _services(processor),
     )
 
-    assert produced is not None
-    mutation, candidate = produced
-    assert candidate.geo is SAMARA
+    assert decision is not None
+    mutation = decision.mutation
+    assert mutation is not None
+    assert decision.evidence_geos == (SAMARA,)
     assert mutation.replace_intent is None
     assert mutation.patch.operands.action == MutationAction.SET
     assert mutation.patch.model_copy(update={"operands": None}) == IntentPatch()
     effective = reduce_intent(state, mutation)
     active = state.active_dialog_scope.intent
     assert effective.model_copy(update={"operands": active.operands}, deep=True) == active
-    assert effective.operands == list(candidate.operands)
+    assert effective.operands == mutation.patch.operands.value
     serialized = ContextMutation.model_validate(mutation.model_dump(mode="json"))
     assert reduce_intent(state, serialized) == effective
 
@@ -612,8 +643,11 @@ def test_unresolvable_distribution_article_falls_back() -> None:
 def test_geo_patch_requires_active_context() -> None:
     processor, *_ = _processor()
 
-    assert processor._deterministic_geo_patch(
-        _state(), "А по Самарской области?", "turn-1"
+    assert detect_geo_transition(
+        _state(),
+        "А по Самарской области?",
+        "turn-1",
+        _services(processor),
     ) is None
 
 

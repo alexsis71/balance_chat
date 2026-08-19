@@ -35,7 +35,6 @@ from balance_chat.processor import (
     _extremum_comparison_summary,
     _deterministic_period_mutation,
     _distribution_own_consumers_mentions,
-    _explicit_single_day_period,
     _native_summary_envelope,
     _normalize_series_reduction_intent,
     _comparison_contract_summary,
@@ -51,6 +50,7 @@ from balance_chat.processor import (
     _single_operand_attempt,
     _is_full_balance_show,
 )
+from balance_chat.transitions.period import explicit_single_day_period
 from balance_chat.reducer import apply_context_transition
 from balance_chat.service import TurnProcessingError
 from balance_chat.interpretation import InterpretationError
@@ -177,7 +177,7 @@ def test_volume_contract_removes_plan_fields_and_forces_canonical_unit() -> None
     ],
 )
 def test_explicit_single_day_period_uses_exclusive_end(query, date_from, date_to) -> None:
-    period = _explicit_single_day_period(query)
+    period = explicit_single_day_period(query)
 
     assert period is not None
     assert period.date_from.isoformat() == date_from
@@ -185,8 +185,8 @@ def test_explicit_single_day_period_uses_exclusive_end(query, date_from, date_to
 
 
 def test_explicit_single_day_period_rejects_invalid_or_multiple_dates() -> None:
-    assert _explicit_single_day_period("за 31.02.2025") is None
-    assert _explicit_single_day_period("с 25.06.2025 по 26.06.2025") is None
+    assert explicit_single_day_period("за 31.02.2025") is None
+    assert explicit_single_day_period("с 25.06.2025 по 26.06.2025") is None
 
 
 def test_current_pipeline_multi_region_plan_becomes_separate_operands() -> None:
