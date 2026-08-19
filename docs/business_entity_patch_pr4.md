@@ -257,6 +257,15 @@ The `+79` test delta is additive: 66 transition-level cases and 13
 processor/execution/persistence cases. Existing expected results were not
 removed or weakened.
 
+Node-ID audit:
+
+```text
+baseline nodes: 422
+PR4 nodes:      501
+removed:          0
+added:           79
+```
+
 Live DB-backed acceptance: **NOT RUN**. Dry-run results validate catalog
 coverage only and are not presented as live semantic evidence.
 
