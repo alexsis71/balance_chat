@@ -373,7 +373,15 @@ def test_direction_bound_article_is_rebound_before_balance_day_execution():
 
 def test_full_balance_snapshot_switches_balance_and_skips_summary():
     processor, runtime, interpreter, planner = _processor()
-    state = _state(_intent(balance=MOSCOW_BUSINESS, metric="balance"))
+    active = _intent(balance=MOSCOW_BUSINESS, metric="balance").model_copy(
+        update={
+            "periods": [
+                PeriodRef(date_from="2025-06-25", date_to="2025-06-26")
+            ]
+        },
+        deep=True,
+    )
+    state = _state(active)
 
     processed = processor.process(
         state,
@@ -387,6 +395,7 @@ def test_full_balance_snapshot_switches_balance_and_skips_summary():
     assert processed.outcome == TransitionOutcome.SUCCESS
     assert processed.diagnostics["execution"]["layer"] == "unified_balance_level"
     assert roles["balance"].entity_id == "BAL:4"
+    assert planner.intents[-1].periods == active.periods
     assert runtime.execution_intents[-1].operands[0].entities[0].entity.entity_id == "BAL:4"
     assert runtime.summary_calls == interpreter.calls == 0
 
