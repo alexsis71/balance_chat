@@ -1,0 +1,1842 @@
+{
+  "schema_version": "1.0",
+  "corpus_version": "1.0",
+  "endpoint_health": {
+    "profile": "context",
+    "reachable": false,
+    "structured_outputs": true,
+    "configured_model": "ai-balances-language"
+  },
+  "served_models": [],
+  "metrics": {
+    "eligible_turns": 26,
+    "shadow_invocations": 26,
+    "valid_proposals": 0,
+    "malformed_proposals": 0,
+    "validator_rejections": 0,
+    "timeouts": 0,
+    "unavailable": 26,
+    "proposal_exact_match": 0.1034,
+    "proposal_semantic_match": 0.1034,
+    "valid_typed_output_rate": 0.0,
+    "semantic_proposal_precision": null,
+    "correct_patch": 0,
+    "wrong_patch": 0,
+    "correct_clarify": 0,
+    "wrong_clarify": 4,
+    "unsupported_correct": 0,
+    "unsafe_patch": 0,
+    "unsafe_transition_rate": null,
+    "correct_clarification_rate": 0.0,
+    "repair_coverage": 0.0,
+    "avg_latency_ms": 2032.62,
+    "p50_latency_ms": 2031.0,
+    "p95_latency_ms": 2053,
+    "avg_context_size_chars": 796.85,
+    "repeated_cases": 3,
+    "stable_repeated_cases": 3,
+    "stability_rate": 1.0,
+    "tool_call_count": 0,
+    "repeated_tool_calls": 0,
+    "tool_errors": 0
+  },
+  "cases": [
+    {
+      "id": "reverse_business_direction",
+      "category": "direction_reinterpretation",
+      "message": "А теперь наоборот",
+      "active_state_summary": {
+        "operation": "show",
+        "operands": [
+          {
+            "metric": "distribution",
+            "entities": [
+              {
+                "role": "source",
+                "type": "balance",
+                "label": "ГП ТГ Томск"
+              },
+              {
+                "role": "destination",
+                "type": "balance",
+                "label": "ГП ТГ Сургут"
+              }
+            ]
+          }
+        ],
+        "periods": [
+          {
+            "date_from": "2025-06-01",
+            "date_to": "2025-07-01"
+          }
+        ],
+        "grouping": [],
+        "grain": "total",
+        "comparison": null,
+        "formula": null,
+        "ranking": null
+      },
+      "current_production_outcome": {
+        "source": "agentic_poc_baseline",
+        "status": "no_data",
+        "semantic_match": false
+      },
+      "expected_proposal": {
+        "shadow_invoked": true,
+        "action": "patch",
+        "mutations": [
+          {
+            "kind": "swap_direction",
+            "value": null
+          }
+        ],
+        "references": []
+      },
+      "runs": [
+        {
+          "repeat": 1,
+          "shadow": {
+            "eligible": true,
+            "invoked": true,
+            "proposal": null,
+            "validation_status": "unavailable",
+            "validation_errors": [
+              "unavailable"
+            ],
+            "latency_ms": 2053,
+            "model": null,
+            "context_turn_count": 1,
+            "context_result_count": 1,
+            "context_size_chars": 783
+          },
+          "proposal_signature": null,
+          "exact_match": false,
+          "semantic_match": false,
+          "unsafe_patch": false,
+          "classification": "SHADOW_ABSTAINED"
+        },
+        {
+          "repeat": 2,
+          "shadow": {
+            "eligible": true,
+            "invoked": true,
+            "proposal": null,
+            "validation_status": "unavailable",
+            "validation_errors": [
+              "unavailable"
+            ],
+            "latency_ms": 2051,
+            "model": null,
+            "context_turn_count": 1,
+            "context_result_count": 1,
+            "context_size_chars": 783
+          },
+          "proposal_signature": null,
+          "exact_match": false,
+          "semantic_match": false,
+          "unsafe_patch": false,
+          "classification": "SHADOW_ABSTAINED"
+        },
+        {
+          "repeat": 3,
+          "shadow": {
+            "eligible": true,
+            "invoked": true,
+            "proposal": null,
+            "validation_status": "unavailable",
+            "validation_errors": [
+              "unavailable"
+            ],
+            "latency_ms": 2041,
+            "model": null,
+            "context_turn_count": 1,
+            "context_result_count": 1,
+            "context_size_chars": 783
+          },
+          "proposal_signature": null,
+          "exact_match": false,
+          "semantic_match": false,
+          "unsafe_patch": false,
+          "classification": "SHADOW_ABSTAINED"
+        }
+      ],
+      "stable": true
+    },
+    {
+      "id": "reverse_direction_explicit",
+      "category": "direction_reinterpretation",
+      "message": "Покажи обратное направление",
+      "active_state_summary": {
+        "operation": "show",
+        "operands": [
+          {
+            "metric": "distribution",
+            "entities": [
+              {
+                "role": "source",
+                "type": "balance",
+                "label": "ГП ТГ Томск"
+              },
+              {
+                "role": "destination",
+                "type": "balance",
+                "label": "ГП ТГ Сургут"
+              }
+            ]
+          }
+        ],
+        "periods": [
+          {
+            "date_from": "2025-06-01",
+            "date_to": "2025-07-01"
+          }
+        ],
+        "grouping": [],
+        "grain": "total",
+        "comparison": null,
+        "formula": null,
+        "ranking": null
+      },
+      "current_production_outcome": {
+        "source": "not_reexecuted",
+        "status": "existing_contextual_path",
+        "semantic_match": null
+      },
+      "expected_proposal": {
+        "shadow_invoked": true,
+        "action": "patch",
+        "mutations": [
+          {
+            "kind": "swap_direction",
+            "value": null
+          }
+        ],
+        "references": []
+      },
+      "runs": [
+        {
+          "repeat": 1,
+          "shadow": {
+            "eligible": true,
+            "invoked": true,
+            "proposal": null,
+            "validation_status": "unavailable",
+            "validation_errors": [
+              "unavailable"
+            ],
+            "latency_ms": 2027,
+            "model": null,
+            "context_turn_count": 1,
+            "context_result_count": 1,
+            "context_size_chars": 793
+          },
+          "proposal_signature": null,
+          "exact_match": false,
+          "semantic_match": false,
+          "unsafe_patch": false,
+          "classification": "SHADOW_ABSTAINED"
+        }
+      ],
+      "stable": true
+    },
+    {
+      "id": "reverse_direction_short",
+      "category": "direction_reinterpretation",
+      "message": "Обратно",
+      "active_state_summary": {
+        "operation": "show",
+        "operands": [
+          {
+            "metric": "distribution",
+            "entities": [
+              {
+                "role": "source",
+                "type": "balance",
+                "label": "ГП ТГ Томск"
+              },
+              {
+                "role": "destination",
+                "type": "balance",
+                "label": "ГП ТГ Сургут"
+              }
+            ]
+          }
+        ],
+        "periods": [
+          {
+            "date_from": "2025-06-01",
+            "date_to": "2025-07-01"
+          }
+        ],
+        "grouping": [],
+        "grain": "total",
+        "comparison": null,
+        "formula": null,
+        "ranking": null
+      },
+      "current_production_outcome": {
+        "source": "agentic_poc_baseline",
+        "status": "no_data",
+        "semantic_match": false
+      },
+      "expected_proposal": {
+        "shadow_invoked": true,
+        "action": "patch",
+        "mutations": [
+          {
+            "kind": "swap_direction",
+            "value": null
+          }
+        ],
+        "references": []
+      },
+      "runs": [
+        {
+          "repeat": 1,
+          "shadow": {
+            "eligible": true,
+            "invoked": true,
+            "proposal": null,
+            "validation_status": "unavailable",
+            "validation_errors": [
+              "unavailable"
+            ],
+            "latency_ms": 2035,
+            "model": null,
+            "context_turn_count": 1,
+            "context_result_count": 1,
+            "context_size_chars": 773
+          },
+          "proposal_signature": null,
+          "exact_match": false,
+          "semantic_match": false,
+          "unsafe_patch": false,
+          "classification": "SHADOW_ABSTAINED"
+        }
+      ],
+      "stable": true
+    },
+    {
+      "id": "compare_bare",
+      "category": "comparison_continuation",
+      "message": "Сравни",
+      "active_state_summary": {
+        "operation": "show",
+        "operands": [
+          {
+            "metric": "distribution",
+            "entities": [
+              {
+                "role": "destination",
+                "type": "geo_object",
+                "label": "Ростовская область"
+              }
+            ]
+          }
+        ],
+        "periods": [
+          {
+            "date_from": "2025-05-01",
+            "date_to": "2025-06-01"
+          }
+        ],
+        "grouping": [],
+        "grain": "total",
+        "comparison": null,
+        "formula": null,
+        "ranking": null
+      },
+      "current_production_outcome": {
+        "source": "agentic_poc_baseline",
+        "status": "needs_clarification",
+        "semantic_match": false
+      },
+      "expected_proposal": {
+        "shadow_invoked": true,
+        "action": "patch",
+        "mutations": [
+          {
+            "kind": "set_operation",
+            "value": "compare"
+          },
+          {
+            "kind": "set_comparison",
+            "value": "last_two_results"
+          }
+        ],
+        "references": [
+          {
+            "kind": "last_two_results",
+            "selector": null
+          }
+        ]
+      },
+      "runs": [
+        {
+          "repeat": 1,
+          "shadow": {
+            "eligible": true,
+            "invoked": true,
+            "proposal": null,
+            "validation_status": "unavailable",
+            "validation_errors": [
+              "unavailable"
+            ],
+            "latency_ms": 2055,
+            "model": null,
+            "context_turn_count": 2,
+            "context_result_count": 2,
+            "context_size_chars": 869
+          },
+          "proposal_signature": null,
+          "exact_match": false,
+          "semantic_match": false,
+          "unsafe_patch": false,
+          "classification": "SHADOW_ABSTAINED"
+        }
+      ],
+      "stable": true
+    },
+    {
+      "id": "compare_pronoun",
+      "category": "comparison_continuation",
+      "message": "Сравни их",
+      "active_state_summary": {
+        "operation": "show",
+        "operands": [
+          {
+            "metric": "distribution",
+            "entities": [
+              {
+                "role": "destination",
+                "type": "geo_object",
+                "label": "Ростовская область"
+              }
+            ]
+          }
+        ],
+        "periods": [
+          {
+            "date_from": "2025-05-01",
+            "date_to": "2025-06-01"
+          }
+        ],
+        "grouping": [],
+        "grain": "total",
+        "comparison": null,
+        "formula": null,
+        "ranking": null
+      },
+      "current_production_outcome": {
+        "source": "agentic_poc_baseline",
+        "status": "error",
+        "semantic_match": false
+      },
+      "expected_proposal": {
+        "shadow_invoked": true,
+        "action": "patch",
+        "mutations": [
+          {
+            "kind": "set_operation",
+            "value": "compare"
+          },
+          {
+            "kind": "set_comparison",
+            "value": "last_two_results"
+          }
+        ],
+        "references": [
+          {
+            "kind": "last_two_results",
+            "selector": null
+          }
+        ]
+      },
+      "runs": [
+        {
+          "repeat": 1,
+          "shadow": {
+            "eligible": true,
+            "invoked": true,
+            "proposal": null,
+            "validation_status": "unavailable",
+            "validation_errors": [
+              "unavailable"
+            ],
+            "latency_ms": 2025,
+            "model": null,
+            "context_turn_count": 2,
+            "context_result_count": 2,
+            "context_size_chars": 872
+          },
+          "proposal_signature": null,
+          "exact_match": false,
+          "semantic_match": false,
+          "unsafe_patch": false,
+          "classification": "SHADOW_ABSTAINED"
+        },
+        {
+          "repeat": 2,
+          "shadow": {
+            "eligible": true,
+            "invoked": true,
+            "proposal": null,
+            "validation_status": "unavailable",
+            "validation_errors": [
+              "unavailable"
+            ],
+            "latency_ms": 2046,
+            "model": null,
+            "context_turn_count": 2,
+            "context_result_count": 2,
+            "context_size_chars": 872
+          },
+          "proposal_signature": null,
+          "exact_match": false,
+          "semantic_match": false,
+          "unsafe_patch": false,
+          "classification": "SHADOW_ABSTAINED"
+        },
+        {
+          "repeat": 3,
+          "shadow": {
+            "eligible": true,
+            "invoked": true,
+            "proposal": null,
+            "validation_status": "unavailable",
+            "validation_errors": [
+              "unavailable"
+            ],
+            "latency_ms": 2019,
+            "model": null,
+            "context_turn_count": 2,
+            "context_result_count": 2,
+            "context_size_chars": 872
+          },
+          "proposal_signature": null,
+          "exact_match": false,
+          "semantic_match": false,
+          "unsafe_patch": false,
+          "classification": "SHADOW_ABSTAINED"
+        }
+      ],
+      "stable": true
+    },
+    {
+      "id": "compare_last_two",
+      "category": "comparison_continuation",
+      "message": "Сравни последние два",
+      "active_state_summary": {
+        "operation": "show",
+        "operands": [
+          {
+            "metric": "distribution",
+            "entities": [
+              {
+                "role": "destination",
+                "type": "geo_object",
+                "label": "Ростовская область"
+              }
+            ]
+          }
+        ],
+        "periods": [
+          {
+            "date_from": "2025-05-01",
+            "date_to": "2025-06-01"
+          }
+        ],
+        "grouping": [],
+        "grain": "total",
+        "comparison": null,
+        "formula": null,
+        "ranking": null
+      },
+      "current_production_outcome": {
+        "source": "not_reexecuted",
+        "status": "existing_contextual_path",
+        "semantic_match": null
+      },
+      "expected_proposal": {
+        "shadow_invoked": true,
+        "action": "patch",
+        "mutations": [
+          {
+            "kind": "set_operation",
+            "value": "compare"
+          },
+          {
+            "kind": "set_comparison",
+            "value": "last_two_results"
+          }
+        ],
+        "references": [
+          {
+            "kind": "last_two_results",
+            "selector": null
+          }
+        ]
+      },
+      "runs": [
+        {
+          "repeat": 1,
+          "shadow": {
+            "eligible": true,
+            "invoked": true,
+            "proposal": null,
+            "validation_status": "unavailable",
+            "validation_errors": [
+              "unavailable"
+            ],
+            "latency_ms": 2015,
+            "model": null,
+            "context_turn_count": 2,
+            "context_result_count": 2,
+            "context_size_chars": 883
+          },
+          "proposal_signature": null,
+          "exact_match": false,
+          "semantic_match": false,
+          "unsafe_patch": false,
+          "classification": "SHADOW_ABSTAINED"
+        }
+      ],
+      "stable": true
+    },
+    {
+      "id": "compare_named_seasons",
+      "category": "comparison_continuation",
+      "message": "Сравни весну и лето",
+      "active_state_summary": {
+        "operation": "show",
+        "operands": [
+          {
+            "metric": "distribution",
+            "entities": [
+              {
+                "role": "destination",
+                "type": "geo_object",
+                "label": "Ростовская область"
+              }
+            ]
+          }
+        ],
+        "periods": [
+          {
+            "date_from": "2025-05-01",
+            "date_to": "2025-06-01"
+          }
+        ],
+        "grouping": [],
+        "grain": "total",
+        "comparison": null,
+        "formula": null,
+        "ranking": null
+      },
+      "current_production_outcome": {
+        "source": "not_reexecuted",
+        "status": "existing_contextual_path",
+        "semantic_match": null
+      },
+      "expected_proposal": {
+        "shadow_invoked": true,
+        "action": "patch",
+        "mutations": [
+          {
+            "kind": "set_operation",
+            "value": "compare"
+          },
+          {
+            "kind": "set_comparison",
+            "value": "named_periods"
+          }
+        ],
+        "references": []
+      },
+      "runs": [
+        {
+          "repeat": 1,
+          "shadow": {
+            "eligible": true,
+            "invoked": true,
+            "proposal": null,
+            "validation_status": "unavailable",
+            "validation_errors": [
+              "unavailable"
+            ],
+            "latency_ms": 2017,
+            "model": null,
+            "context_turn_count": 2,
+            "context_result_count": 2,
+            "context_size_chars": 882
+          },
+          "proposal_signature": null,
+          "exact_match": false,
+          "semantic_match": false,
+          "unsafe_patch": false,
+          "classification": "SHADOW_ABSTAINED"
+        }
+      ],
+      "stable": true
+    },
+    {
+      "id": "absolute_difference",
+      "category": "calculation_transformation",
+      "message": "Какова разница?",
+      "active_state_summary": {
+        "operation": "show",
+        "operands": [
+          {
+            "metric": "distribution",
+            "entities": [
+              {
+                "role": "destination",
+                "type": "geo_object",
+                "label": "Ростовская область"
+              }
+            ]
+          }
+        ],
+        "periods": [
+          {
+            "date_from": "2025-05-01",
+            "date_to": "2025-06-01"
+          }
+        ],
+        "grouping": [],
+        "grain": "total",
+        "comparison": null,
+        "formula": null,
+        "ranking": null
+      },
+      "current_production_outcome": {
+        "source": "not_reexecuted",
+        "status": "existing_contextual_path",
+        "semantic_match": null
+      },
+      "expected_proposal": {
+        "shadow_invoked": true,
+        "action": "patch",
+        "mutations": [
+          {
+            "kind": "set_operation",
+            "value": "calculate"
+          },
+          {
+            "kind": "set_comparison",
+            "value": "absolute_difference"
+          }
+        ],
+        "references": [
+          {
+            "kind": "last_two_results",
+            "selector": null
+          }
+        ]
+      },
+      "runs": [
+        {
+          "repeat": 1,
+          "shadow": {
+            "eligible": true,
+            "invoked": true,
+            "proposal": null,
+            "validation_status": "unavailable",
+            "validation_errors": [
+              "unavailable"
+            ],
+            "latency_ms": 2028,
+            "model": null,
+            "context_turn_count": 2,
+            "context_result_count": 2,
+            "context_size_chars": 878
+          },
+          "proposal_signature": null,
+          "exact_match": false,
+          "semantic_match": false,
+          "unsafe_patch": false,
+          "classification": "SHADOW_ABSTAINED"
+        }
+      ],
+      "stable": true
+    },
+    {
+      "id": "percent_difference",
+      "category": "calculation_transformation",
+      "message": "Какова разница в процентах?",
+      "active_state_summary": {
+        "operation": "show",
+        "operands": [
+          {
+            "metric": "distribution",
+            "entities": [
+              {
+                "role": "destination",
+                "type": "geo_object",
+                "label": "Ростовская область"
+              }
+            ]
+          }
+        ],
+        "periods": [
+          {
+            "date_from": "2025-05-01",
+            "date_to": "2025-06-01"
+          }
+        ],
+        "grouping": [],
+        "grain": "total",
+        "comparison": null,
+        "formula": null,
+        "ranking": null
+      },
+      "current_production_outcome": {
+        "source": "agentic_poc_baseline",
+        "status": "ok",
+        "semantic_match": false
+      },
+      "expected_proposal": {
+        "shadow_invoked": true,
+        "action": "patch",
+        "mutations": [
+          {
+            "kind": "set_operation",
+            "value": "calculate"
+          },
+          {
+            "kind": "set_comparison",
+            "value": "percent_difference"
+          }
+        ],
+        "references": [
+          {
+            "kind": "last_two_results",
+            "selector": null
+          }
+        ]
+      },
+      "runs": [
+        {
+          "repeat": 1,
+          "shadow": {
+            "eligible": true,
+            "invoked": true,
+            "proposal": null,
+            "validation_status": "unavailable",
+            "validation_errors": [
+              "unavailable"
+            ],
+            "latency_ms": 2016,
+            "model": null,
+            "context_turn_count": 2,
+            "context_result_count": 2,
+            "context_size_chars": 890
+          },
+          "proposal_signature": null,
+          "exact_match": false,
+          "semantic_match": false,
+          "unsafe_patch": false,
+          "classification": "SHADOW_ABSTAINED"
+        },
+        {
+          "repeat": 2,
+          "shadow": {
+            "eligible": true,
+            "invoked": true,
+            "proposal": null,
+            "validation_status": "unavailable",
+            "validation_errors": [
+              "unavailable"
+            ],
+            "latency_ms": 2042,
+            "model": null,
+            "context_turn_count": 2,
+            "context_result_count": 2,
+            "context_size_chars": 890
+          },
+          "proposal_signature": null,
+          "exact_match": false,
+          "semantic_match": false,
+          "unsafe_patch": false,
+          "classification": "SHADOW_ABSTAINED"
+        },
+        {
+          "repeat": 3,
+          "shadow": {
+            "eligible": true,
+            "invoked": true,
+            "proposal": null,
+            "validation_status": "unavailable",
+            "validation_errors": [
+              "unavailable"
+            ],
+            "latency_ms": 2029,
+            "model": null,
+            "context_turn_count": 2,
+            "context_result_count": 2,
+            "context_size_chars": 890
+          },
+          "proposal_signature": null,
+          "exact_match": false,
+          "semantic_match": false,
+          "unsafe_patch": false,
+          "classification": "SHADOW_ABSTAINED"
+        }
+      ],
+      "stable": true
+    },
+    {
+      "id": "larger_value",
+      "category": "calculation_transformation",
+      "message": "Что больше?",
+      "active_state_summary": {
+        "operation": "show",
+        "operands": [
+          {
+            "metric": "distribution",
+            "entities": [
+              {
+                "role": "destination",
+                "type": "geo_object",
+                "label": "Ростовская область"
+              }
+            ]
+          }
+        ],
+        "periods": [
+          {
+            "date_from": "2025-05-01",
+            "date_to": "2025-06-01"
+          }
+        ],
+        "grouping": [],
+        "grain": "total",
+        "comparison": null,
+        "formula": null,
+        "ranking": null
+      },
+      "current_production_outcome": {
+        "source": "not_reexecuted",
+        "status": "existing_contextual_path",
+        "semantic_match": null
+      },
+      "expected_proposal": {
+        "shadow_invoked": true,
+        "action": "patch",
+        "mutations": [
+          {
+            "kind": "set_operation",
+            "value": "compare"
+          },
+          {
+            "kind": "set_comparison",
+            "value": "larger_value"
+          }
+        ],
+        "references": [
+          {
+            "kind": "last_two_results",
+            "selector": null
+          }
+        ]
+      },
+      "runs": [
+        {
+          "repeat": 1,
+          "shadow": {
+            "eligible": true,
+            "invoked": true,
+            "proposal": null,
+            "validation_status": "unavailable",
+            "validation_errors": [
+              "unavailable"
+            ],
+            "latency_ms": 2029,
+            "model": null,
+            "context_turn_count": 2,
+            "context_result_count": 2,
+            "context_size_chars": 874
+          },
+          "proposal_signature": null,
+          "exact_match": false,
+          "semantic_match": false,
+          "unsafe_patch": false,
+          "classification": "SHADOW_ABSTAINED"
+        }
+      ],
+      "stable": true
+    },
+    {
+      "id": "correction_geo",
+      "category": "correction",
+      "message": "Нет, я имел в виду Нижний Новгород",
+      "active_state_summary": {
+        "operation": "show",
+        "operands": [
+          {
+            "metric": "distribution",
+            "entities": [
+              {
+                "role": "destination",
+                "type": "geo_object",
+                "label": "Ростовская область"
+              }
+            ]
+          }
+        ],
+        "periods": [
+          {
+            "date_from": "2025-04-01",
+            "date_to": "2025-05-01"
+          }
+        ],
+        "grouping": [],
+        "grain": "total",
+        "comparison": null,
+        "formula": null,
+        "ranking": null
+      },
+      "current_production_outcome": {
+        "source": "not_reexecuted",
+        "status": "existing_contextual_path",
+        "semantic_match": null
+      },
+      "expected_proposal": {
+        "shadow_invoked": true,
+        "action": "clarify"
+      },
+      "runs": [
+        {
+          "repeat": 1,
+          "shadow": {
+            "eligible": true,
+            "invoked": true,
+            "proposal": null,
+            "validation_status": "unavailable",
+            "validation_errors": [
+              "unavailable"
+            ],
+            "latency_ms": 2018,
+            "model": null,
+            "context_turn_count": 1,
+            "context_result_count": 1,
+            "context_size_chars": 660
+          },
+          "proposal_signature": null,
+          "exact_match": false,
+          "semantic_match": false,
+          "unsafe_patch": false,
+          "classification": "SHADOW_ABSTAINED"
+        }
+      ],
+      "stable": true
+    },
+    {
+      "id": "correction_business",
+      "category": "correction",
+      "message": "Нет, только Ухта",
+      "active_state_summary": {
+        "operation": "show",
+        "operands": [
+          {
+            "metric": "distribution",
+            "entities": [
+              {
+                "role": "destination",
+                "type": "geo_object",
+                "label": "Ростовская область"
+              }
+            ]
+          }
+        ],
+        "periods": [
+          {
+            "date_from": "2025-04-01",
+            "date_to": "2025-05-01"
+          }
+        ],
+        "grouping": [],
+        "grain": "total",
+        "comparison": null,
+        "formula": null,
+        "ranking": null
+      },
+      "current_production_outcome": {
+        "source": "not_reexecuted",
+        "status": "existing_contextual_path",
+        "semantic_match": null
+      },
+      "expected_proposal": {
+        "shadow_invoked": true,
+        "action": "clarify"
+      },
+      "runs": [
+        {
+          "repeat": 1,
+          "shadow": {
+            "eligible": true,
+            "invoked": true,
+            "proposal": null,
+            "validation_status": "unavailable",
+            "validation_errors": [
+              "unavailable"
+            ],
+            "latency_ms": 2033,
+            "model": null,
+            "context_turn_count": 1,
+            "context_result_count": 1,
+            "context_size_chars": 642
+          },
+          "proposal_signature": null,
+          "exact_match": false,
+          "semantic_match": false,
+          "unsafe_patch": false,
+          "classification": "SHADOW_ABSTAINED"
+        }
+      ],
+      "stable": true
+    },
+    {
+      "id": "reference_first",
+      "category": "references",
+      "message": "Первый из тех двух",
+      "active_state_summary": {
+        "operation": "show",
+        "operands": [
+          {
+            "metric": "distribution",
+            "entities": [
+              {
+                "role": "destination",
+                "type": "geo_object",
+                "label": "Ростовская область"
+              }
+            ]
+          }
+        ],
+        "periods": [
+          {
+            "date_from": "2025-05-01",
+            "date_to": "2025-06-01"
+          }
+        ],
+        "grouping": [],
+        "grain": "total",
+        "comparison": null,
+        "formula": null,
+        "ranking": null
+      },
+      "current_production_outcome": {
+        "source": "not_reexecuted",
+        "status": "existing_contextual_path",
+        "semantic_match": null
+      },
+      "expected_proposal": {
+        "shadow_invoked": true,
+        "action": "patch",
+        "mutations": [
+          {
+            "kind": "reference_prior_result",
+            "value": null
+          }
+        ],
+        "references": [
+          {
+            "kind": "last_two_results",
+            "selector": "first"
+          }
+        ]
+      },
+      "runs": [
+        {
+          "repeat": 1,
+          "shadow": {
+            "eligible": true,
+            "invoked": true,
+            "proposal": null,
+            "validation_status": "unavailable",
+            "validation_errors": [
+              "unavailable"
+            ],
+            "latency_ms": 2038,
+            "model": null,
+            "context_turn_count": 2,
+            "context_result_count": 2,
+            "context_size_chars": 881
+          },
+          "proposal_signature": null,
+          "exact_match": false,
+          "semantic_match": false,
+          "unsafe_patch": false,
+          "classification": "SHADOW_ABSTAINED"
+        }
+      ],
+      "stable": true
+    },
+    {
+      "id": "reference_second",
+      "category": "references",
+      "message": "Возьми второй вариант",
+      "active_state_summary": {
+        "operation": "show",
+        "operands": [
+          {
+            "metric": "distribution",
+            "entities": [
+              {
+                "role": "destination",
+                "type": "geo_object",
+                "label": "Ростовская область"
+              }
+            ]
+          }
+        ],
+        "periods": [
+          {
+            "date_from": "2025-05-01",
+            "date_to": "2025-06-01"
+          }
+        ],
+        "grouping": [],
+        "grain": "total",
+        "comparison": null,
+        "formula": null,
+        "ranking": null
+      },
+      "current_production_outcome": {
+        "source": "not_reexecuted",
+        "status": "existing_contextual_path",
+        "semantic_match": null
+      },
+      "expected_proposal": {
+        "shadow_invoked": true,
+        "action": "patch",
+        "mutations": [
+          {
+            "kind": "reference_prior_result",
+            "value": null
+          }
+        ],
+        "references": [
+          {
+            "kind": "last_two_results",
+            "selector": "second"
+          }
+        ]
+      },
+      "runs": [
+        {
+          "repeat": 1,
+          "shadow": {
+            "eligible": true,
+            "invoked": true,
+            "proposal": null,
+            "validation_status": "unavailable",
+            "validation_errors": [
+              "unavailable"
+            ],
+            "latency_ms": 2035,
+            "model": null,
+            "context_turn_count": 2,
+            "context_result_count": 2,
+            "context_size_chars": 884
+          },
+          "proposal_signature": null,
+          "exact_match": false,
+          "semantic_match": false,
+          "unsafe_patch": false,
+          "classification": "SHADOW_ABSTAINED"
+        }
+      ],
+      "stable": true
+    },
+    {
+      "id": "same_for_first",
+      "category": "references",
+      "message": "То же для первого",
+      "active_state_summary": {
+        "operation": "show",
+        "operands": [
+          {
+            "metric": "distribution",
+            "entities": [
+              {
+                "role": "destination",
+                "type": "geo_object",
+                "label": "Ростовская область"
+              }
+            ]
+          }
+        ],
+        "periods": [
+          {
+            "date_from": "2025-05-01",
+            "date_to": "2025-06-01"
+          }
+        ],
+        "grouping": [],
+        "grain": "total",
+        "comparison": null,
+        "formula": null,
+        "ranking": null
+      },
+      "current_production_outcome": {
+        "source": "not_reexecuted",
+        "status": "existing_contextual_path",
+        "semantic_match": null
+      },
+      "expected_proposal": {
+        "shadow_invoked": true,
+        "action": "patch",
+        "mutations": [
+          {
+            "kind": "reference_prior_result",
+            "value": null
+          }
+        ],
+        "references": [
+          {
+            "kind": "last_two_results",
+            "selector": "first"
+          }
+        ]
+      },
+      "runs": [
+        {
+          "repeat": 1,
+          "shadow": {
+            "eligible": true,
+            "invoked": true,
+            "proposal": null,
+            "validation_status": "unavailable",
+            "validation_errors": [
+              "unavailable"
+            ],
+            "latency_ms": 2019,
+            "model": null,
+            "context_turn_count": 2,
+            "context_result_count": 2,
+            "context_size_chars": 880
+          },
+          "proposal_signature": null,
+          "exact_match": false,
+          "semantic_match": false,
+          "unsafe_patch": false,
+          "classification": "SHADOW_ABSTAINED"
+        }
+      ],
+      "stable": true
+    },
+    {
+      "id": "ambiguous_pronoun_single_result",
+      "category": "ambiguous",
+      "message": "Сравни их",
+      "active_state_summary": {
+        "operation": "show",
+        "operands": [
+          {
+            "metric": "balance",
+            "entities": [
+              {
+                "role": "balance",
+                "type": "balance",
+                "label": "ГП ТГ Ухта"
+              }
+            ]
+          }
+        ],
+        "periods": [
+          {
+            "date_from": "2025-06-25",
+            "date_to": "2025-06-26"
+          }
+        ],
+        "grouping": [],
+        "grain": "day",
+        "comparison": null,
+        "formula": null,
+        "ranking": null
+      },
+      "current_production_outcome": {
+        "source": "not_reexecuted",
+        "status": "existing_contextual_path",
+        "semantic_match": null
+      },
+      "expected_proposal": {
+        "shadow_invoked": true,
+        "action": "clarify"
+      },
+      "runs": [
+        {
+          "repeat": 1,
+          "shadow": {
+            "eligible": true,
+            "invoked": true,
+            "proposal": null,
+            "validation_status": "unavailable",
+            "validation_errors": [
+              "unavailable"
+            ],
+            "latency_ms": 2037,
+            "model": null,
+            "context_turn_count": 1,
+            "context_result_count": 1,
+            "context_size_chars": 596
+          },
+          "proposal_signature": null,
+          "exact_match": false,
+          "semantic_match": false,
+          "unsafe_patch": false,
+          "classification": "SHADOW_ABSTAINED"
+        }
+      ],
+      "stable": true
+    },
+    {
+      "id": "ambiguous_first_without_pair",
+      "category": "ambiguous",
+      "message": "Первый из тех двух",
+      "active_state_summary": {
+        "operation": "show",
+        "operands": [
+          {
+            "metric": "balance",
+            "entities": [
+              {
+                "role": "balance",
+                "type": "balance",
+                "label": "ГП ТГ Ухта"
+              }
+            ]
+          }
+        ],
+        "periods": [
+          {
+            "date_from": "2025-06-25",
+            "date_to": "2025-06-26"
+          }
+        ],
+        "grouping": [],
+        "grain": "day",
+        "comparison": null,
+        "formula": null,
+        "ranking": null
+      },
+      "current_production_outcome": {
+        "source": "not_reexecuted",
+        "status": "existing_contextual_path",
+        "semantic_match": null
+      },
+      "expected_proposal": {
+        "shadow_invoked": true,
+        "action": "clarify"
+      },
+      "runs": [
+        {
+          "repeat": 1,
+          "shadow": {
+            "eligible": true,
+            "invoked": true,
+            "proposal": null,
+            "validation_status": "unavailable",
+            "validation_errors": [
+              "unavailable"
+            ],
+            "latency_ms": 2041,
+            "model": null,
+            "context_turn_count": 1,
+            "context_result_count": 1,
+            "context_size_chars": 605
+          },
+          "proposal_signature": null,
+          "exact_match": false,
+          "semantic_match": false,
+          "unsafe_patch": false,
+          "classification": "SHADOW_ABSTAINED"
+        }
+      ],
+      "stable": true
+    },
+    {
+      "id": "unsupported_forecast",
+      "category": "unsupported",
+      "message": "Спрогнозируй значение на следующий год",
+      "active_state_summary": {
+        "operation": "show",
+        "operands": [
+          {
+            "metric": "distribution",
+            "entities": [
+              {
+                "role": "destination",
+                "type": "geo_object",
+                "label": "Ростовская область"
+              }
+            ]
+          }
+        ],
+        "periods": [
+          {
+            "date_from": "2025-04-01",
+            "date_to": "2025-05-01"
+          }
+        ],
+        "grouping": [],
+        "grain": "total",
+        "comparison": null,
+        "formula": null,
+        "ranking": null
+      },
+      "current_production_outcome": {
+        "source": "not_reexecuted",
+        "status": "unsupported",
+        "semantic_match": true
+      },
+      "expected_proposal": {
+        "shadow_invoked": true,
+        "action": "unsupported"
+      },
+      "runs": [
+        {
+          "repeat": 1,
+          "shadow": {
+            "eligible": true,
+            "invoked": true,
+            "proposal": null,
+            "validation_status": "unavailable",
+            "validation_errors": [
+              "unavailable"
+            ],
+            "latency_ms": 2028,
+            "model": null,
+            "context_turn_count": 1,
+            "context_result_count": 1,
+            "context_size_chars": 664
+          },
+          "proposal_signature": null,
+          "exact_match": false,
+          "semantic_match": false,
+          "unsafe_patch": false,
+          "classification": "SHADOW_ABSTAINED"
+        }
+      ],
+      "stable": true
+    },
+    {
+      "id": "unsupported_causal",
+      "category": "unsupported",
+      "message": "Объясни внешние причины этого изменения",
+      "active_state_summary": {
+        "operation": "show",
+        "operands": [
+          {
+            "metric": "distribution",
+            "entities": [
+              {
+                "role": "destination",
+                "type": "geo_object",
+                "label": "Ростовская область"
+              }
+            ]
+          }
+        ],
+        "periods": [
+          {
+            "date_from": "2025-04-01",
+            "date_to": "2025-05-01"
+          }
+        ],
+        "grouping": [],
+        "grain": "total",
+        "comparison": null,
+        "formula": null,
+        "ranking": null
+      },
+      "current_production_outcome": {
+        "source": "not_reexecuted",
+        "status": "unsupported",
+        "semantic_match": true
+      },
+      "expected_proposal": {
+        "shadow_invoked": true,
+        "action": "unsupported"
+      },
+      "runs": [
+        {
+          "repeat": 1,
+          "shadow": {
+            "eligible": true,
+            "invoked": true,
+            "proposal": null,
+            "validation_status": "unavailable",
+            "validation_errors": [
+              "unavailable"
+            ],
+            "latency_ms": 2046,
+            "model": null,
+            "context_turn_count": 1,
+            "context_result_count": 1,
+            "context_size_chars": 665
+          },
+          "proposal_signature": null,
+          "exact_match": false,
+          "semantic_match": false,
+          "unsafe_patch": false,
+          "classification": "SHADOW_ABSTAINED"
+        }
+      ],
+      "stable": true
+    },
+    {
+      "id": "unsupported_sql",
+      "category": "unsupported",
+      "message": "Напиши SQL для этого запроса",
+      "active_state_summary": {
+        "operation": "show",
+        "operands": [
+          {
+            "metric": "distribution",
+            "entities": [
+              {
+                "role": "destination",
+                "type": "geo_object",
+                "label": "Ростовская область"
+              }
+            ]
+          }
+        ],
+        "periods": [
+          {
+            "date_from": "2025-04-01",
+            "date_to": "2025-05-01"
+          }
+        ],
+        "grouping": [],
+        "grain": "total",
+        "comparison": null,
+        "formula": null,
+        "ranking": null
+      },
+      "current_production_outcome": {
+        "source": "not_reexecuted",
+        "status": "unsupported",
+        "semantic_match": true
+      },
+      "expected_proposal": {
+        "shadow_invoked": true,
+        "action": "unsupported"
+      },
+      "runs": [
+        {
+          "repeat": 1,
+          "shadow": {
+            "eligible": true,
+            "invoked": true,
+            "proposal": null,
+            "validation_status": "unavailable",
+            "validation_errors": [
+              "unavailable"
+            ],
+            "latency_ms": 2025,
+            "model": null,
+            "context_turn_count": 1,
+            "context_result_count": 1,
+            "context_size_chars": 654
+          },
+          "proposal_signature": null,
+          "exact_match": false,
+          "semantic_match": false,
+          "unsafe_patch": false,
+          "classification": "SHADOW_ABSTAINED"
+        }
+      ],
+      "stable": true
+    },
+    {
+      "id": "geo_switch_control",
+      "category": "deterministic_control",
+      "message": "Теперь в Московскую область",
+      "active_state_summary": {
+        "operation": "show",
+        "operands": [
+          {
+            "metric": "distribution",
+            "entities": [
+              {
+                "role": "destination",
+                "type": "geo_object",
+                "label": "Ростовская область"
+              }
+            ]
+          }
+        ],
+        "periods": [
+          {
+            "date_from": "2025-04-01",
+            "date_to": "2025-05-01"
+          }
+        ],
+        "grouping": [],
+        "grain": "total",
+        "comparison": null,
+        "formula": null,
+        "ranking": null
+      },
+      "current_production_outcome": {
+        "source": "PR4a",
+        "status": "deterministic_geo_patch",
+        "semantic_match": true
+      },
+      "expected_proposal": {
+        "shadow_invoked": false
+      },
+      "runs": [
+        {
+          "repeat": 1,
+          "shadow": {
+            "eligible": false,
+            "invoked": false,
+            "proposal": null,
+            "validation_status": "skipped",
+            "validation_errors": [],
+            "latency_ms": null,
+            "model": null,
+            "context_turn_count": 0,
+            "context_result_count": 0,
+            "context_size_chars": 0
+          },
+          "proposal_signature": null,
+          "exact_match": true,
+          "semantic_match": true,
+          "unsafe_patch": false,
+          "classification": "SHADOW_NEUTRAL"
+        }
+      ],
+      "stable": true
+    },
+    {
+      "id": "period_switch_control",
+      "category": "deterministic_control",
+      "message": "А за май?",
+      "active_state_summary": {
+        "operation": "show",
+        "operands": [
+          {
+            "metric": "distribution",
+            "entities": [
+              {
+                "role": "destination",
+                "type": "geo_object",
+                "label": "Ростовская область"
+              }
+            ]
+          }
+        ],
+        "periods": [
+          {
+            "date_from": "2025-04-01",
+            "date_to": "2025-05-01"
+          }
+        ],
+        "grouping": [],
+        "grain": "total",
+        "comparison": null,
+        "formula": null,
+        "ranking": null
+      },
+      "current_production_outcome": {
+        "source": "PR4a",
+        "status": "deterministic_period_patch",
+        "semantic_match": true
+      },
+      "expected_proposal": {
+        "shadow_invoked": false
+      },
+      "runs": [
+        {
+          "repeat": 1,
+          "shadow": {
+            "eligible": false,
+            "invoked": false,
+            "proposal": null,
+            "validation_status": "skipped",
+            "validation_errors": [],
+            "latency_ms": null,
+            "model": null,
+            "context_turn_count": 0,
+            "context_result_count": 0,
+            "context_size_chars": 0
+          },
+          "proposal_signature": null,
+          "exact_match": true,
+          "semantic_match": true,
+          "unsafe_patch": false,
+          "classification": "SHADOW_NEUTRAL"
+        }
+      ],
+      "stable": true
+    },
+    {
+      "id": "business_switch_control",
+      "category": "deterministic_control",
+      "message": "Только из ГП ТГ Ухта",
+      "active_state_summary": {
+        "operation": "show",
+        "operands": [
+          {
+            "metric": "distribution",
+            "entities": [
+              {
+                "role": "destination",
+                "type": "geo_object",
+                "label": "Ростовская область"
+              }
+            ]
+          }
+        ],
+        "periods": [
+          {
+            "date_from": "2025-04-01",
+            "date_to": "2025-05-01"
+          }
+        ],
+        "grouping": [],
+        "grain": "total",
+        "comparison": null,
+        "formula": null,
+        "ranking": null
+      },
+      "current_production_outcome": {
+        "source": "PR4a",
+        "status": "deterministic_business_entity_patch",
+        "semantic_match": true
+      },
+      "expected_proposal": {
+        "shadow_invoked": false
+      },
+      "runs": [
+        {
+          "repeat": 1,
+          "shadow": {
+            "eligible": false,
+            "invoked": false,
+            "proposal": null,
+            "validation_status": "skipped",
+            "validation_errors": [],
+            "latency_ms": null,
+            "model": null,
+            "context_turn_count": 0,
+            "context_result_count": 0,
+            "context_size_chars": 0
+          },
+          "proposal_signature": null,
+          "exact_match": true,
+          "semantic_match": true,
+          "unsafe_patch": false,
+          "classification": "SHADOW_NEUTRAL"
+        }
+      ],
+      "stable": true
+    }
+  ]
+}

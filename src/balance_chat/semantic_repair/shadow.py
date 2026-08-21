@@ -10,7 +10,7 @@ from .backend import (
     SemanticShadowTimeout,
     SemanticShadowUnavailable,
 )
-from .context import build_semantic_shadow_context
+from .context import SemanticShadowContext, build_semantic_shadow_context
 from .contracts import (
     SemanticShadowResult,
     ShadowValidationStatus,
@@ -77,6 +77,29 @@ class SemanticShadowRunner:
             max_turns=self.max_turns,
             max_results=self.max_results,
         )
+        return self.run_context(context, request_id=request_id)
+
+    def run_context(
+        self,
+        context: SemanticShadowContext,
+        *,
+        request_id: str,
+    ) -> SemanticShadowResult:
+        """Invoke the same bounded contract for the dedicated offline evaluator."""
+
+        if not self.enabled:
+            return SemanticShadowResult(
+                eligible=True,
+                invoked=False,
+                validation_status=ShadowValidationStatus.SKIPPED,
+            )
+        if self.backend is None:
+            return SemanticShadowResult(
+                eligible=True,
+                invoked=False,
+                validation_status=ShadowValidationStatus.UNAVAILABLE,
+                validation_errors=["backend_unavailable"],
+            )
         context_payload = context.model_dump(mode="json")
         serialized_context = json.dumps(
             context_payload,
