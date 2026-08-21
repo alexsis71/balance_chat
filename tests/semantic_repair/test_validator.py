@@ -51,6 +51,10 @@ def test_valid_swap_direction_proposal() -> None:
             _proposal(unresolved_mentions=["BAL:2010000039953"]),
             "canonical_id_forbidden",
         ),
+        (
+            _proposal(unresolved_mentions=["2010000039953"]),
+            "canonical_id_forbidden",
+        ),
     ],
 )
 def test_validator_rejects_unsafe_payload(payload, error) -> None:

@@ -19,7 +19,8 @@ from .contracts import (
 
 _CANONICAL_ID = re.compile(
     r"(?:\b(?:balance|article|route|geo|entity)_id\b|"
-    r"\b(?:BAL|ART|ROUTE):[A-Za-z0-9_.:-]+|\bgeo:[A-Za-z0-9_.:-]+)",
+    r"\b(?:BAL|ART|ROUTE):[A-Za-z0-9_.:-]+|\bgeo:[A-Za-z0-9_.:-]+|"
+    r"\b[0-9]{10,}\b)",
     re.IGNORECASE,
 )
 _ALLOWED_OPERATION_VALUES = {"compare", "calculate"}

@@ -236,9 +236,9 @@ Baseline/test delta:
 
 ```text
 baseline nodes: 501
-current nodes:  534
+current nodes:  535
 removed:          0
-added:            33
+added:            34
 existing test files/parameter expectations changed: 0
 ```
 
@@ -261,7 +261,7 @@ Production latency is captured before shadow invocation and logged separately.
 ## 16. Regression results and known limitations
 
 ```text
-Full pytest:                    534 passed, 1 warning
+Full pytest:                    535 passed, 1 warning
 Period PATCH:                   34 passed
 GEO PATCH:                     103 passed
 Business Entity PATCH:          79 passed
@@ -271,7 +271,7 @@ Golden pytest catalog:          14 passed
 P0 strict dry-run:              84/84
 PR3 transition dry-run:         20/20
 PR4 transition dry-run:         50/50
-Semantic repair focused:        33 passed
+Semantic repair focused:        34 passed
 ```
 
 The single warning is the pre-existing Starlette/httpx deprecation warning.
