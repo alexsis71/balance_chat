@@ -16,8 +16,8 @@
     "validator_rejections": 0,
     "timeouts": 0,
     "unavailable": 26,
-    "proposal_exact_match": 0.1034,
-    "proposal_semantic_match": 0.1034,
+    "proposal_exact_match": 0.0,
+    "proposal_semantic_match": 0.0,
     "valid_typed_output_rate": 0.0,
     "semantic_proposal_precision": null,
     "correct_patch": 0,
@@ -29,13 +29,15 @@
     "unsafe_transition_rate": null,
     "correct_clarification_rate": 0.0,
     "repair_coverage": 0.0,
-    "avg_latency_ms": 2032.62,
-    "p50_latency_ms": 2031.0,
-    "p95_latency_ms": 2053,
+    "avg_latency_ms": 2038.19,
+    "p50_latency_ms": 2039.0,
+    "p95_latency_ms": 2055,
     "avg_context_size_chars": 796.85,
     "repeated_cases": 3,
     "stable_repeated_cases": 3,
     "stability_rate": 1.0,
+    "deterministic_controls": 3,
+    "deterministic_controls_skipped": 3,
     "tool_call_count": 0,
     "repeated_tool_calls": 0,
     "tool_errors": 0
@@ -103,7 +105,7 @@
             "validation_errors": [
               "unavailable"
             ],
-            "latency_ms": 2053,
+            "latency_ms": 2024,
             "model": null,
             "context_turn_count": 1,
             "context_result_count": 1,
@@ -125,7 +127,7 @@
             "validation_errors": [
               "unavailable"
             ],
-            "latency_ms": 2051,
+            "latency_ms": 2026,
             "model": null,
             "context_turn_count": 1,
             "context_result_count": 1,
@@ -147,7 +149,7 @@
             "validation_errors": [
               "unavailable"
             ],
-            "latency_ms": 2041,
+            "latency_ms": 2023,
             "model": null,
             "context_turn_count": 1,
             "context_result_count": 1,
@@ -224,7 +226,7 @@
             "validation_errors": [
               "unavailable"
             ],
-            "latency_ms": 2027,
+            "latency_ms": 2033,
             "model": null,
             "context_turn_count": 1,
             "context_result_count": 1,
@@ -301,7 +303,7 @@
             "validation_errors": [
               "unavailable"
             ],
-            "latency_ms": 2035,
+            "latency_ms": 2049,
             "model": null,
             "context_turn_count": 1,
             "context_result_count": 1,
@@ -382,7 +384,7 @@
             "validation_errors": [
               "unavailable"
             ],
-            "latency_ms": 2055,
+            "latency_ms": 2029,
             "model": null,
             "context_turn_count": 2,
             "context_result_count": 2,
@@ -463,7 +465,7 @@
             "validation_errors": [
               "unavailable"
             ],
-            "latency_ms": 2025,
+            "latency_ms": 2044,
             "model": null,
             "context_turn_count": 2,
             "context_result_count": 2,
@@ -485,7 +487,7 @@
             "validation_errors": [
               "unavailable"
             ],
-            "latency_ms": 2046,
+            "latency_ms": 2017,
             "model": null,
             "context_turn_count": 2,
             "context_result_count": 2,
@@ -507,7 +509,7 @@
             "validation_errors": [
               "unavailable"
             ],
-            "latency_ms": 2019,
+            "latency_ms": 2051,
             "model": null,
             "context_turn_count": 2,
             "context_result_count": 2,
@@ -588,7 +590,7 @@
             "validation_errors": [
               "unavailable"
             ],
-            "latency_ms": 2015,
+            "latency_ms": 2052,
             "model": null,
             "context_turn_count": 2,
             "context_result_count": 2,
@@ -664,7 +666,7 @@
             "validation_errors": [
               "unavailable"
             ],
-            "latency_ms": 2017,
+            "latency_ms": 2055,
             "model": null,
             "context_turn_count": 2,
             "context_result_count": 2,
@@ -745,7 +747,7 @@
             "validation_errors": [
               "unavailable"
             ],
-            "latency_ms": 2028,
+            "latency_ms": 2027,
             "model": null,
             "context_turn_count": 2,
             "context_result_count": 2,
@@ -826,7 +828,7 @@
             "validation_errors": [
               "unavailable"
             ],
-            "latency_ms": 2016,
+            "latency_ms": 2039,
             "model": null,
             "context_turn_count": 2,
             "context_result_count": 2,
@@ -848,7 +850,7 @@
             "validation_errors": [
               "unavailable"
             ],
-            "latency_ms": 2042,
+            "latency_ms": 2026,
             "model": null,
             "context_turn_count": 2,
             "context_result_count": 2,
@@ -870,7 +872,7 @@
             "validation_errors": [
               "unavailable"
             ],
-            "latency_ms": 2029,
+            "latency_ms": 2051,
             "model": null,
             "context_turn_count": 2,
             "context_result_count": 2,
@@ -951,7 +953,7 @@
             "validation_errors": [
               "unavailable"
             ],
-            "latency_ms": 2029,
+            "latency_ms": 2055,
             "model": null,
             "context_turn_count": 2,
             "context_result_count": 2,
@@ -1016,7 +1018,7 @@
             "validation_errors": [
               "unavailable"
             ],
-            "latency_ms": 2018,
+            "latency_ms": 2044,
             "model": null,
             "context_turn_count": 1,
             "context_result_count": 1,
@@ -1081,7 +1083,7 @@
             "validation_errors": [
               "unavailable"
             ],
-            "latency_ms": 2033,
+            "latency_ms": 2035,
             "model": null,
             "context_turn_count": 1,
             "context_result_count": 1,
@@ -1158,7 +1160,7 @@
             "validation_errors": [
               "unavailable"
             ],
-            "latency_ms": 2038,
+            "latency_ms": 2056,
             "model": null,
             "context_turn_count": 2,
             "context_result_count": 2,
@@ -1235,7 +1237,7 @@
             "validation_errors": [
               "unavailable"
             ],
-            "latency_ms": 2035,
+            "latency_ms": 2041,
             "model": null,
             "context_turn_count": 2,
             "context_result_count": 2,
@@ -1312,7 +1314,7 @@
             "validation_errors": [
               "unavailable"
             ],
-            "latency_ms": 2019,
+            "latency_ms": 2042,
             "model": null,
             "context_turn_count": 2,
             "context_result_count": 2,
@@ -1377,7 +1379,7 @@
             "validation_errors": [
               "unavailable"
             ],
-            "latency_ms": 2037,
+            "latency_ms": 2047,
             "model": null,
             "context_turn_count": 1,
             "context_result_count": 1,
@@ -1442,7 +1444,7 @@
             "validation_errors": [
               "unavailable"
             ],
-            "latency_ms": 2041,
+            "latency_ms": 2039,
             "model": null,
             "context_turn_count": 1,
             "context_result_count": 1,
@@ -1507,7 +1509,7 @@
             "validation_errors": [
               "unavailable"
             ],
-            "latency_ms": 2028,
+            "latency_ms": 2037,
             "model": null,
             "context_turn_count": 1,
             "context_result_count": 1,
@@ -1572,7 +1574,7 @@
             "validation_errors": [
               "unavailable"
             ],
-            "latency_ms": 2046,
+            "latency_ms": 2015,
             "model": null,
             "context_turn_count": 1,
             "context_result_count": 1,
@@ -1637,7 +1639,7 @@
             "validation_errors": [
               "unavailable"
             ],
-            "latency_ms": 2025,
+            "latency_ms": 2036,
             "model": null,
             "context_turn_count": 1,
             "context_result_count": 1,

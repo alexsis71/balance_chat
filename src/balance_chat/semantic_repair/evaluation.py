@@ -88,8 +88,15 @@ def evaluate_corpus(
             counters["eligible_turns"] += int(result.eligible)
             counters["shadow_invocations"] += int(result.invoked)
             counters[f"status_{result.validation_status.value}"] += 1
-            counters["proposal_exact_match"] += int(exact_match)
-            counters["proposal_semantic_match"] += int(semantic_match)
+            if result.invoked:
+                counters["proposal_exact_match"] += int(exact_match)
+                counters["proposal_semantic_match"] += int(semantic_match)
+            else:
+                counters["deterministic_controls"] += 1
+                counters["deterministic_controls_skipped"] += int(
+                    result.validation_status == ShadowValidationStatus.SKIPPED
+                    and not result.eligible
+                )
             counters["unsafe_patch"] += int(unsafe_patch)
             if result.validation_status == ShadowValidationStatus.VALID:
                 counters["valid_proposals"] += 1
@@ -261,9 +268,9 @@ def _metrics(
         "validator_rejections": counters["status_rejected"],
         "timeouts": counters["status_timeout"],
         "unavailable": counters["status_unavailable"],
-        "proposal_exact_match": _ratio(counters["proposal_exact_match"], counters["runs"]),
+        "proposal_exact_match": _ratio(counters["proposal_exact_match"], invocations),
         "proposal_semantic_match": _ratio(
-            counters["proposal_semantic_match"], counters["runs"]
+            counters["proposal_semantic_match"], invocations
         ),
         "valid_typed_output_rate": _ratio(valid, invocations),
         "semantic_proposal_precision": _ratio(
@@ -291,6 +298,10 @@ def _metrics(
         "stability_rate": _ratio(
             counters["stable_repeated_cases"], counters["repeated_cases"]
         ),
+        "deterministic_controls": counters["deterministic_controls"],
+        "deterministic_controls_skipped": counters[
+            "deterministic_controls_skipped"
+        ],
         "tool_call_count": 0,
         "repeated_tool_calls": 0,
         "tool_errors": 0,

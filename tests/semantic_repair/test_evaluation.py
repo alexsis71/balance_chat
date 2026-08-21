@@ -83,5 +83,6 @@ def test_evaluator_reports_quality_safety_latency_and_control_skip() -> None:
     assert report["metrics"]["semantic_proposal_precision"] == 1.0
     assert report["metrics"]["unsafe_transition_rate"] == 0.0
     assert report["metrics"]["stability_rate"] == 1.0
+    assert report["metrics"]["deterministic_controls_skipped"] == 1
     assert report["cases"][0]["runs"][0]["classification"] == "SHADOW_IMPROVEMENT"
     assert report["cases"][1]["runs"][0]["classification"] == "SHADOW_NEUTRAL"
