@@ -21,5 +21,13 @@
     "max_chunk_chars": 4000,
     "max_total_chars": 12000,
     "ttl_s": 86400
+  },
+  "semantic_repair_shadow": {
+    "enabled_env": "SEMANTIC_REPAIR_SHADOW_ENABLED",
+    "profile": "context",
+    "timeout_s": 12,
+    "max_tokens": 512,
+    "recent_turn_limit": 4,
+    "recent_result_limit": 4
   }
 }
