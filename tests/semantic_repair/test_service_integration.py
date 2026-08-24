@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from threading import Event, Lock, Thread
+
 import pytest
 
 from balance_chat.contracts import (
@@ -20,7 +22,7 @@ from balance_chat.semantic_repair.contracts import (
 )
 from balance_chat.semantic_repair.shadow import SemanticShadowRunner
 from balance_chat.service import BalanceChatService, TurnProcessResult
-from balance_chat.store import InMemoryContextStore
+from balance_chat.store import InMemoryContextStore, RevisionConflict
 
 
 def _intent(*, metric="distribution") -> AnalysisIntent:
@@ -81,6 +83,8 @@ class DangerousShadow:
         self.observed_committed_revision = self.store.get(state.session_id).revision
         mutation_before = self.processor.last_result.mutation.model_dump(mode="json")
         state.active_dialog_scope.intent.operands[0].metric = "shadow_corruption"
+        state.revision = 9999
+        state.conversation_window.clear()
         self.mutation_unchanged = (
             self.processor.last_result.mutation.model_dump(mode="json")
             == mutation_before
@@ -168,6 +172,7 @@ def test_shadow_on_and_off_have_identical_production_output_and_state() -> None:
     assert processor_on.last_result.mutation.replace_intent.operands[0].metric == (
         "authoritative_metric"
     )
+    assert store_on.get("same-session").conversation_window
     assert "semantic_shadow" not in response_on
     assert "proposal" not in response_on
 
@@ -223,3 +228,325 @@ def test_deterministic_patch_service_path_makes_zero_shadow_calls(mode) -> None:
     assert response["status"] == "ok"
     assert store.get("same-session").revision == 2
     assert backend.calls == 0
+
+
+class RecordingStore(InMemoryContextStore):
+    def __init__(self):
+        super().__init__()
+        self.events = []
+        self.commit_requests = []
+        self.release_requests = []
+        self._events_lock = Lock()
+
+    def _record(self, event):
+        with self._events_lock:
+            self.events.append(event)
+
+    def reserve(self, session_id, expected_revision, request_id):
+        self._record(("reserve", request_id))
+        return super().reserve(session_id, expected_revision, request_id)
+
+    def commit(self, session_id, expected_revision, mutation, outcome, **kwargs):
+        result = super().commit(
+            session_id, expected_revision, mutation, outcome, **kwargs
+        )
+        self.commit_requests.append(mutation.turn_id)
+        self._record(("commit", mutation.turn_id))
+        return result
+
+    def save_request_result(self, session_id, request_id, response):
+        result = super().save_request_result(session_id, request_id, response)
+        self._record(("save_request_result", request_id))
+        return result
+
+    def release(self, session_id, request_id):
+        self.release_requests.append(request_id)
+        self._record(("release", request_id))
+        return super().release(session_id, request_id)
+
+
+class PerRequestProcessor(Processor):
+    def process(self, state, *, message, request_id, **kwargs):
+        result = super().process(
+            state, message=message, request_id=request_id, **kwargs
+        )
+        result.mutation.turn_id = request_id
+        return result
+
+
+class BlockingFirstShadow:
+    def __init__(self, events):
+        self.events = events
+        self.started = Event()
+        self.unblock = Event()
+        self.calls = []
+        self._lock = Lock()
+
+    def run(self, *, request_id, **_kwargs):
+        with self._lock:
+            self.calls.append(request_id)
+            first = len(self.calls) == 1
+        self.events.append(("shadow_start", request_id))
+        if first:
+            self.started.set()
+            assert self.unblock.wait(timeout=5)
+        self.events.append(("shadow_end", request_id))
+        return SemanticShadowResult(
+            eligible=True,
+            invoked=True,
+            validation_status=ShadowValidationStatus.MALFORMED,
+        )
+
+
+def _recording_service():
+    store = RecordingStore()
+    state = store.create("same-session")
+    store.commit(
+        state.session_id,
+        0,
+        ContextMutation(
+            turn_id="turn-initial",
+            user_message="initial",
+            replace_intent=_intent(),
+        ),
+        TransitionOutcome.SUCCESS,
+    )
+    store.events.clear()
+    store.commit_requests.clear()
+    processor = PerRequestProcessor(mode="conversation_graph")
+    shadow = BlockingFirstShadow(store.events)
+    return BalanceChatService(store, processor, semantic_shadow=shadow), store, shadow
+
+
+def test_same_session_turn_succeeds_while_previous_shadow_is_blocked() -> None:
+    service, store, shadow = _recording_service()
+    turn_a = {}
+
+    thread = Thread(
+        target=lambda: turn_a.setdefault(
+            "response",
+            service.execute_turn(
+                "same-session",
+                expected_revision=1,
+                message="turn A",
+                request_id="request-a",
+            ),
+        )
+    )
+    thread.start()
+    assert shadow.started.wait(timeout=5)
+
+    response_b = service.execute_turn(
+        "same-session",
+        expected_revision=2,
+        message="turn B",
+        request_id="request-b",
+    )
+    shadow.unblock.set()
+    thread.join(timeout=5)
+
+    assert not thread.is_alive()
+    assert turn_a["response"]["session"]["revision"] == 2
+    assert response_b["session"]["revision"] == 3
+    assert store.get("same-session").revision == 3
+    assert store.release_requests.count("request-a") == 1
+    assert store.release_requests.count("request-b") == 1
+    assert store.events.index(("commit", "request-a")) < store.events.index(
+        ("save_request_result", "request-a")
+    )
+    assert store.events.index(("save_request_result", "request-a")) < store.events.index(
+        ("release", "request-a")
+    )
+    assert store.events.index(("release", "request-a")) < store.events.index(
+        ("shadow_start", "request-a")
+    )
+    assert store.events.index(("shadow_start", "request-a")) < store.events.index(
+        ("shadow_end", "request-a")
+    )
+
+
+def test_cached_retry_during_shadow_does_not_repeat_commit_or_shadow() -> None:
+    service, store, shadow = _recording_service()
+    turn_a = {}
+    thread = Thread(
+        target=lambda: turn_a.setdefault(
+            "response",
+            service.execute_turn(
+                "same-session",
+                expected_revision=1,
+                message="turn A",
+                request_id="request-a",
+            ),
+        )
+    )
+    thread.start()
+    assert shadow.started.wait(timeout=5)
+
+    retry = service.execute_turn(
+        "same-session",
+        expected_revision=1,
+        message="turn A",
+        request_id="request-a",
+    )
+    shadow.unblock.set()
+    thread.join(timeout=5)
+
+    assert retry == turn_a["response"]
+    assert store.commit_requests == ["request-a"]
+    assert shadow.calls == ["request-a"]
+    assert store.release_requests == ["request-a"]
+
+
+class FixedOutcomeShadow:
+    def __init__(self, status):
+        self.status = status
+        self.calls = 0
+
+    def run(self, **_kwargs):
+        self.calls += 1
+        if self.status == "raise":
+            raise RuntimeError("shadow failed")
+        return SemanticShadowResult(
+            eligible=True,
+            invoked=True,
+            validation_status=self.status,
+        )
+
+
+@pytest.mark.parametrize(
+    "status",
+    [
+        ShadowValidationStatus.VALID,
+        ShadowValidationStatus.TIMEOUT,
+        ShadowValidationStatus.UNAVAILABLE,
+        ShadowValidationStatus.MALFORMED,
+        "raise",
+    ],
+)
+def test_shadow_outcome_after_release_preserves_following_turn(status) -> None:
+    store = RecordingStore()
+    state = store.create("same-session")
+    store.commit(
+        state.session_id,
+        0,
+        ContextMutation(
+            turn_id="turn-initial",
+            user_message="initial",
+            replace_intent=_intent(),
+        ),
+        TransitionOutcome.SUCCESS,
+    )
+    store.release_requests.clear()
+    shadow = FixedOutcomeShadow(status)
+    service = BalanceChatService(
+        store,
+        PerRequestProcessor(mode="conversation_graph"),
+        semantic_shadow=shadow,
+    )
+
+    first = service.execute_turn(
+        "same-session",
+        expected_revision=1,
+        message="first",
+        request_id="request-a",
+    )
+    second = service.execute_turn(
+        "same-session",
+        expected_revision=2,
+        message="second",
+        request_id="request-b",
+    )
+
+    assert first["session"]["revision"] == 2
+    assert second["session"]["revision"] == 3
+    assert store.get("same-session").revision == 3
+    assert store.release_requests == ["request-a", "request-b"]
+
+
+class ProcessorFailure:
+    def process(self, *_args, **_kwargs):
+        raise RuntimeError("processor failed")
+
+
+class CommitFailureStore(RecordingStore):
+    fail_commit = False
+
+    def commit(self, *args, **kwargs):
+        if self.fail_commit:
+            raise RuntimeError("commit failed")
+        return super().commit(*args, **kwargs)
+
+
+class PostReserveConflictStore(RecordingStore):
+    def reserve(self, session_id, expected_revision, request_id):
+        super().reserve(session_id, expected_revision, request_id)
+        with self._lock:
+            self._states[session_id].revision += 1
+
+
+@pytest.mark.parametrize("failure", ["revision", "processor", "commit"])
+def test_authoritative_failure_releases_acquired_reservation_once(failure) -> None:
+    store = PostReserveConflictStore() if failure == "revision" else CommitFailureStore()
+    state = store.create("same-session")
+    store.commit(
+        state.session_id,
+        0,
+        ContextMutation(
+            turn_id="turn-initial",
+            user_message="initial",
+            replace_intent=_intent(),
+        ),
+        TransitionOutcome.SUCCESS,
+    )
+    store.release_requests.clear()
+    if failure == "commit":
+        store.fail_commit = True
+    processor = ProcessorFailure() if failure == "processor" else PerRequestProcessor()
+    service = BalanceChatService(store, processor)
+
+    expected_error = RevisionConflict if failure == "revision" else RuntimeError
+    with pytest.raises(expected_error):
+        service.execute_turn(
+            "same-session",
+            expected_revision=1,
+            message="failing turn",
+            request_id="request-failure",
+        )
+
+    assert store.release_requests == ["request-failure"]
+
+
+class ReleaseFailureStore(RecordingStore):
+    def release(self, session_id, request_id):
+        self.release_requests.append(request_id)
+        self._record(("release", request_id))
+        raise RuntimeError("release failed")
+
+
+def test_shadow_is_skipped_when_reservation_release_fails() -> None:
+    store = ReleaseFailureStore()
+    state = store.create("same-session")
+    InMemoryContextStore.commit(
+        store,
+        state.session_id,
+        0,
+        ContextMutation(
+            turn_id="turn-initial",
+            user_message="initial",
+            replace_intent=_intent(),
+        ),
+        TransitionOutcome.SUCCESS,
+    )
+    shadow = FixedOutcomeShadow(ShadowValidationStatus.VALID)
+    service = BalanceChatService(store, PerRequestProcessor(), semantic_shadow=shadow)
+
+    response = service.execute_turn(
+        "same-session",
+        expected_revision=1,
+        message="turn",
+        request_id="request-a",
+    )
+
+    assert response["session"]["revision"] == 2
+    assert store.release_requests == ["request-a"]
+    assert shadow.calls == 0
