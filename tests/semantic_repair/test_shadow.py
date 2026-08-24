@@ -79,6 +79,39 @@ def test_deterministic_patch_is_never_shadowed(active_state, mode) -> None:
     assert backend.calls == []
 
 
+@pytest.mark.parametrize(
+    "mode",
+    [None, "", "totally_unknown", "deterministic_future_patch"],
+)
+def test_unknown_or_missing_mode_fails_closed(active_state, mode) -> None:
+    backend = Backend(json.dumps(_valid_payload()))
+    result = SemanticShadowRunner(backend, enabled=True).run(
+        state=active_state,
+        message="ambiguous follow-up",
+        interpretation_mode=mode,
+        request_id="request-1",
+    )
+
+    assert result.eligible is False
+    assert result.invoked is False
+    assert result.validation_status == ShadowValidationStatus.SKIPPED
+    assert backend.calls == []
+
+
+def test_known_hard_tail_mode_remains_eligible(active_state) -> None:
+    backend = Backend(json.dumps(_valid_payload()))
+    result = SemanticShadowRunner(backend, enabled=True).run(
+        state=active_state,
+        message="ambiguous follow-up",
+        interpretation_mode="conversation_graph",
+        request_id="request-1",
+    )
+
+    assert result.eligible is True
+    assert result.invoked is True
+    assert len(backend.calls) == 1
+
+
 def test_valid_shadow_proposal_is_recorded_only_as_result(active_state) -> None:
     backend = Backend(json.dumps(_valid_payload()))
     before = active_state.model_dump(mode="json")

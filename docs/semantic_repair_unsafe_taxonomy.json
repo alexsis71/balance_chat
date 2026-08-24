@@ -1,0 +1,259 @@
+{
+  "schema_version": "1.0",
+  "review": "PR5 independent adversarial review",
+  "branch_tip": "840471d",
+  "baseline": "f124040",
+  "corpus_version": "1.0",
+  "sources": {
+    "qwen38": {
+      "path": "artifacts/semantic_shadow_results.json",
+      "state": "working-tree (uncommitted; committed version is the endpoint-unavailable run)",
+      "served_models": ["Qwen/Qwen3.8-27B"],
+      "configured_model": "Qwen/Qwen3.8-27B",
+      "reachable": true,
+      "identity_verified": true
+    },
+    "model_b": {
+      "path": "artifacts/semantic_shadow_results_qwen36_35b_a3b.json",
+      "state": "untracked",
+      "served_models": ["ai-balances-planner"],
+      "configured_model": "ai-balances-language",
+      "reachable": true,
+      "identity_verified": false,
+      "identity_note": "Neither field names Qwen3.6-35B-A3B; served and configured names also disagree. Filename is the only assertion of identity."
+    }
+  },
+  "taxonomy_definitions": {
+    "U1": "should CLARIFY but model PATCHed",
+    "U2": "should UNSUPPORTED but model PATCHed",
+    "U3": "wrong mutation kind",
+    "U4": "correct kind, wrong semantic value",
+    "U5": "wrong prior-result / reference selection",
+    "U6": "source/destination or role misunderstanding",
+    "U7": "comparison semantics error",
+    "U8": "calculation semantics error",
+    "U9": "unnecessary multi-mutation / overreach",
+    "U10": "state-history misunderstanding",
+    "U11": "prompt/contract mismatch",
+    "U12": "corpus expectation itself questionable"
+  },
+  "unsafe_cases": [
+    {
+      "case_id": "compare_bare", "model": "qwen38", "runs_unsafe": 1, "latency_ms": [10234],
+      "message": "Сравни", "addressable_results": 2,
+      "expected": {"action": "patch", "mutations": ["set_operation=compare", "set_comparison=last_two_results"], "references": ["last_two_results/null"]},
+      "actual": {"action": "patch", "mutations": ["set_operation=compare", "set_comparison=last_two_results", "reference_prior_result"], "references": ["last_two_results/last"]},
+      "validator_status": "valid", "validator_caught": false,
+      "class": "U11", "severity_if_active": "LOW",
+      "residual_after_gates": false, "gate": "G1+G2", "prompt_fixable": false,
+      "note": "Core semantics correct; differs only by a redundant mutation and an incoherent selector the contract permits."
+    },
+    {
+      "case_id": "compare_pronoun", "model": "qwen38", "runs_unsafe": 3, "latency_ms": [10245, 10259, 10269],
+      "message": "Сравни их", "addressable_results": 2,
+      "expected": {"action": "patch", "mutations": ["set_operation=compare", "set_comparison=last_two_results"], "references": ["last_two_results/null"]},
+      "actual": {"action": "patch", "mutations": ["set_operation=compare", "set_comparison=last_two_results", "reference_prior_result"], "references": ["last_two_results/last"]},
+      "validator_status": "valid", "validator_caught": false,
+      "class": "U11", "severity_if_active": "LOW",
+      "residual_after_gates": false, "gate": "G1+G2", "prompt_fixable": false,
+      "note": "All 3 repeat runs byte-identical."
+    },
+    {
+      "case_id": "compare_last_two", "model": "qwen38", "runs_unsafe": 1, "latency_ms": [10251],
+      "message": "Сравни последние два", "addressable_results": 2,
+      "expected": {"action": "patch", "mutations": ["set_operation=compare", "set_comparison=last_two_results"], "references": ["last_two_results/null"]},
+      "actual": {"action": "patch", "mutations": ["set_operation=compare", "set_comparison=last_two_results", "reference_prior_result"], "references": ["last_two_results/last"]},
+      "validator_status": "valid", "validator_caught": false,
+      "class": "U11", "severity_if_active": "LOW",
+      "residual_after_gates": false, "gate": "G1+G2", "prompt_fixable": false
+    },
+    {
+      "case_id": "absolute_difference", "model": "qwen38", "runs_unsafe": 1, "latency_ms": [10277],
+      "message": "Какова разница?", "addressable_results": 2,
+      "expected": {"action": "patch", "mutations": ["set_operation=calculate", "set_comparison=absolute_difference"], "references": ["last_two_results/null"]},
+      "actual": {"action": "patch", "mutations": ["set_operation=compare", "set_comparison=last_two_results", "reference_prior_result"], "references": ["last_two_results/last"]},
+      "validator_status": "valid", "validator_caught": false,
+      "class": "U8", "severity_if_active": "HIGH",
+      "residual_after_gates": true, "gate": null, "prompt_fixable": true,
+      "note": "Both operation and comparison wrong. Prompt never states when calculate applies."
+    },
+    {
+      "case_id": "percent_difference", "model": "qwen38", "runs_unsafe": 3, "latency_ms": [10461, 10739, 10658],
+      "message": "Какова разница в процентах?", "addressable_results": 2,
+      "expected": {"action": "patch", "mutations": ["set_operation=calculate", "set_comparison=percent_difference"], "references": ["last_two_results/null"]},
+      "actual": {"action": "patch", "mutations": ["set_operation=compare", "set_comparison=percent_difference", "reference_prior_result"], "references": ["last_two_results/last"]},
+      "validator_status": "valid", "validator_caught": false,
+      "class": "U8", "severity_if_active": "HIGH",
+      "residual_after_gates": true, "gate": null, "prompt_fixable": true,
+      "note": "Comparison value CORRECT all 3 runs; only the operation category is wrong. Most diagnostic case in the run."
+    },
+    {
+      "case_id": "larger_value", "model": "qwen38", "runs_unsafe": 1, "latency_ms": [10295],
+      "message": "Что больше?", "addressable_results": 2,
+      "expected": {"action": "patch", "mutations": ["set_operation=compare", "set_comparison=larger_value"], "references": ["last_two_results/null"]},
+      "actual": {"action": "patch", "mutations": ["set_operation=compare", "set_comparison=last_two_results", "reference_prior_result"], "references": ["last_two_results/last"]},
+      "validator_status": "valid", "validator_caught": false,
+      "class": "U7", "severity_if_active": "HIGH",
+      "residual_after_gates": true, "gate": null, "prompt_fixable": true
+    },
+    {
+      "case_id": "reference_first", "model": "qwen38", "runs_unsafe": 1, "latency_ms": [10400],
+      "message": "Первый из тех двух", "addressable_results": 2,
+      "expected": {"action": "patch", "mutations": ["reference_prior_result"], "references": ["last_two_results/first"]},
+      "actual": {"action": "patch", "mutations": ["set_operation=compare", "set_comparison=last_two_results", "reference_prior_result"], "references": ["last_two_results/last"]},
+      "validator_status": "valid", "validator_caught": false,
+      "class": "U5", "secondary_class": "U9", "severity_if_active": "HIGH",
+      "residual_after_gates": true, "gate": "partial", "prompt_fixable": true,
+      "note": "Prompt never defines the selector vocabulary at all."
+    },
+    {
+      "case_id": "reference_second", "model": "qwen38", "runs_unsafe": 1, "latency_ms": [10421],
+      "message": "Возьми второй вариант", "addressable_results": 2,
+      "expected": {"action": "patch", "mutations": ["reference_prior_result"], "references": ["last_two_results/second"]},
+      "actual": {"action": "patch", "mutations": ["set_operation=compare", "set_comparison=last_two_results", "reference_prior_result"], "references": ["last_two_results/last"]},
+      "validator_status": "valid", "validator_caught": false,
+      "class": "U5", "secondary_class": "U9", "severity_if_active": "HIGH",
+      "residual_after_gates": true, "gate": "partial", "prompt_fixable": true
+    },
+    {
+      "case_id": "same_for_first", "model": "qwen38", "runs_unsafe": 1, "latency_ms": [7690],
+      "message": "То же для первого", "addressable_results": 2,
+      "expected": {"action": "patch", "mutations": ["reference_prior_result"], "references": ["last_two_results/first"]},
+      "actual": {"action": "patch", "mutations": ["reference_prior_result"], "references": ["previous_result/last"]},
+      "validator_status": "valid", "validator_caught": false,
+      "class": "U5", "severity_if_active": "HIGH",
+      "residual_after_gates": true, "gate": null, "prompt_fixable": true,
+      "note": "Correct mutation kind, wrong result chosen. Only unsafe Qwen3.8 run below the 10.2s latency band."
+    },
+    {
+      "case_id": "ambiguous_pronoun_single_result", "model": "qwen38", "runs_unsafe": 1, "latency_ms": [10292],
+      "message": "Сравни их", "addressable_results": 1,
+      "expected": {"action": "clarify"},
+      "actual": {"action": "patch", "mutations": ["set_operation=compare", "set_comparison=last_two_results", "reference_prior_result"], "references": ["last_two_results/last"]},
+      "validator_status": "valid", "validator_caught": false,
+      "class": "U1", "severity_if_active": "CRITICAL",
+      "residual_after_gates": false, "gate": "G3", "prompt_fixable": "partial",
+      "note": "Proposes comparing the last two results when only one exists. Most dangerous single output in the evaluation."
+    },
+    {
+      "case_id": "reverse_business_direction", "model": "model_b", "runs_unsafe": 1, "latency_ms": [4902],
+      "message": "А теперь наоборот", "addressable_results": 1,
+      "expected": {"action": "patch", "mutations": ["swap_direction"], "references": []},
+      "actual": {"action": "patch", "mutations": ["swap_direction"], "references": ["last_two_results/last"]},
+      "validator_status": "valid", "validator_caught": false,
+      "class": "U9", "severity_if_active": "MEDIUM",
+      "residual_after_gates": false, "gate": "G3", "prompt_fixable": true,
+      "note": "Core mutation correct; spurious pair reference against a single-result context. Other 2 repeat runs were validator-rejected."
+    },
+    {
+      "case_id": "compare_pronoun", "model": "model_b", "runs_unsafe": 1, "latency_ms": [2549],
+      "message": "Сравни их", "addressable_results": 2,
+      "expected": {"action": "patch", "mutations": ["set_operation=compare", "set_comparison=last_two_results"], "references": ["last_two_results/null"]},
+      "actual": {"action": "patch", "mutations": ["set_operation=compare", "set_comparison=last_two_results", "reference_prior_result"], "references": ["last_two_results/last"]},
+      "validator_status": "valid", "validator_caught": false,
+      "class": "U11", "severity_if_active": "LOW",
+      "residual_after_gates": false, "gate": "G1+G2", "prompt_fixable": false,
+      "note": "Byte-identical to Qwen3.8's attractor template. Key evidence that Model B's low unsafe rate is validator filtering, not semantic caution."
+    }
+  ],
+  "mutation_matrix_by_expected_kind": {
+    "qwen38": {
+      "swap_direction": {"runs": 5, "valid": 5, "correct": 5, "unsafe": 0, "rejected": 0, "precision": 1.0, "coverage": 1.0},
+      "unsupported": {"runs": 3, "valid": 3, "correct": 3, "unsafe": 0, "rejected": 0, "precision": 1.0, "coverage": 1.0},
+      "set_operation+set_comparison": {"runs": 11, "valid": 11, "correct": 1, "unsafe": 10, "rejected": 0, "precision": 0.09, "coverage": 0.09},
+      "reference_prior_result": {"runs": 3, "valid": 3, "correct": 0, "unsafe": 3, "rejected": 0, "precision": 0.0, "coverage": 0.0},
+      "clarify": {"runs": 4, "valid": 4, "correct": 0, "unsafe": 1, "rejected": 0, "precision": 0.0, "coverage": 0.0},
+      "deterministic_control": {"runs": 3, "valid": 0, "correct": 3, "unsafe": 0, "rejected": 0, "precision": null, "coverage": 1.0}
+    },
+    "model_b": {
+      "swap_direction": {"runs": 5, "valid": 3, "correct": 2, "unsafe": 1, "rejected": 2, "precision": 0.67, "coverage": 0.4},
+      "unsupported": {"runs": 3, "valid": 3, "correct": 2, "unsafe": 0, "rejected": 0, "precision": 0.67, "coverage": 0.67},
+      "set_operation+set_comparison": {"runs": 11, "valid": 1, "correct": 0, "unsafe": 1, "rejected": 10, "precision": 0.0, "coverage": 0.0},
+      "reference_prior_result": {"runs": 3, "valid": 0, "correct": 0, "unsafe": 0, "rejected": 3, "precision": null, "coverage": 0.0},
+      "clarify": {"runs": 4, "valid": 1, "correct": 1, "unsafe": 0, "rejected": 3, "precision": 1.0, "coverage": 0.25},
+      "deterministic_control": {"runs": 3, "valid": 0, "correct": 3, "unsafe": 0, "rejected": 0, "precision": null, "coverage": 1.0}
+    }
+  },
+  "mutation_matrix_by_emitted_kind": {
+    "qwen38": {
+      "swap_direction": {"emitted": 5, "in_correct": 5, "in_unsafe": 0, "precision": 1.0, "false_positives_on_21_non_direction_runs": 0},
+      "set_operation": {"emitted": 14, "in_correct": 1, "in_unsafe": 13, "precision": 0.07},
+      "set_comparison": {"emitted": 14, "in_correct": 1, "in_unsafe": 13, "precision": 0.07},
+      "reference_prior_result": {"emitted": 14, "in_correct": 0, "in_unsafe": 14, "precision": 0.0},
+      "action_unsupported": {"emitted": 6, "in_correct": 3, "precision": 0.5},
+      "action_clarify": {"emitted": 0, "note": "never emitted in 26 runs"}
+    },
+    "model_b": {
+      "swap_direction": {"emitted": 3, "in_correct": 2, "in_unsafe": 1, "precision": 0.67},
+      "set_operation": {"emitted": 1, "in_correct": 0, "in_unsafe": 1, "precision": 0.0},
+      "set_comparison": {"emitted": 1, "in_correct": 0, "in_unsafe": 1, "precision": 0.0},
+      "reference_prior_result": {"emitted": 1, "in_correct": 0, "in_unsafe": 1, "precision": 0.0},
+      "action_clarify": {"emitted": 2, "in_correct": 1, "precision": 0.5},
+      "action_unsupported": {"emitted": 2, "in_correct": 2, "precision": 1.0}
+    }
+  },
+  "validator_effectiveness": {
+    "qwen38": {"attempts": 26, "rejected": 0, "accepted": 26, "unsafe_among_accepted": 14, "semantic_errors_caught": 0},
+    "model_b": {
+      "attempts": 26, "rejected": 18, "accepted": 8, "unsafe_among_accepted": 2, "semantic_errors_caught": 0,
+      "rejection_reasons": {
+        "proposal_schema_invalid": 17, "mutation_value_forbidden": 13,
+        "prior_result_reference_required": 3, "invalid_operation_value": 2,
+        "invalid_comparison_value": 1, "duplicate_mutation_kind": 1, "patch_cannot_clarify": 1
+      },
+      "verdict": "VALIDATOR-FILTERED — all rejections are structural/typing, none semantic"
+    }
+  },
+  "counterfactual_if_all_accepted_patches_applied": {
+    "qwen38": {"applied": 20, "correct_repairs": 6, "unsafe_transitions": 14, "unsafe_share": 0.70},
+    "model_b": {"applied": 4, "correct_repairs": 2, "unsafe_transitions": 2, "unsafe_share": 0.50}
+  },
+  "gate_simulation": {
+    "gates": {
+      "G1": {"rule": "drop/reject reference_prior_result when set_operation or set_comparison present", "class": "GOOD GATE"},
+      "G2": {"rule": "last_two_results reference selector must be null|first|second, not last", "class": "GOOD GATE"},
+      "G3": {"rule": "reject last_two_results reference when addressable results < 2", "class": "GOOD GATE"},
+      "G4": {"rule": "allow swap_direction only when exactly one directed relation exists", "class": "GOOD GATE"},
+      "G5": {"rule": "forbid PATCH when unresolved_mentions non-empty", "class": "GOOD GATE", "effect_here": 0},
+      "G6": {"rule": "require calculate when comparison is absolute/percent_difference", "class": "BORDERLINE", "effect_here": 3},
+      "G7": {"rule": "map specific phrasings to comparison values", "class": "BAD GATE - OVERFIT", "recommended": false}
+    },
+    "qwen38": {"total_unsafe": 14, "fixed_by_normalization_G1_G2": 5, "blocked_by_cardinality_G3": 1, "residual": 8},
+    "model_b": {"total_unsafe": 2, "fixed_by_normalization_G1_G2": 1, "blocked_by_cardinality_G3": 1, "residual": 0}
+  },
+  "stability": {
+    "qwen38": {
+      "rate": 1.0,
+      "unsafe_outputs_stable": true,
+      "detail": {
+        "reverse_business_direction": {"runs": 3, "distinct_signatures": 1, "unsafe": 0},
+        "compare_pronoun": {"runs": 3, "distinct_signatures": 1, "unsafe": 3},
+        "percent_difference": {"runs": 3, "distinct_signatures": 1, "unsafe": 3}
+      },
+      "interpretation": "MOSTLY SYSTEMATIC - mode collapse onto a single attractor template"
+    },
+    "model_b": {
+      "rate": 0.3333,
+      "detail": {
+        "reverse_business_direction": {"runs": 3, "distinct_signatures": 2, "outcomes": ["valid+unsafe", "rejected", "rejected"]},
+        "compare_pronoun": {"runs": 3, "distinct_signatures": 2, "outcomes": ["rejected", "valid+unsafe", "rejected"]},
+        "percent_difference": {"runs": 3, "distinct_signatures": 1, "outcomes": ["rejected", "rejected", "rejected"]}
+      },
+      "interpretation": "instability changes SCHEMA VALIDITY, not semantics"
+    }
+  },
+  "mtp_assessment": {
+    "verdict": "NO EVIDENCE",
+    "reasoning": "100% valid JSON, 0 malformed, 0 validator rejections, byte-identical repeats at temperature 0. Decoding corruption would present as malformed output or run-to-run variation; neither occurs."
+  },
+  "conclusions": {
+    "adversarial_challenge_1_hidden_island": "CONFIRMED - swap_direction 5/5, 0 unsafe, 0 false positives on 21 non-direction runs",
+    "adversarial_challenge_2_validator_artifact": "CONFIRMED - Model B is validator-filtered, not semantically safer",
+    "production_worthy_islands": ["swap_direction (qwen38, needs confirmatory adversarial experiment)"],
+    "closed_kinds": ["reference_prior_result", "set_operation", "set_comparison", "clarify"],
+    "readiness": "NOT READY",
+    "pr6": "MAYBE - swap_direction only, after an adversarial direction experiment",
+    "next_step_primary": "C - prompt/context refinement and rerun (bundled with G1/G2/G3 contract fixes)",
+    "next_step_secondary": "B - narrower shadow experiment scoped to swap_direction"
+  }
+}

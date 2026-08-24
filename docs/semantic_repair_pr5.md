@@ -29,8 +29,10 @@ deterministic transition layer
 ```
 
 The response is built and request-cache entry is saved before shadow invocation.
-The session lock is released before the bounded model call. Production latency is
-captured before shadow starts and logged separately from shadow latency.
+Since PR5a, both the session lock and store-level turn reservation are released
+before the bounded model call. Production latency is captured before reservation
+release and logged separately from shadow latency. Shadow remains synchronous,
+so it still contributes to current HTTP response wall time.
 
 `processor.py` is unchanged. So are the transition classifier, deterministic
 transition modules, reducer, normalization, `ExecutionAdapter`, planner,
@@ -101,21 +103,18 @@ effect.
 
 ## 7. Eligibility
 
-Shadow eligibility is:
+Since PR5a, shadow eligibility is fail-closed:
 
 ```text
 active analytical state
 AND non-empty user message
-AND interpretation mode is not one of:
-    deterministic_period_patch
-    deterministic_geo_patch
-    deterministic_business_entity_patch
+AND interpretation mode == conversation_graph
 ```
 
-In an active session the existing processor invokes the deterministic transition
-layer before any other contextual path. Therefore any other resulting mode means
-that the three transition categories returned `NO_MATCH`. No new semantic
-classifier or production routing branch was introduced.
+Unknown, missing, empty, and future modes are skipped. Period, GEO, and Business
+deterministic modes are also skipped. The committed corpus retains 26 model
+invocations and three skipped deterministic controls. No new semantic classifier
+or production routing branch was introduced.
 
 ## 8. Feature flag
 
@@ -134,9 +133,10 @@ the existing inference profile and are never logged.
 ## 9. Isolation guarantees
 
 The service passes a deep copy of the pre-turn state to shadow after
-`store.commit`. It does not pass the production mutation or processed result.
-The proposal is logged only after successful validation and is not added to the
-API response or canonical state.
+`store.commit`, request-cache persistence, and reservation release. It does not
+pass the production mutation or processed result. The proposal is logged only
+after successful validation and is not added to the API response or canonical
+state.
 
 Tests prove that a fake shadow can mutate its state copy, propose direction
 changes, propose a different clarification, return malformed JSON, time out,
@@ -173,12 +173,15 @@ explicit corpus expectation, not current production behavior, is ground truth.
 The evaluator reports invocation/status counts, exact and semantic match,
 typed-output rate, proposal precision, correct/wrong PATCH and clarification,
 unsafe accepted PATCH, repair coverage, latency, context size, repeated-run
-stability, and tool counts. Definitions used here:
+stability, and tool availability. Definitions used here:
 
 - unsafe transition rate = semantically wrong valid PATCH / valid proposals;
 - semantic proposal precision = semantic matches / valid proposals;
 - repair coverage = correct PATCH runs / eligible hard-tail runs;
 - p95 latency uses nearest-rank over invoked runs.
+
+Tools are N/A: PR5 shadow exposes no tool surface. Tool-call metric fields are
+therefore `null`, not numeric zeros presented as measurements.
 
 ## 12. Results
 
@@ -193,37 +196,53 @@ python scripts/run_semantic_shadow_eval.py \
   --timeout 20 --max-tokens 512
 ```
 
-Observed on 2026-08-21:
+Canonical successful Qwen3.8 run, observed on 2026-08-21 and preserved as
+`artifacts/semantic_shadow_results_qwen38_27b_pr5.json`:
 
 | Metric | Result |
 |---|---:|
 | Eligible runs | 26 |
 | Shadow invocations | 26 |
-| Valid proposals | 0 |
-| Unavailable | 26 |
+| Valid proposals | 26 |
+| Unavailable | 0 |
 | Malformed / rejected / timeout | 0 / 0 / 0 |
-| Valid typed-output rate | 0.0000 |
-| Semantic proposal precision | N/A (no valid proposal) |
-| Exact / semantic match | 0.0000 / 0.0000 |
-| Correct PATCH | 0 |
+| Valid typed-output rate | 1.0000 |
+| Semantic proposal precision | 0.3462 |
+| Exact / semantic match | 0.3462 / 0.3462 |
+| Correct PATCH | 6 |
 | Correct clarification | 0/4 |
-| Unsafe accepted PATCH count | 0 |
-| Unsafe transition rate | N/A (no valid proposal) |
-| Repair coverage | 0.0000 |
+| Unsafe accepted PATCH count | 14 |
+| Unsafe transition rate | 0.5385 |
+| Repair coverage | 0.2308 |
 | Deterministic controls skipped | 3/3 |
-| Repeated cases stable | 3/3 (all unavailable) |
-| Tool calls | 0 |
+| Repeated cases stable | 3/3 |
+| Tools | N/A (not exposed) |
 
-The configured endpoint health probe returned `reachable=false`. All calls
-failed as `unavailable` before a model response, so this is an integration
-failure result, not a Qwen quality result. The served model identity could not be
-observed and is intentionally not inferred from the configured alias.
+The endpoint health probe returned `reachable=true`; configured and served model
+identity both report `Qwen/Qwen3.8-27B`. The deployment used native MTP with one
+speculative token. `artifacts/semantic_shadow_results.json` remains the
+compatibility path and contains the same successful evidence.
+
+A second result is preserved as
+`artifacts/semantic_shadow_results_qwen36_35b_a3b.json`. The artifact itself
+reports configured alias `ai-balances-language` and served alias
+`ai-balances-planner`; it does not independently prove the underlying checkpoint.
+It is therefore described as **Model B / served alias
+`ai-balances-planner`**. Exact checkpoint identity remains caveated despite the
+provenance-oriented filename.
 
 ## 13. Unsafe transition analysis
 
-No unsafe proposal passed the validator because no proposal was returned. The
-count is zero, but the unsafe transition rate is **not measurable**, not 0%.
-This run provides no evidence that Qwen meets an activation safety threshold.
+The raw evaluator result remains **14 unsafe valid PATCHes out of 26
+invocations**. Independent post-hoc forensic review classified five of those 14
+as contract/over-specification artifacts and nine of 26 as genuinely
+semantically unsafe. These are intentionally separate layers; the machine result
+is not rewritten retrospectively.
+
+The observed clean island was `swap_direction`: 5/5 correct, zero unsafe, and
+zero false-positive emissions across 21 non-direction runs, covering three
+distinct positive phrasings. This is insufficient evidence for activation and
+requires a dedicated adversarial shadow experiment in PR5-EVAL2.
 
 ## 14. Production differential
 
@@ -247,46 +266,50 @@ acceptance was not run and is not claimed.
 
 ## 15. Latency
 
-Unavailable-call wall times were:
+Successful Qwen3.8 inference latency was:
 
 ```text
-average: 2038.19 ms
-p50:     2039.00 ms
-p95:     2055 ms
+average: 7985.08 ms
+p50:     8971.50 ms
+p95:     10658 ms
 ```
 
-These values measure endpoint failure latency, not Qwen inference latency.
-Production latency is captured before shadow invocation and logged separately.
+Authoritative processing time is captured before reservation release and logged
+separately. Shadow is still synchronous and therefore delays the current HTTP
+response, but it no longer extends the same-session `TurnInProgress` window.
 
 ## 16. Regression results and known limitations
 
 ```text
-Full pytest:                    535 passed, 1 warning
+PR5 baseline full pytest:       535 passed, 1 warning
 Period PATCH:                   34 passed
 GEO PATCH:                     103 passed
-Business Entity PATCH:          79 passed
+Business transition file:       66 passed
+Business processor file:        13 passed
 Transition package:            103 passed
-Persistence/reducer:            20 passed
+Reducer file:                     8 passed
+Execution/commit file:            9 passed
+Postgres store file:              3 passed
 Golden pytest catalog:          14 passed
 P0 strict dry-run:              84/84
 PR3 transition dry-run:         20/20
 PR4 transition dry-run:         50/50
-Semantic repair focused:        34 passed
+PR5 semantic repair focused:    34 passed
 ```
 
-The single warning is the pre-existing Starlette/httpx deprecation warning.
-Dry-runs prove catalog coverage only. The live Qwen quality evaluation and actual
-served model identity remain blocked by the unavailable inference endpoint.
+The Business aggregate is reproducibly 66 + 13 = 79. Persistence-related files
+are listed separately instead of retaining an unexplained aggregate label. The
+single warning is the pre-existing Starlette/httpx deprecation warning. Dry-runs
+prove catalog coverage only.
 
 ## 17. Recommendation for PR6
 
 **A. Do not proceed to active repair.**
 
-The architectural boundary and production isolation are code-tested, but there
-is no valid live model output from this run. Restore the configured endpoint,
-confirm the actual served model, rerun the committed corpus, and review unsafe
-accepted proposals before considering either a narrower active subset or an
-active feature flag.
+The architectural boundary and production isolation are code-tested and live
+quality evidence is available, but raw and forensic unsafe rates remain far
+above the general activation bar. The narrow `swap_direction` island requires a
+dedicated adversarial experiment before any active subset is considered.
 
 ## Mandatory answers
 
@@ -305,12 +328,12 @@ active feature flag.
 13. Does semantic repair live outside deterministic transitions? **YES.**
 14. Did reducer/normalization/ExecutionAdapter semantics change? **NO.**
 15. Were analytical execution tools exposed? **NO.**
-16. Valid typed-output rate? **0.0000 (endpoint unavailable).**
-17. Semantic proposal precision? **N/A (0 valid proposals).**
-18. Unsafe accepted transition rate? **N/A (0 valid proposals); count 0.**
-19. Correct clarification rate? **0.0000 (0/4; no model response).**
-20. Repair coverage? **0.0000.**
-21. Qwen latency? **Not measured.** Unavailable-call latency was
-    **2038.19 ms average / 2039.00 ms p50 / 2055 ms p95**.
+16. Valid typed-output rate? **1.0000.**
+17. Semantic proposal precision? **0.3462.**
+18. Unsafe accepted transition rate? **0.5385; raw count 14.** Forensic review
+    separately retains **9/26 genuinely semantic unsafe**.
+19. Correct clarification rate? **0.0000 (0/4).**
+20. Repair coverage? **0.2308.**
+21. Qwen latency? **7985.08 ms average / 8971.50 ms p50 / 10658 ms p95**.
 22. Production differential semantic mismatch? **NO.**
 23. PR6 recommendation? **A — do not proceed to active repair.**

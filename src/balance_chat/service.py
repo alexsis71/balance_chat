@@ -271,13 +271,20 @@ class BalanceChatService:
                 if callable(save_cached):
                     save_cached(session_id, trace_id, response)
             production_elapsed_ms = int((perf_counter() - started) * 1000)
-            self._run_semantic_shadow(
-                state=shadow_state,
-                message=message,
-                processed=processed,
-                request_id=trace_id,
-                production_elapsed_ms=production_elapsed_ms,
-            )
+            shadow_allowed = True
+            if reserved:
+                reserved = False
+                shadow_allowed = self._release_turn_reservation(
+                    session_id, trace_id
+                )
+            if shadow_allowed:
+                self._run_semantic_shadow(
+                    state=shadow_state,
+                    message=message,
+                    processed=processed,
+                    request_id=trace_id,
+                    production_elapsed_ms=production_elapsed_ms,
+                )
             intent = (
                 committed.active_dialog_scope.intent
                 if committed.active_dialog_scope is not None
@@ -404,18 +411,25 @@ class BalanceChatService:
             raise
         finally:
             if reserved:
-                release = getattr(self.store, "release", None)
-                if callable(release):
-                    try:
-                        release(session_id, trace_id)
-                    except Exception:
-                        log_event(
-                            LOGGER,
-                            logging.ERROR,
-                            "turn_reservation_release_failed",
-                            request_id=trace_id,
-                            session_id=session_id,
-                        )
+                reserved = False
+                self._release_turn_reservation(session_id, trace_id)
+
+    def _release_turn_reservation(self, session_id: str, request_id: str) -> bool:
+        release = getattr(self.store, "release", None)
+        if not callable(release):
+            return False
+        try:
+            release(session_id, request_id)
+            return True
+        except Exception:
+            log_event(
+                LOGGER,
+                logging.ERROR,
+                "turn_reservation_release_failed",
+                request_id=request_id,
+                session_id=session_id,
+            )
+            return False
 
     def _run_semantic_shadow(
         self,

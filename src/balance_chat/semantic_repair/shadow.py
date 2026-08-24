@@ -28,6 +28,8 @@ DETERMINISTIC_PATCH_MODES = frozenset(
     }
 )
 
+SHADOW_ELIGIBLE_MODES = frozenset({"conversation_graph"})
+
 
 class SemanticShadowRunner:
     def __init__(
@@ -184,7 +186,7 @@ def _eligible(
     return bool(
         state.active_dialog_scope is not None
         and str(message).strip()
-        and str(interpretation_mode or "") not in DETERMINISTIC_PATCH_MODES
+        and interpretation_mode in SHADOW_ELIGIBLE_MODES
     )
 
 
