@@ -243,10 +243,10 @@ claimed.
 
 ```text
 pytest -q
-  552 passed, 1 warning
+  553 passed, 1 warning
 
 pytest tests/semantic_repair -q
-  51 passed
+  52 passed
 
 pytest tests/test_period_patch.py -q
   34 passed
@@ -331,6 +331,6 @@ READY** because nine of 26 runs remain genuinely unsafe after forensic review.
 17. **Q17 — Did PR5a change prompt semantics? NO.**
 18. **Q18 — Were G1/G2/G3/G4 implemented? NO.**
 19. **Q19 — Was active semantic repair enabled? NO.**
-20. **Q20 — Full pytest? 552 passed, 1 warning.**
+20. **Q20 — Full pytest? 553 passed, 1 warning.**
 21. **Q21 — Production differential semantic mismatch? NO.**
 22. **Q22 — Is PR5 ready for merge after PR5a? YES.** Active repair remains out of scope and not ready.
