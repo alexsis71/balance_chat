@@ -257,9 +257,7 @@ def _metrics(
 ) -> dict[str, Any]:
     invocations = counters["shadow_invocations"]
     valid = counters["valid_proposals"]
-    eligible_hard_tail = counters["runs"] - (
-        counters["runs"] - counters["eligible_turns"]
-    )
+    eligible_hard_tail = counters["eligible_turns"]
     return {
         "eligible_turns": counters["eligible_turns"],
         "shadow_invocations": invocations,
@@ -302,9 +300,10 @@ def _metrics(
         "deterministic_controls_skipped": counters[
             "deterministic_controls_skipped"
         ],
-        "tool_call_count": 0,
-        "repeated_tool_calls": 0,
-        "tool_errors": 0,
+        "tools_exposed": False,
+        "tool_call_count": None,
+        "repeated_tool_calls": None,
+        "tool_errors": None,
     }
 
 
