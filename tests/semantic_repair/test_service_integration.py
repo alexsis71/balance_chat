@@ -477,6 +477,12 @@ class CommitFailureStore(RecordingStore):
         return super().commit(*args, **kwargs)
 
 
+class CacheFailureStore(RecordingStore):
+    def save_request_result(self, session_id, request_id, response):
+        self._record(("save_request_result", request_id))
+        raise RuntimeError("cache failed")
+
+
 class PostReserveConflictStore(RecordingStore):
     def reserve(self, session_id, expected_revision, request_id):
         super().reserve(session_id, expected_revision, request_id)
@@ -484,9 +490,14 @@ class PostReserveConflictStore(RecordingStore):
             self._states[session_id].revision += 1
 
 
-@pytest.mark.parametrize("failure", ["revision", "processor", "commit"])
+@pytest.mark.parametrize("failure", ["revision", "processor", "commit", "cache"])
 def test_authoritative_failure_releases_acquired_reservation_once(failure) -> None:
-    store = PostReserveConflictStore() if failure == "revision" else CommitFailureStore()
+    if failure == "revision":
+        store = PostReserveConflictStore()
+    elif failure == "cache":
+        store = CacheFailureStore()
+    else:
+        store = CommitFailureStore()
     state = store.create("same-session")
     store.commit(
         state.session_id,
