@@ -71,12 +71,14 @@ class BalanceChatService:
         metadata=None,
         delete_result_memory: Callable[[str], int] | None = None,
         persist_result_memory: Callable[..., dict[str, Any]] | None = None,
+        semantic_shadow: Any | None = None,
     ) -> None:
         self.store = store
         self.processor = processor
         self.metadata = metadata
         self.delete_result_memory = delete_result_memory
         self.persist_result_memory = persist_result_memory
+        self.semantic_shadow = semantic_shadow
         self._locks: defaultdict[str, RLock] = defaultdict(RLock)
         self._locks_guard = RLock()
 
@@ -195,6 +197,11 @@ class BalanceChatService:
                 self._validate_metadata(state)
                 if state.revision != expected_revision:
                     raise RevisionConflict(session_id, expected_revision, state.revision)
+                shadow_state = (
+                    state.model_copy(deep=True)
+                    if self.semantic_shadow is not None
+                    else None
+                )
                 processed = self.processor.process(
                     state,
                     message=message,
@@ -263,6 +270,14 @@ class BalanceChatService:
                 save_cached = getattr(self.store, "save_request_result", None)
                 if callable(save_cached):
                     save_cached(session_id, trace_id, response)
+            production_elapsed_ms = int((perf_counter() - started) * 1000)
+            self._run_semantic_shadow(
+                state=shadow_state,
+                message=message,
+                processed=processed,
+                request_id=trace_id,
+                production_elapsed_ms=production_elapsed_ms,
+            )
             intent = (
                 committed.active_dialog_scope.intent
                 if committed.active_dialog_scope is not None
@@ -310,7 +325,7 @@ class BalanceChatService:
                     if processed.result_reference is not None
                     else None
                 ),
-                elapsed_ms=int((perf_counter() - started) * 1000),
+                elapsed_ms=production_elapsed_ms,
             )
             frame = (
                 committed.conversation_window[-1]
@@ -401,6 +416,63 @@ class BalanceChatService:
                             request_id=trace_id,
                             session_id=session_id,
                         )
+
+    def _run_semantic_shadow(
+        self,
+        *,
+        state: ContextContractV2 | None,
+        message: str,
+        processed: TurnProcessResult,
+        request_id: str,
+        production_elapsed_ms: int,
+    ) -> None:
+        if self.semantic_shadow is None or state is None:
+            return
+        interpretation = processed.diagnostics.get("interpretation")
+        interpretation_mode = (
+            str(interpretation.get("mode") or "")
+            if isinstance(interpretation, dict)
+            else None
+        )
+        try:
+            shadow = self.semantic_shadow.run(
+                state=state.model_copy(deep=True),
+                message=message,
+                interpretation_mode=interpretation_mode,
+                request_id=request_id,
+            )
+            proposal = (
+                shadow.proposal.model_dump(mode="json")
+                if shadow.validation_status.value == "valid"
+                and shadow.proposal is not None
+                else None
+            )
+            log_event(
+                LOGGER,
+                logging.INFO,
+                "semantic_transition_shadow_completed",
+                request_id=request_id,
+                eligible=shadow.eligible,
+                invoked=shadow.invoked,
+                validation_status=shadow.validation_status.value,
+                validation_errors=list(shadow.validation_errors),
+                proposal=proposal,
+                shadow_latency_ms=shadow.latency_ms,
+                production_latency_ms=production_elapsed_ms,
+                model=shadow.model,
+                context_turn_count=shadow.context_turn_count,
+                context_result_count=shadow.context_result_count,
+                context_size_chars=shadow.context_size_chars,
+            )
+        except Exception as exc:
+            log_event(
+                LOGGER,
+                logging.WARNING,
+                "semantic_transition_shadow_failed",
+                request_id=request_id,
+                production_latency_ms=production_elapsed_ms,
+                error_type=type(exc).__name__,
+            )
 
     def _session_lock(self, session_id: str) -> RLock:
         with self._locks_guard:

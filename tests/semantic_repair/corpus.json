@@ -1,0 +1,208 @@
+{
+  "version": "1.0",
+  "contexts": {
+    "directed_flow": {
+      "current_active_state": {
+        "operation": "show",
+        "operands": [{
+          "metric": "distribution",
+          "entities": [
+            {"role": "source", "type": "balance", "label": "ГП ТГ Томск"},
+            {"role": "destination", "type": "balance", "label": "ГП ТГ Сургут"}
+          ]
+        }],
+        "periods": [{"date_from": "2025-06-01", "date_to": "2025-07-01"}],
+        "grouping": [], "grain": "total", "comparison": null, "formula": null, "ranking": null
+      },
+      "recent_semantic_turns": [{
+        "recency": 1,
+        "user": "Покажи распределение из ГП ТГ Томск в ГП ТГ Сургут за июнь 2025",
+        "outcome": "success",
+        "state": {"operation": "show", "metric": "distribution"},
+        "result": {"row_count": 1, "fact_count": 1}
+      }],
+      "recent_addressable_results": [{
+        "recency": 1,
+        "state": {"operation": "show", "metric": "distribution", "direction": "Томск -> Сургут"},
+        "row_count": 1, "fact_count": 1
+      }],
+      "current_user_message": "А теперь наоборот"
+    },
+    "two_results": {
+      "current_active_state": {
+        "operation": "show",
+        "operands": [{"metric": "distribution", "entities": [{"role": "destination", "type": "geo_object", "label": "Ростовская область"}]}],
+        "periods": [{"date_from": "2025-05-01", "date_to": "2025-06-01"}],
+        "grouping": [], "grain": "total", "comparison": null, "formula": null, "ranking": null
+      },
+      "recent_semantic_turns": [
+        {"recency": 2, "user": "Покажи за апрель", "outcome": "success", "state": {"operation": "show", "period": "апрель"}, "result": {"row_count": 1, "fact_count": 1}},
+        {"recency": 1, "user": "А за май?", "outcome": "success", "state": {"operation": "show", "period": "май"}, "result": {"row_count": 1, "fact_count": 1}}
+      ],
+      "recent_addressable_results": [
+        {"recency": 2, "state": {"metric": "distribution", "period": "апрель"}, "row_count": 1, "fact_count": 1},
+        {"recency": 1, "state": {"metric": "distribution", "period": "май"}, "row_count": 1, "fact_count": 1}
+      ],
+      "current_user_message": "Сравни последние два"
+    },
+    "single_result": {
+      "current_active_state": {
+        "operation": "show",
+        "operands": [{"metric": "balance", "entities": [{"role": "balance", "type": "balance", "label": "ГП ТГ Ухта"}]}],
+        "periods": [{"date_from": "2025-06-25", "date_to": "2025-06-26"}],
+        "grouping": [], "grain": "day", "comparison": null, "formula": null, "ranking": null
+      },
+      "recent_semantic_turns": [{"recency": 1, "user": "Покажи баланс", "outcome": "success", "state": {"operation": "show", "metric": "balance"}, "result": {"row_count": 1, "fact_count": 1}}],
+      "recent_addressable_results": [{"recency": 1, "state": {"metric": "balance"}, "row_count": 1, "fact_count": 1}],
+      "current_user_message": "Сравни их"
+    },
+    "generic_active": {
+      "current_active_state": {
+        "operation": "show",
+        "operands": [{"metric": "distribution", "entities": [{"role": "destination", "type": "geo_object", "label": "Ростовская область"}]}],
+        "periods": [{"date_from": "2025-04-01", "date_to": "2025-05-01"}],
+        "grouping": [], "grain": "total", "comparison": null, "formula": null, "ranking": null
+      },
+      "recent_semantic_turns": [{"recency": 1, "user": "Покажи распределение", "outcome": "success", "state": {"operation": "show", "metric": "distribution"}, "result": {"row_count": 3, "fact_count": 3}}],
+      "recent_addressable_results": [{"recency": 1, "state": {"metric": "distribution"}, "row_count": 3, "fact_count": 3}],
+      "current_user_message": "Что дальше?"
+    }
+  },
+  "cases": [
+    {
+      "id": "reverse_business_direction", "category": "direction_reinterpretation", "context": "directed_flow", "repeat": 3,
+      "current_production_outcome": {"source": "agentic_poc_baseline", "status": "no_data", "semantic_match": false},
+      "expected": {"shadow_invoked": true, "action": "patch", "mutations": [{"kind": "swap_direction", "value": null}], "references": []}
+    },
+    {
+      "id": "reverse_direction_explicit", "category": "direction_reinterpretation", "context": "directed_flow",
+      "current_production_outcome": {"source": "not_reexecuted", "status": "existing_contextual_path", "semantic_match": null},
+      "message_override": "Покажи обратное направление",
+      "expected": {"shadow_invoked": true, "action": "patch", "mutations": [{"kind": "swap_direction", "value": null}], "references": []}
+    },
+    {
+      "id": "reverse_direction_short", "category": "direction_reinterpretation", "context": "directed_flow",
+      "current_production_outcome": {"source": "agentic_poc_baseline", "status": "no_data", "semantic_match": false},
+      "message_override": "Обратно",
+      "expected": {"shadow_invoked": true, "action": "patch", "mutations": [{"kind": "swap_direction", "value": null}], "references": []}
+    },
+    {
+      "id": "compare_bare", "category": "comparison_continuation", "context": "two_results",
+      "current_production_outcome": {"source": "agentic_poc_baseline", "status": "needs_clarification", "semantic_match": false},
+      "message_override": "Сравни",
+      "expected": {"shadow_invoked": true, "action": "patch", "mutations": [{"kind": "set_operation", "value": "compare"}, {"kind": "set_comparison", "value": "last_two_results"}], "references": [{"kind": "last_two_results", "selector": null}]}
+    },
+    {
+      "id": "compare_pronoun", "category": "comparison_continuation", "context": "two_results", "repeat": 3,
+      "current_production_outcome": {"source": "agentic_poc_baseline", "status": "error", "semantic_match": false},
+      "message_override": "Сравни их",
+      "expected": {"shadow_invoked": true, "action": "patch", "mutations": [{"kind": "set_operation", "value": "compare"}, {"kind": "set_comparison", "value": "last_two_results"}], "references": [{"kind": "last_two_results", "selector": null}]}
+    },
+    {
+      "id": "compare_last_two", "category": "comparison_continuation", "context": "two_results",
+      "current_production_outcome": {"source": "not_reexecuted", "status": "existing_contextual_path", "semantic_match": null},
+      "expected": {"shadow_invoked": true, "action": "patch", "mutations": [{"kind": "set_operation", "value": "compare"}, {"kind": "set_comparison", "value": "last_two_results"}], "references": [{"kind": "last_two_results", "selector": null}]}
+    },
+    {
+      "id": "compare_named_seasons", "category": "comparison_continuation", "context": "two_results",
+      "current_production_outcome": {"source": "not_reexecuted", "status": "existing_contextual_path", "semantic_match": null},
+      "message_override": "Сравни весну и лето",
+      "expected": {"shadow_invoked": true, "action": "patch", "mutations": [{"kind": "set_operation", "value": "compare"}, {"kind": "set_comparison", "value": "named_periods"}], "references": []}
+    },
+    {
+      "id": "absolute_difference", "category": "calculation_transformation", "context": "two_results",
+      "current_production_outcome": {"source": "not_reexecuted", "status": "existing_contextual_path", "semantic_match": null},
+      "message_override": "Какова разница?",
+      "expected": {"shadow_invoked": true, "action": "patch", "mutations": [{"kind": "set_operation", "value": "calculate"}, {"kind": "set_comparison", "value": "absolute_difference"}], "references": [{"kind": "last_two_results", "selector": null}]}
+    },
+    {
+      "id": "percent_difference", "category": "calculation_transformation", "context": "two_results", "repeat": 3,
+      "current_production_outcome": {"source": "agentic_poc_baseline", "status": "ok", "semantic_match": false},
+      "message_override": "Какова разница в процентах?",
+      "expected": {"shadow_invoked": true, "action": "patch", "mutations": [{"kind": "set_operation", "value": "calculate"}, {"kind": "set_comparison", "value": "percent_difference"}], "references": [{"kind": "last_two_results", "selector": null}]}
+    },
+    {
+      "id": "larger_value", "category": "calculation_transformation", "context": "two_results",
+      "current_production_outcome": {"source": "not_reexecuted", "status": "existing_contextual_path", "semantic_match": null},
+      "message_override": "Что больше?",
+      "expected": {"shadow_invoked": true, "action": "patch", "mutations": [{"kind": "set_operation", "value": "compare"}, {"kind": "set_comparison", "value": "larger_value"}], "references": [{"kind": "last_two_results", "selector": null}]}
+    },
+    {
+      "id": "correction_geo", "category": "correction", "context": "generic_active",
+      "current_production_outcome": {"source": "not_reexecuted", "status": "existing_contextual_path", "semantic_match": null},
+      "message_override": "Нет, я имел в виду Нижний Новгород",
+      "expected": {"shadow_invoked": true, "action": "clarify"}
+    },
+    {
+      "id": "correction_business", "category": "correction", "context": "generic_active",
+      "current_production_outcome": {"source": "not_reexecuted", "status": "existing_contextual_path", "semantic_match": null},
+      "message_override": "Нет, только Ухта",
+      "expected": {"shadow_invoked": true, "action": "clarify"}
+    },
+    {
+      "id": "reference_first", "category": "references", "context": "two_results",
+      "current_production_outcome": {"source": "not_reexecuted", "status": "existing_contextual_path", "semantic_match": null},
+      "message_override": "Первый из тех двух",
+      "expected": {"shadow_invoked": true, "action": "patch", "mutations": [{"kind": "reference_prior_result", "value": null}], "references": [{"kind": "last_two_results", "selector": "first"}]}
+    },
+    {
+      "id": "reference_second", "category": "references", "context": "two_results",
+      "current_production_outcome": {"source": "not_reexecuted", "status": "existing_contextual_path", "semantic_match": null},
+      "message_override": "Возьми второй вариант",
+      "expected": {"shadow_invoked": true, "action": "patch", "mutations": [{"kind": "reference_prior_result", "value": null}], "references": [{"kind": "last_two_results", "selector": "second"}]}
+    },
+    {
+      "id": "same_for_first", "category": "references", "context": "two_results",
+      "current_production_outcome": {"source": "not_reexecuted", "status": "existing_contextual_path", "semantic_match": null},
+      "message_override": "То же для первого",
+      "expected": {"shadow_invoked": true, "action": "patch", "mutations": [{"kind": "reference_prior_result", "value": null}], "references": [{"kind": "last_two_results", "selector": "first"}]}
+    },
+    {
+      "id": "ambiguous_pronoun_single_result", "category": "ambiguous", "context": "single_result",
+      "current_production_outcome": {"source": "not_reexecuted", "status": "existing_contextual_path", "semantic_match": null},
+      "expected": {"shadow_invoked": true, "action": "clarify"}
+    },
+    {
+      "id": "ambiguous_first_without_pair", "category": "ambiguous", "context": "single_result",
+      "current_production_outcome": {"source": "not_reexecuted", "status": "existing_contextual_path", "semantic_match": null},
+      "message_override": "Первый из тех двух",
+      "expected": {"shadow_invoked": true, "action": "clarify"}
+    },
+    {
+      "id": "unsupported_forecast", "category": "unsupported", "context": "generic_active",
+      "current_production_outcome": {"source": "not_reexecuted", "status": "unsupported", "semantic_match": true},
+      "message_override": "Спрогнозируй значение на следующий год",
+      "expected": {"shadow_invoked": true, "action": "unsupported"}
+    },
+    {
+      "id": "unsupported_causal", "category": "unsupported", "context": "generic_active",
+      "current_production_outcome": {"source": "not_reexecuted", "status": "unsupported", "semantic_match": true},
+      "message_override": "Объясни внешние причины этого изменения",
+      "expected": {"shadow_invoked": true, "action": "unsupported"}
+    },
+    {
+      "id": "unsupported_sql", "category": "unsupported", "context": "generic_active",
+      "current_production_outcome": {"source": "not_reexecuted", "status": "unsupported", "semantic_match": true},
+      "message_override": "Напиши SQL для этого запроса",
+      "expected": {"shadow_invoked": true, "action": "unsupported"}
+    },
+    {
+      "id": "geo_switch_control", "category": "deterministic_control", "context": "generic_active", "interpretation_mode": "deterministic_geo_patch",
+      "current_production_outcome": {"source": "PR4a", "status": "deterministic_geo_patch", "semantic_match": true},
+      "message_override": "Теперь в Московскую область",
+      "expected": {"shadow_invoked": false}
+    },
+    {
+      "id": "period_switch_control", "category": "deterministic_control", "context": "generic_active", "interpretation_mode": "deterministic_period_patch",
+      "current_production_outcome": {"source": "PR4a", "status": "deterministic_period_patch", "semantic_match": true},
+      "message_override": "А за май?",
+      "expected": {"shadow_invoked": false}
+    },
+    {
+      "id": "business_switch_control", "category": "deterministic_control", "context": "generic_active", "interpretation_mode": "deterministic_business_entity_patch",
+      "current_production_outcome": {"source": "PR4a", "status": "deterministic_business_entity_patch", "semantic_match": true},
+      "message_override": "Только из ГП ТГ Ухта",
+      "expected": {"shadow_invoked": false}
+    }
+  ]
+}

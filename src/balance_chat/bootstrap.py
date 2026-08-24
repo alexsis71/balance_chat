@@ -16,6 +16,8 @@ from .interpretation import UnifiedInterpreter
 from .observability import configure_logging
 from .processor import PipelineV2TurnProcessor, metadata_ref
 from .result_memory import PipelineResultMemoryAdapter
+from .semantic_repair.backend import PipelineSemanticShadowBackend
+from .semantic_repair.shadow import SemanticShadowRunner
 from .service import BalanceChatService
 from .store import PostgresContextStore, SQLiteContextStore
 from .contracts import MetadataVersionRef, ResultMemoryWrite
@@ -33,6 +35,7 @@ def build_application(config_path: str | Path):
     registry = runtime.load_metadata_registry()
     store = _context_store(config, path, runtime)
     memory = _result_memory(config, runtime)
+    semantic_shadow = _semantic_shadow(config, runtime)
     _drain_memory_outbox(store, memory)
     translator = PipelineEnvelopeTranslator()
     executor = NativeExecutor(
@@ -59,6 +62,7 @@ def build_application(config_path: str | Path):
             else None
         ),
         persist_result_memory=(memory.persist_write if memory is not None else None),
+        semantic_shadow=semantic_shadow,
     )
     return create_app(
         service,
@@ -169,6 +173,40 @@ def _result_memory(config: dict[str, Any], runtime: PipelineRuntime):
         max_total_chars=int(section.get("max_total_chars") or 12000),
         ttl_s=int(section.get("ttl_s") or 86400),
     )
+
+
+def _semantic_shadow(
+    config: dict[str, Any],
+    runtime: PipelineRuntime,
+) -> SemanticShadowRunner | None:
+    section = config.get("semantic_repair_shadow") or {}
+    env_name = str(
+        section.get("enabled_env") or "SEMANTIC_REPAIR_SHADOW_ENABLED"
+    ).strip()
+    if not _env_flag(os.getenv(env_name)):
+        return None
+    try:
+        backend = PipelineSemanticShadowBackend(
+            runtime,
+            profile=str(section.get("profile") or "context"),
+            timeout_s=float(section.get("timeout_s") or 12),
+            max_tokens=int(section.get("max_tokens") or 512),
+        )
+    except Exception as exc:
+        LOGGER.warning(
+            "semantic shadow backend initialization failed: %s", type(exc).__name__
+        )
+        backend = None
+    return SemanticShadowRunner(
+        backend,
+        enabled=True,
+        max_turns=int(section.get("recent_turn_limit") or 4),
+        max_results=int(section.get("recent_result_limit") or 4),
+    )
+
+
+def _env_flag(value: str | None) -> bool:
+    return str(value or "").strip().casefold() in {"1", "true", "yes", "on"}
 
 
 def _drain_memory_outbox(store: Any, memory: PipelineResultMemoryAdapter | None) -> None:
