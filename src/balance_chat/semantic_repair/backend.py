@@ -41,7 +41,7 @@ class PipelineSemanticShadowBackend:
         max_tokens: int = 512,
     ) -> None:
         self.profile = str(profile)
-        self.max_tokens = max(128, min(int(max_tokens), 1024))
+        self.max_tokens = max(128, min(int(max_tokens), 4096))
         client_module = runtime._import_pipeline_module("inference.client")
         models = runtime._import_pipeline_module("inference.models")
         configured = runtime.pipeline_runtime().inference_client

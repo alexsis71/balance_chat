@@ -1,9 +1,13 @@
 from __future__ import annotations
 
+from dataclasses import dataclass
 import json
 from types import SimpleNamespace
 
-from balance_chat.semantic_repair.backend import ShadowModelResponse
+from balance_chat.semantic_repair.backend import (
+    PipelineSemanticShadowBackend,
+    ShadowModelResponse,
+)
 from balance_chat.semantic_repair.evaluation import (
     _set_thinking_override,
     evaluate_corpus,
@@ -36,6 +40,39 @@ class ConstantBackend:
             content=json.dumps(self.output),
             model="fake-shadow-model",
         )
+
+
+@dataclass(frozen=True)
+class _InferenceProfileStub:
+    connect_timeout_s: float = 10.0
+    read_timeout_s: float = 180.0
+    connect_retries: int = 1
+    max_tokens: int = 8192
+
+
+class _InferenceClientStub:
+    def __init__(self, profiles):
+        self.profiles = profiles
+
+
+def test_shadow_backend_allows_larger_offline_thinking_budget() -> None:
+    runtime = SimpleNamespace(
+        _import_pipeline_module=lambda name: (
+            SimpleNamespace(InferenceClient=_InferenceClientStub)
+            if name == "inference.client"
+            else SimpleNamespace()
+        ),
+        pipeline_runtime=lambda: SimpleNamespace(
+            inference_client=SimpleNamespace(
+                profiles={"context": _InferenceProfileStub()}
+            )
+        ),
+    )
+
+    backend = PipelineSemanticShadowBackend(runtime, max_tokens=2048)
+
+    assert backend.max_tokens == 2048
+    assert backend._client.profiles["context"].max_tokens == 2048
 
 
 def test_thinking_override_is_scoped_to_selected_evaluation_profile() -> None:
