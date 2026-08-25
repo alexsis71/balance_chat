@@ -1,9 +1,14 @@
 from __future__ import annotations
 
 import json
+from types import SimpleNamespace
 
 from balance_chat.semantic_repair.backend import ShadowModelResponse
-from balance_chat.semantic_repair.evaluation import evaluate_corpus, load_corpus
+from balance_chat.semantic_repair.evaluation import (
+    _set_thinking_override,
+    evaluate_corpus,
+    load_corpus,
+)
 from balance_chat.semantic_repair.shadow import SemanticShadowRunner
 
 
@@ -31,6 +36,25 @@ class ConstantBackend:
             content=json.dumps(self.output),
             model="fake-shadow-model",
         )
+
+
+def test_thinking_override_is_scoped_to_selected_evaluation_profile() -> None:
+    runtime = SimpleNamespace(
+        cfg={
+            "inference": {
+                "profiles": {
+                    "context": {"chat_template_kwargs": {"enable_thinking": False}},
+                    "language": {"chat_template_kwargs": {"enable_thinking": False}},
+                }
+            }
+        }
+    )
+
+    _set_thinking_override(runtime, profile="context", enabled=True)
+
+    profiles = runtime.cfg["inference"]["profiles"]
+    assert profiles["context"]["chat_template_kwargs"]["enable_thinking"] is True
+    assert profiles["language"]["chat_template_kwargs"]["enable_thinking"] is False
 
 
 def _payload(action, mutations=None, references=None, question=None):

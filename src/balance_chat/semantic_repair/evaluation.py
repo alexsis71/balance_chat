@@ -643,6 +643,12 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--repeat", type=int)
     parser.add_argument("--mtp-method", default="mtp")
     parser.add_argument("--speculative-tokens", type=int, default=1)
+    parser.add_argument(
+        "--enable-thinking",
+        action=argparse.BooleanOptionalAction,
+        default=None,
+        help="Evaluation-only override for context chat_template_kwargs",
+    )
     args = parser.parse_args(argv)
     if not args.pipeline_root or not args.metadata_manifest:
         parser.error("pipeline root and metadata manifest are required")
@@ -651,7 +657,14 @@ def main(argv: list[str] | None = None) -> int:
             Path(args.pipeline_root), Path(args.metadata_manifest)
         ).validated()
     )
-    configured_client = runtime.pipeline_runtime().inference_client
+    pipeline_runtime = runtime.pipeline_runtime()
+    if args.enable_thinking is not None:
+        _set_thinking_override(
+            pipeline_runtime,
+            profile=args.profile,
+            enabled=args.enable_thinking,
+        )
+    configured_client = pipeline_runtime.inference_client
     health = configured_client.health(args.profile)
     backend = PipelineSemanticShadowBackend(
         runtime,
@@ -686,6 +699,9 @@ def main(argv: list[str] | None = None) -> int:
         "max_tokens": args.max_tokens,
         "mtp_method": args.mtp_method,
         "num_speculative_tokens": args.speculative_tokens,
+        "chat_template_kwargs": dict(
+            configured_client.profiles[args.profile].chat_template_kwargs
+        ),
         "prompt_sha256": hashlib.sha256(prompt_bytes).hexdigest(),
         "contract_schema_sha256": hashlib.sha256(schema_bytes).hexdigest(),
         "corpus_sha256": hashlib.sha256(corpus_bytes).hexdigest(),
@@ -701,6 +717,19 @@ def main(argv: list[str] | None = None) -> int:
     print(json.dumps(report["metrics"], ensure_ascii=False, indent=2))
     print("served_models=" + ",".join(report["served_models"]))
     return 0
+
+
+def _set_thinking_override(runtime: Any, *, profile: str, enabled: bool) -> None:
+    inference = runtime.cfg.get("inference")
+    profiles = inference.get("profiles") if isinstance(inference, dict) else None
+    selected = profiles.get(profile) if isinstance(profiles, dict) else None
+    if not isinstance(selected, dict):
+        raise ValueError(f"inference profile {profile!r} is not configured")
+    kwargs = selected.get("chat_template_kwargs")
+    selected["chat_template_kwargs"] = {
+        **(dict(kwargs) if isinstance(kwargs, Mapping) else {}),
+        "enable_thinking": bool(enabled),
+    }
 
 
 if __name__ == "__main__":
