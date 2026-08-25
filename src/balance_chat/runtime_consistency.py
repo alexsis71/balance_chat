@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from enum import StrEnum
+import hashlib
+import json
 from typing import Any
 
 from .contracts import AnalysisIntent, AnalysisOperand, ContextContractV2, Operation
@@ -540,17 +542,54 @@ def _scope_intent(state: ContextContractV2, field: str) -> AnalysisIntent | None
     return scope.intent if scope is not None else None
 
 
+def _scope_turn_id(state: ContextContractV2, field: str) -> str | None:
+    scope = getattr(state, field)
+    return scope.turn_id if scope is not None else None
+
+
+def _state_fingerprint(value: Any) -> dict[str, Any]:
+    if isinstance(value, list):
+        payload = [
+            item.model_dump(mode="json") if hasattr(item, "model_dump") else item
+            for item in value
+        ]
+        count = len(value)
+    elif hasattr(value, "model_dump"):
+        payload = value.model_dump(mode="json")
+        count = 1
+    else:
+        payload = value
+        count = None
+    encoded = json.dumps(
+        payload,
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+        default=str,
+    ).encode("utf-8")
+    return {
+        "count": count,
+        "sha256": hashlib.sha256(encoded).hexdigest(),
+    }
+
+
 def assert_committed_reloaded_consistent(
     committed: ContextContractV2,
     reloaded: ContextContractV2,
 ) -> None:
     scalar_fields = (
+        ("contract_version", committed.contract_version, reloaded.contract_version),
         ("session_id", committed.session_id, reloaded.session_id),
         ("revision", committed.revision, reloaded.revision),
+        ("metadata", committed.metadata, reloaded.metadata),
     )
     for dimension, expected, actual in scalar_fields:
         if expected != actual:
-            raise CommittedReloadedConsistencyError(dimension, expected, actual)
+            raise CommittedReloadedConsistencyError(
+                dimension,
+                _diagnostic_value(expected),
+                _diagnostic_value(actual),
+            )
     for field, dimension in (
         ("active_dialog_scope", "active_intent"),
         ("last_attempted_scope", "last_attempted_intent"),
@@ -567,3 +606,28 @@ def assert_committed_reloaded_consistent(
                 expected_value,
                 actual_value,
             )
+    semantic_state_fields = (
+        "entity_memory",
+        "result_references",
+        "recent_turns",
+        "conversation_window",
+        "pending_clarification",
+    )
+    for field in semantic_state_fields:
+        expected = getattr(committed, field)
+        actual = getattr(reloaded, field)
+        if expected != actual:
+            raise CommittedReloadedConsistencyError(
+                field,
+                _state_fingerprint(expected),
+                _state_fingerprint(actual),
+            )
+    for field, dimension in (
+        ("active_dialog_scope", "active_turn_id"),
+        ("last_attempted_scope", "last_attempted_turn_id"),
+        ("last_successful_scope", "last_successful_turn_id"),
+    ):
+        expected = _scope_turn_id(committed, field)
+        actual = _scope_turn_id(reloaded, field)
+        if expected != actual:
+            raise CommittedReloadedConsistencyError(dimension, expected, actual)

@@ -577,6 +577,19 @@ def test_committed_reloaded_business_operand_corruption_is_detected() -> None:
     assert captured.value.dimension == "active_intent.operands"
 
 
+def test_committed_reloaded_mutation_journal_corruption_is_detected() -> None:
+    intent = _simple_intent()
+    _, committed = _committed_state(intent)
+    reloaded = committed.model_copy(update={"conversation_window": []}, deep=True)
+
+    with pytest.raises(CommittedReloadedConsistencyError) as captured:
+        assert_committed_reloaded_consistent(committed, reloaded)
+
+    assert captured.value.dimension == "conversation_window"
+    assert captured.value.expected["count"] == 1
+    assert captured.value.actual["count"] == 0
+
+
 def test_state_consistency_ignores_only_infrastructure_timestamps() -> None:
     intent = _simple_intent()
     _, committed = _committed_state(intent)
