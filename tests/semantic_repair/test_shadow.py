@@ -38,7 +38,6 @@ def _valid_payload():
         "references": [],
         "unresolved_mentions": [],
         "clarification_question": None,
-        "clarification_reason": None,
         "confidence": 0.95,
         "reason_code": "reverse_requested",
     }
