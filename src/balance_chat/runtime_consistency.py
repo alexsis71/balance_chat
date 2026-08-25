@@ -343,7 +343,9 @@ def _dimensions(
             overall_operation.value,
             _sorted((source.key, source.operation) for source in sources),
         ),
-        "operand": _sorted(source.key for source in sources),
+        "operand": _sorted(
+            (source.key, source.operand.operand_id) for source in sources
+        ),
         "metric": _sorted(
             (source.key, source.operand.metric) for source in sources
         ),
@@ -456,6 +458,46 @@ def _intent_id(value: AnalysisIntent | None) -> str | None:
     return value.intent_id if value is not None else None
 
 
+def _intent_mismatch(
+    prefix: str,
+    expected: AnalysisIntent | None,
+    actual: AnalysisIntent | None,
+) -> tuple[str, Any, Any]:
+    if expected is None or actual is None:
+        return prefix, _intent_id(expected), _intent_id(actual)
+    for field in (
+        "operation",
+        "operands",
+        "periods",
+        "grouping",
+        "grain",
+        "comparison",
+        "formula",
+        "ranking",
+        "intent_id",
+    ):
+        expected_value = getattr(expected, field)
+        actual_value = getattr(actual, field)
+        if expected_value != actual_value:
+            return (
+                f"{prefix}.{field}",
+                _diagnostic_value(expected_value),
+                _diagnostic_value(actual_value),
+            )
+    return prefix, _intent_id(expected), _intent_id(actual)
+
+
+def _diagnostic_value(value: Any) -> Any:
+    if hasattr(value, "model_dump"):
+        return value.model_dump(mode="json")
+    if isinstance(value, list):
+        return [
+            item.model_dump(mode="json") if hasattr(item, "model_dump") else item
+            for item in value
+        ]
+    return value.value if hasattr(value, "value") else value
+
+
 def assert_executed_committed_consistent(
     executed_intent: AnalysisIntent,
     committed: ContextContractV2,
@@ -468,10 +510,13 @@ def assert_executed_committed_consistent(
         else None
     )
     if attempted != executed_intent:
+        dimension, expected, actual = _intent_mismatch(
+            "last_attempted_intent", executed_intent, attempted
+        )
         raise ExecutedCommittedConsistencyError(
-            "last_attempted_intent",
-            _intent_id(executed_intent),
-            _intent_id(attempted),
+            dimension,
+            expected,
+            actual,
         )
     if outcome == "success" or getattr(outcome, "value", None) == "success":
         active = (
@@ -480,10 +525,13 @@ def assert_executed_committed_consistent(
             else None
         )
         if active != executed_intent:
+            dimension, expected, actual = _intent_mismatch(
+                "active_intent", executed_intent, active
+            )
             raise ExecutedCommittedConsistencyError(
-                "active_intent",
-                _intent_id(executed_intent),
-                _intent_id(active),
+                dimension,
+                expected,
+                actual,
             )
 
 
@@ -511,8 +559,11 @@ def assert_committed_reloaded_consistent(
         expected = _scope_intent(committed, field)
         actual = _scope_intent(reloaded, field)
         if expected != actual:
+            mismatch_dimension, expected_value, actual_value = _intent_mismatch(
+                dimension, expected, actual
+            )
             raise CommittedReloadedConsistencyError(
-                dimension,
-                _intent_id(expected),
-                _intent_id(actual),
+                mismatch_dimension,
+                expected_value,
+                actual_value,
             )

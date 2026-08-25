@@ -511,7 +511,7 @@ def test_executed_committed_period_corruption_is_detected() -> None:
             intent, committed, outcome=TransitionOutcome.SUCCESS
         )
 
-    assert captured.value.dimension == "last_attempted_intent"
+    assert captured.value.dimension == "last_attempted_intent.periods"
 
 
 def test_executed_committed_geo_corruption_is_detected() -> None:
@@ -574,7 +574,7 @@ def test_committed_reloaded_business_operand_corruption_is_detected() -> None:
     with pytest.raises(CommittedReloadedConsistencyError) as captured:
         assert_committed_reloaded_consistent(committed, reloaded)
 
-    assert captured.value.dimension == "active_intent"
+    assert captured.value.dimension == "active_intent.operands"
 
 
 def test_state_consistency_ignores_only_infrastructure_timestamps() -> None:
