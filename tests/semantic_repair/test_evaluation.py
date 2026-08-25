@@ -40,6 +40,7 @@ def _payload(action, mutations=None, references=None, question=None):
         "references": references or [],
         "unresolved_mentions": [],
         "clarification_question": question,
+        "clarification_reason": None,
         "confidence": 0.9,
         "reason_code": "test",
     }
@@ -103,6 +104,24 @@ def test_evaluator_reports_quality_safety_latency_and_control_skip() -> None:
     assert report["metrics"]["tool_errors"] is None
     assert report["cases"][0]["runs"][0]["classification"] == "SHADOW_IMPROVEMENT"
     assert report["cases"][1]["runs"][0]["classification"] == "SHADOW_NEUTRAL"
+
+
+def test_v2_corpus_is_versioned_and_all_model_cases_are_repeatable() -> None:
+    corpus = load_corpus("tests/semantic_repair/corpus_v2.json")
+    backend = ConstantBackend(_payload("unsupported"))
+
+    report = evaluate_corpus(
+        SemanticShadowRunner(backend, enabled=True),
+        corpus,
+        repeat_override=3,
+    )
+
+    assert len(corpus["cases"]) == 60
+    assert backend.calls == 180
+    assert report["schema_version"] == "2.0"
+    assert report["metrics"]["shadow_invocations"] == 180
+    assert report["swap_direction_metrics"]["positive_unique_cases"] == 16
+    assert all(len(case["runs"]) == 3 for case in report["cases"])
 
 
 def test_committed_corpus_fake_backend_schema_and_eligibility_counts() -> None:
