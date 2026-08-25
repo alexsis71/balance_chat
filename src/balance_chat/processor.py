@@ -48,6 +48,10 @@ from .observability import log_event
 from .planning import NativeMultiOperandPlanner, PlanningError
 from .reducer import ContextReductionError
 from .result_memory import PipelineResultMemoryAdapter
+from .runtime_consistency import (
+    IntentExecutionConsistencyError,
+    assert_intent_execution_consistent,
+)
 from .service import TurnProcessResult, TurnProcessingError
 from .transitions import (
     BusinessEntityTransitionServices,
@@ -1242,6 +1246,7 @@ class PipelineV2TurnProcessor:
         return TurnProcessResult(
             mutation=mutation,
             outcome=outcome,
+            executed_intent=intent,
             response={
                 "operation": Operation.GROUP.value,
                 "status": status,
@@ -2404,6 +2409,26 @@ class PipelineV2TurnProcessor:
                 "native intent planning failed", code="native_planning_failed"
             ) from exc
         try:
+            assert_intent_execution_consistent(intent, plan)
+        except IntentExecutionConsistencyError as exc:
+            mismatch = exc.comparison.mismatches[0] if exc.comparison.mismatches else None
+            log_event(
+                LOGGER,
+                logging.ERROR,
+                exc.event_code,
+                request_id=request_id,
+                intent_id=intent.intent_id,
+                dimension=(mismatch.dimension if mismatch else "projection_support"),
+                expected=(mismatch.expected if mismatch else None),
+                actual=(mismatch.actual if mismatch else None),
+                comparable=bool(mismatch),
+                pre_database=True,
+            )
+            raise TurnProcessingError(
+                "intent and native execution plan are inconsistent",
+                code=exc.code,
+            ) from exc
+        try:
             self.gate.validate_plan(plan)
         except EvidenceCompletenessError as exc:
             log_event(
@@ -2581,6 +2606,7 @@ class PipelineV2TurnProcessor:
         return TurnProcessResult(
             mutation=mutation,
             outcome=outcome,
+            executed_intent=intent,
             response=response,
             result_reference=result_ref,
             memory_write=memory_write,
@@ -2773,6 +2799,7 @@ class PipelineV2TurnProcessor:
         return TurnProcessResult(
             mutation=mutation,
             outcome=outcome,
+            executed_intent=intent,
             response=_public_pipeline_result(envelope),
             result_reference=result_ref,
             memory_write=memory_write,
@@ -2874,6 +2901,7 @@ class PipelineV2TurnProcessor:
         return TurnProcessResult(
             mutation=mutation,
             outcome=outcome,
+            executed_intent=intent,
             response=public_response,
             result_reference=result_ref,
             memory_write=memory_write,

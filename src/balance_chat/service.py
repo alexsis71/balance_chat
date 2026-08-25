@@ -11,6 +11,7 @@ from uuid import uuid4
 from pydantic import Field
 
 from .contracts import (
+    AnalysisIntent,
     ClarificationAnswer,
     ContextContractV2,
     ContextMutation,
@@ -18,6 +19,12 @@ from .contracts import (
     ResultReference,
     ResultMemoryWrite,
     TransitionOutcome,
+)
+from .runtime_consistency import (
+    CommittedReloadedConsistencyError,
+    ExecutedCommittedConsistencyError,
+    assert_committed_reloaded_consistent,
+    assert_executed_committed_consistent,
 )
 from .store import RevisionConflict
 from .observability import log_event
@@ -41,6 +48,7 @@ class MetadataSessionMismatch(RuntimeError):
 class TurnProcessResult(ContractModel):
     mutation: ContextMutation
     outcome: TransitionOutcome
+    executed_intent: AnalysisIntent | None = None
     response: dict[str, Any] = Field(default_factory=dict)
     result_reference: ResultReference | None = None
     memory_write: ResultMemoryWrite | None = None
@@ -221,6 +229,42 @@ class BalanceChatService:
                     clarification_questions=processed.clarification_questions,
                     memory_write=processed.memory_write,
                 )
+                if processed.executed_intent is not None:
+                    try:
+                        assert_executed_committed_consistent(
+                            processed.executed_intent,
+                            committed,
+                            outcome=processed.outcome,
+                        )
+                    except ExecutedCommittedConsistencyError as exc:
+                        log_event(
+                            LOGGER,
+                            logging.ERROR,
+                            exc.event_code,
+                            request_id=trace_id,
+                            session_id=session_id,
+                            revision=committed.revision,
+                            dimension=exc.dimension,
+                            expected=exc.expected,
+                            actual=exc.actual,
+                        )
+                        raise
+                reloaded = self.store.get(session_id)
+                try:
+                    assert_committed_reloaded_consistent(committed, reloaded)
+                except CommittedReloadedConsistencyError as exc:
+                    log_event(
+                        LOGGER,
+                        logging.ERROR,
+                        exc.event_code,
+                        request_id=trace_id,
+                        session_id=session_id,
+                        revision=committed.revision,
+                        dimension=exc.dimension,
+                        expected=exc.expected,
+                        actual=exc.actual,
+                    )
+                    raise
                 memory_status: dict[str, Any] = {}
                 if (
                     processed.memory_write is not None
