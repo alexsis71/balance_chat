@@ -289,12 +289,12 @@ def _intent_comparison(intent: AnalysisIntent, sources: tuple[_Source, ...]):
         return None
     comparison = intent.comparison
     if comparison is None:
-        comparison = type("ImplicitComparison", (), {
-            "baseline_operand_id": intent.operands[0].operand_id,
-            "target_operand_id": intent.operands[1].operand_id,
-            "delta_direction": "target_minus_baseline",
-            "percent_base": "baseline",
-        })()
+        return (
+            intent.operands[0].operand_id,
+            intent.operands[1].operand_id,
+            "target_minus_baseline",
+            "baseline",
+        )
     return (
         comparison.baseline_operand_id,
         comparison.target_operand_id,

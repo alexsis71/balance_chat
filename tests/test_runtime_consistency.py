@@ -11,9 +11,12 @@ from balance_chat.contracts import (
     CanonicalEntityRef,
     ComparisonSpec,
     ContextMutation,
+    FieldMutation,
     FormulaSpec,
     GroupingSpec,
     OperandEntityRef,
+    IntentPatch,
+    MutationAction,
     Operation,
     PeriodRef,
     RankingSpec,
@@ -22,6 +25,7 @@ from balance_chat.contracts import (
 from balance_chat.execution import NativeExecutionResult
 from balance_chat.planning import NativeMultiOperandPlanner
 from balance_chat.processor import PipelineV2TurnProcessor
+from balance_chat.execution_adapter import ReducerExecutionAdapter
 from balance_chat.runtime_consistency import (
     CommittedReloadedConsistencyError,
     ConsistencyStatus,
@@ -78,7 +82,7 @@ def _simple_intent(*, entities: list[OperandEntityRef] | None = None) -> Analysi
     )
 
 
-def _positive_intents() -> list[pytest.ParamSpec]:  # type: ignore[name-defined]
+def _positive_intents() -> list[object]:
     return [
         pytest.param(_simple_intent(), id="simple-show"),
         pytest.param(
@@ -184,6 +188,63 @@ def test_valid_planner_decomposition_matches_intent(intent: AnalysisIntent) -> N
     assert comparison.status == ConsistencyStatus.SUPPORTED_AND_EQUAL
     assert comparison.mismatches == ()
     assert_intent_execution_consistent(intent, plan)
+
+
+def test_generated_plan_and_scalar_intent_ids_do_not_create_false_mismatch() -> None:
+    intent = AnalysisIntent(
+        operation=Operation.COMPARE_PERIODS,
+        operands=[_operand()],
+        periods=[_period(4), _period(5)],
+    )
+    plan = NativeMultiOperandPlanner().plan(intent)
+    tasks = []
+    task_id_map = {}
+    for index, task in enumerate(plan.tasks):
+        new_task_id = f"generated-{index}"
+        task_id_map[task.task_id] = new_task_id
+        scalar = task.scalar_intent.model_copy(
+            update={"intent_id": f"generated-intent-{index}"}, deep=True
+        )
+        tasks.append(
+            task.model_copy(
+                update={"task_id": new_task_id, "scalar_intent": scalar}, deep=True
+            )
+        )
+    comparison = plan.comparison.model_copy(
+        update={
+            "baseline_operand_id": task_id_map[plan.comparison.baseline_operand_id],
+            "target_operand_id": task_id_map[plan.comparison.target_operand_id],
+        },
+        deep=True,
+    )
+    regenerated = plan.model_copy(
+        update={
+            "source_intent_id": "generated-source-intent",
+            "tasks": tasks,
+            "comparison": comparison,
+        },
+        deep=True,
+    )
+
+    assert_intent_execution_consistent(intent, regenerated)
+
+
+def test_not_comparable_projection_fails_closed() -> None:
+    intent = AnalysisIntent(
+        operation=Operation.GROUP,
+        operands=[_operand()],
+        periods=[_period(5)],
+        grouping=[GroupingSpec(dimension="geo")],
+    )
+    source_plan = NativeMultiOperandPlanner().plan(_simple_intent())
+    plan = source_plan.model_copy(update={"operation": Operation.GROUP}, deep=True)
+
+    comparison = compare_intent_execution_semantics(intent, plan)
+
+    assert comparison.status == ConsistencyStatus.NOT_COMPARABLE
+    with pytest.raises(IntentExecutionConsistencyError) as captured:
+        assert_intent_execution_consistent(intent, plan)
+    assert captured.value.dimensions == ("projection_support",)
 
 
 def _replace_task(plan, index, **updates):
@@ -655,3 +716,53 @@ def test_normal_runtime_check_preserves_request_id_cache_behavior() -> None:
     assert store.commit_calls == 1
     assert store.cache_writes == 1
     assert store.release_calls == 1
+
+
+class _PatchProcessor:
+    def __init__(self, state, mutation) -> None:
+        self.mutation = mutation
+        self.executed_intent = ReducerExecutionAdapter().effective_intent(
+            state, mutation
+        )
+
+    def process(self, *_args, **_kwargs):
+        return TurnProcessResult(
+            mutation=self.mutation,
+            outcome=TransitionOutcome.SUCCESS,
+            executed_intent=self.executed_intent,
+            response={"status": "ok"},
+        )
+
+
+def test_period_patch_preserves_unrelated_dimensions_through_commit_and_reload() -> None:
+    initial = _simple_intent(
+        entities=[
+            _entity("balance", "balance", "balance:42"),
+            _entity("destination", "geo_object", "geo:moscow"),
+        ]
+    )
+    store, state = _committed_state(initial)
+    mutation = ContextMutation(
+        turn_id="turn-2",
+        user_message="june",
+        patch=IntentPatch(
+            periods=FieldMutation(
+                action=MutationAction.SET,
+                value=[_period(6)],
+            )
+        ),
+    )
+    processor = _PatchProcessor(state, mutation)
+    service = BalanceChatService(store, processor)
+
+    service.execute_turn(
+        state.session_id,
+        expected_revision=state.revision,
+        message="june",
+        request_id="request-patch",
+    )
+    reloaded = store.get(state.session_id)
+
+    assert reloaded.active_dialog_scope.intent == processor.executed_intent
+    assert reloaded.active_dialog_scope.intent.periods == [_period(6)]
+    assert reloaded.active_dialog_scope.intent.operands == initial.operands
