@@ -1,0 +1,122 @@
+{
+  "version": "2.0",
+  "contexts": {
+    "directed_explicit": {
+      "current_active_state": {"operation": "show", "operands": [{"metric": "distribution", "entities": [{"role": "source", "type": "balance", "label": "ГП ТГ Томск"}, {"role": "destination", "type": "balance", "label": "ГП ТГ Сургут"}]}]},
+      "recent_semantic_turns": [],
+      "recent_addressable_results": [{"recency": 2, "relative_position": "previous", "state": {"direction": "Ухта -> Москва"}}, {"recency": 1, "relative_position": "most_recent", "state": {"direction": "Томск -> Сургут"}}],
+      "current_user_message": "А теперь наоборот"
+    },
+    "directed_full_balance": {
+      "current_active_state": {"operation": "show", "operands": [{"metric": "distribution", "entities": [{"role": "balance", "type": "balance", "label": "ГП ТГ Томск"}, {"role": "destination", "type": "balance", "label": "ГП ТГ Сургут"}, {"role": "article", "type": "article", "label": "Передача в Сургут"}]}]},
+      "recent_semantic_turns": [],
+      "recent_addressable_results": [{"recency": 1, "relative_position": "most_recent", "state": {"direction": "Томск -> Сургут"}}],
+      "current_user_message": "Покажи обратный поток"
+    },
+    "no_direction": {
+      "current_active_state": {"operation": "show", "operands": [{"metric": "balance", "entities": [{"role": "balance", "type": "balance", "label": "ГП ТГ Ухта"}]}]},
+      "recent_semantic_turns": [],
+      "recent_addressable_results": [{"recency": 2, "relative_position": "previous", "state": {"period": "апрель"}}, {"recency": 1, "relative_position": "most_recent", "state": {"period": "май"}}],
+      "current_user_message": "А теперь наоборот"
+    },
+    "two_relations": {
+      "current_active_state": {"operation": "show", "operands": [{"metric": "distribution", "entities": [{"role": "source", "label": "Томск"}, {"role": "destination", "label": "Сургут"}]}, {"metric": "distribution", "entities": [{"role": "source", "label": "Ухта"}, {"role": "destination", "label": "Москва"}]}]},
+      "recent_semantic_turns": [],
+      "recent_addressable_results": [{"recency": 1, "relative_position": "most_recent", "state": {"relations": 2}}],
+      "current_user_message": "Разверни направление"
+    },
+    "incomplete_direction": {
+      "current_active_state": {"operation": "show", "operands": [{"metric": "distribution", "entities": [{"role": "source", "label": "Томск"}]}]},
+      "recent_semantic_turns": [],
+      "recent_addressable_results": [{"recency": 1, "relative_position": "most_recent", "state": {"source": "Томск"}}],
+      "current_user_message": "Покажи обратно"
+    },
+    "zero_results": {
+      "current_active_state": {"operation": "show", "operands": [{"metric": "balance", "entities": [{"role": "balance", "label": "Ухта"}]}]},
+      "recent_semantic_turns": [], "recent_addressable_results": [], "current_user_message": "Сравни их"
+    },
+    "single_result": {
+      "current_active_state": {"operation": "show", "operands": [{"metric": "balance", "entities": [{"role": "balance", "label": "Ухта"}]}]},
+      "recent_semantic_turns": [],
+      "recent_addressable_results": [{"recency": 1, "relative_position": "most_recent", "state": {"period": "май", "entity": "Ухта"}}],
+      "current_user_message": "Сравни их"
+    },
+    "two_results": {
+      "current_active_state": {"operation": "show", "operands": [{"metric": "balance", "entities": [{"role": "balance", "label": "Сургут"}]}]},
+      "recent_semantic_turns": [],
+      "recent_addressable_results": [{"recency": 2, "relative_position": "previous", "state": {"period": "апрель", "entity": "Томск"}}, {"recency": 1, "relative_position": "most_recent", "state": {"period": "май", "entity": "Сургут"}}],
+      "current_user_message": "Сравни последние два"
+    },
+    "four_results": {
+      "current_active_state": {"operation": "show", "operands": [{"metric": "balance", "entities": [{"role": "balance", "label": "Москва"}]}]},
+      "recent_semantic_turns": [],
+      "recent_addressable_results": [{"recency": 4, "relative_position": "older", "state": {"period": "февраль"}}, {"recency": 3, "relative_position": "older", "state": {"period": "март"}}, {"recency": 2, "relative_position": "previous", "state": {"period": "апрель"}}, {"recency": 1, "relative_position": "most_recent", "state": {"period": "май"}}],
+      "current_user_message": "Возьми первый"
+    }
+  },
+  "cases": [
+    {"id":"swap_p01_direct","category":"swap_positive","context":"directed_explicit","expected":{"action":"patch","mutations":[{"kind":"swap_direction","value":null}],"references":[]}},
+    {"id":"swap_p02_opposite","category":"swap_positive","context":"directed_explicit","message_override":"Покажи противоположное направление","expected":{"action":"patch","mutations":[{"kind":"swap_direction","value":null}],"references":[]}},
+    {"id":"swap_p03_endpoints","category":"swap_positive","context":"directed_explicit","message_override":"Поменяй отправителя и получателя местами","expected":{"action":"patch","mutations":[{"kind":"swap_direction","value":null}],"references":[]}},
+    {"id":"swap_p04_arrow","category":"swap_positive","context":"directed_explicit","message_override":"Разверни стрелку между ними","expected":{"action":"patch","mutations":[{"kind":"swap_direction","value":null}],"references":[]}},
+    {"id":"swap_p05_backward_flow","category":"swap_positive","context":"directed_explicit","message_override":"Теперь поток в обратную сторону","expected":{"action":"patch","mutations":[{"kind":"swap_direction","value":null}],"references":[]}},
+    {"id":"swap_p06_other_direction","category":"swap_positive","context":"directed_explicit","message_override":"А в другом направлении?","expected":{"action":"patch","mutations":[{"kind":"swap_direction","value":null}],"references":[]}},
+    {"id":"swap_p07_between_them","category":"swap_positive","context":"directed_explicit","message_override":"Между ними теперь наоборот","expected":{"action":"patch","mutations":[{"kind":"swap_direction","value":null}],"references":[]}},
+    {"id":"swap_p08_reverse_direction","category":"swap_positive","context":"directed_explicit","message_override":"Разверни текущее направление","expected":{"action":"patch","mutations":[{"kind":"swap_direction","value":null}],"references":[]}},
+    {"id":"swap_p09_full_balance","category":"swap_positive","context":"directed_full_balance","expected":{"action":"patch","mutations":[{"kind":"swap_direction","value":null}],"references":[]}},
+    {"id":"swap_p10_full_balance_short","category":"swap_positive","context":"directed_full_balance","message_override":"Обратно","expected":{"action":"patch","mutations":[{"kind":"swap_direction","value":null}],"references":[]}},
+    {"id":"swap_p11_second_to_first","category":"swap_positive","context":"directed_explicit","message_override":"Теперь из второго пункта в первый","expected":{"action":"patch","mutations":[{"kind":"swap_direction","value":null}],"references":[]}},
+    {"id":"swap_p12_repeat_reverse","category":"swap_positive","context":"directed_explicit","message_override":"Повтори расчёт, но направление сделай обратным","expected":{"action":"patch","mutations":[{"kind":"swap_direction","value":null}],"references":[]}},
+    {"id":"swap_p13_back_this_flow","category":"swap_positive","context":"directed_explicit","message_override":"Теперь назад по этому потоку","expected":{"action":"patch","mutations":[{"kind":"swap_direction","value":null}],"references":[]}},
+    {"id":"swap_p14_route_reverse","category":"swap_positive","context":"directed_explicit","message_override":"Покажи реверс этого маршрута","expected":{"action":"patch","mutations":[{"kind":"swap_direction","value":null}],"references":[]}},
+    {"id":"swap_p15_opposite_side","category":"swap_positive","context":"directed_full_balance","message_override":"А в противоположную сторону?","expected":{"action":"patch","mutations":[{"kind":"swap_direction","value":null}],"references":[]}},
+    {"id":"swap_p16_only_direction","category":"swap_positive","context":"directed_explicit","message_override":"Сделай наоборот только направление","expected":{"action":"patch","mutations":[{"kind":"swap_direction","value":null}],"references":[]}},
+
+    {"id":"near_n01_previous_period","category":"swap_near_miss","context":"no_direction","message_override":"Вернись обратно к предыдущему периоду","expected":{"action":"unsupported","mutations":[],"references":[]}},
+    {"id":"near_n02_previous_entity","category":"swap_near_miss","context":"no_direction","message_override":"Верни обратно прежнюю организацию","expected":{"action":"unsupported","mutations":[],"references":[]}},
+    {"id":"near_n03_compare_directions","category":"swap_near_miss","context":"directed_explicit","message_override":"Сравни прямое и обратное направления","expected":{"action":"clarify","clarification_reason":"missing_second_result"}},
+    {"id":"near_n04_ask_availability","category":"swap_near_miss","context":"directed_explicit","message_override":"Есть ли данные по обратному направлению?","expected":{"action":"unsupported","mutations":[],"references":[]}},
+    {"id":"near_n05_two_relations","category":"swap_near_miss","context":"two_relations","expected":{"action":"clarify","clarification_reason":"ambiguous_direction"}},
+    {"id":"near_n06_two_relations_pronoun","category":"swap_near_miss","context":"two_relations","message_override":"А теперь их наоборот","expected":{"action":"clarify","clarification_reason":"ambiguous_direction"}},
+    {"id":"near_n07_zero_relation","category":"swap_near_miss","context":"no_direction","expected":{"action":"clarify","clarification_reason":"ambiguous_direction"}},
+    {"id":"near_n08_zero_relation_short","category":"swap_near_miss","context":"no_direction","message_override":"Обратное направление","expected":{"action":"clarify","clarification_reason":"ambiguous_direction"}},
+    {"id":"near_n09_incomplete","category":"swap_near_miss","context":"incomplete_direction","expected":{"action":"clarify","clarification_reason":"ambiguous_direction"}},
+    {"id":"near_n10_incomplete_pronoun","category":"swap_near_miss","context":"incomplete_direction","message_override":"Пусть идёт назад","expected":{"action":"clarify","clarification_reason":"ambiguous_direction"}},
+    {"id":"near_n11_new_query","category":"swap_near_miss","context":"directed_explicit","message_override":"Покажи обратный клапан на станции","expected":{"action":"unsupported","mutations":[],"references":[]}},
+    {"id":"near_n12_correction","category":"swap_near_miss","context":"directed_explicit","message_override":"Нет, направление указано неверно: нужен Север","expected":{"action":"clarify","clarification_reason":"entity_role_ambiguous"}},
+    {"id":"near_n13_back_to_result","category":"swap_near_miss","context":"two_results","message_override":"Вернись обратно к прошлому результату","expected":{"action":"patch","mutations":[{"kind":"reference_prior_result","value":null}],"references":[{"kind":"previous_result","selector":null}]}},
+    {"id":"near_n14_back_conversation","category":"swap_near_miss","context":"two_results","message_override":"Назад к тому, что было до этого","expected":{"action":"patch","mutations":[{"kind":"reference_prior_result","value":null}],"references":[{"kind":"previous_result","selector":null}]}},
+    {"id":"near_n15_direction_question","category":"swap_near_miss","context":"directed_explicit","message_override":"Какое сейчас направление потока?","expected":{"action":"unsupported","mutations":[],"references":[]}},
+    {"id":"near_n16_named_reverse","category":"swap_near_miss","context":"directed_explicit","message_override":"Сравни Томск–Сургут и Сургут–Томск","expected":{"action":"clarify","clarification_reason":"missing_second_result"}},
+    {"id":"near_n17_word_reverse","category":"swap_near_miss","context":"no_direction","message_override":"Покажи обратную величину коэффициента","expected":{"action":"unsupported","mutations":[],"references":[]}},
+    {"id":"near_n18_opposite_metric","category":"swap_near_miss","context":"no_direction","message_override":"Нужен противоположный показатель, не баланс","expected":{"action":"unsupported","mutations":[],"references":[]}},
+    {"id":"near_n19_direction_group","category":"swap_near_miss","context":"directed_explicit","message_override":"Сгруппируй по направлению","expected":{"action":"unsupported","mutations":[],"references":[]}},
+    {"id":"near_n20_reverse_period_order","category":"swap_near_miss","context":"two_results","message_override":"Покажи периоды в обратном порядке","expected":{"action":"unsupported","mutations":[],"references":[]}},
+    {"id":"near_n21_no_relation_again","category":"swap_near_miss","context":"zero_results","message_override":"Давай наоборот","expected":{"action":"clarify","clarification_reason":"ambiguous_direction"}},
+    {"id":"near_n22_two_relations_named","category":"swap_near_miss","context":"two_relations","message_override":"Обратное направление для Томска","expected":{"action":"clarify","clarification_reason":"ambiguous_direction"}},
+    {"id":"near_n23_incomplete_named","category":"swap_near_miss","context":"incomplete_direction","message_override":"Разверни поток от Томска","expected":{"action":"clarify","clarification_reason":"ambiguous_direction"}},
+    {"id":"near_n24_reverse_comparison","category":"swap_near_miss","context":"two_results","message_override":"Что больше в обратном порядке?","expected":{"action":"patch","mutations":[{"kind":"set_operation","value":"compare"},{"kind":"set_comparison","value":"larger_value"}],"references":[{"kind":"last_two_results","selector":null}]}},
+
+    {"id":"ref_r01_first","category":"references","context":"two_results","message_override":"Возьми первый из последних двух","expected":{"action":"patch","mutations":[{"kind":"reference_prior_result","value":null}],"references":[{"kind":"last_two_results","selector":"first"}]}},
+    {"id":"ref_r02_second","category":"references","context":"two_results","message_override":"Выбери второй из этих двух","expected":{"action":"patch","mutations":[{"kind":"reference_prior_result","value":null}],"references":[{"kind":"last_two_results","selector":"second"}]}},
+    {"id":"ref_r03_most_recent","category":"references","context":"four_results","message_override":"Возьми самый свежий результат","expected":{"action":"patch","mutations":[{"kind":"reference_prior_result","value":null}],"references":[{"kind":"previous_result","selector":null}]}},
+    {"id":"ref_r04_previous","category":"references","context":"four_results","message_override":"Верни предыдущий результат","expected":{"action":"patch","mutations":[{"kind":"reference_prior_result","value":null}],"references":[{"kind":"previous_result","selector":null}]}},
+    {"id":"ref_r05_ambiguous_first","category":"references","context":"four_results","expected":{"action":"clarify","clarification_reason":"ambiguous_result_reference"}},
+    {"id":"ref_r06_same_one","category":"references","context":"four_results","message_override":"Используй тот же самый","expected":{"action":"clarify","clarification_reason":"ambiguous_result_reference"}},
+    {"id":"ref_r07_only_one_pair","category":"references","context":"single_result","message_override":"Возьми первый из двух","expected":{"action":"clarify","clarification_reason":"missing_second_result"}},
+    {"id":"ref_r08_zero_previous","category":"references","context":"zero_results","message_override":"Верни предыдущий результат","expected":{"action":"clarify","clarification_reason":"ambiguous_result_reference"}},
+    {"id":"ref_r09_that_result","category":"references","context":"four_results","message_override":"Возьми тот результат","expected":{"action":"clarify","clarification_reason":"ambiguous_result_reference"}},
+    {"id":"ref_r10_second_clear","category":"references","context":"four_results","message_override":"Из последних двух нужен второй, самый свежий","expected":{"action":"patch","mutations":[{"kind":"reference_prior_result","value":null}],"references":[{"kind":"last_two_results","selector":"second"}]}},
+
+    {"id":"cmp_c01_side_by_side","category":"compare_calculate","context":"two_results","message_override":"Сопоставь два последних результата","expected":{"action":"patch","mutations":[{"kind":"set_operation","value":"compare"},{"kind":"set_comparison","value":"last_two_results"}],"references":[{"kind":"last_two_results","selector":null}]}},
+    {"id":"cmp_c02_larger","category":"compare_calculate","context":"two_results","message_override":"Какой из двух больше?","expected":{"action":"patch","mutations":[{"kind":"set_operation","value":"compare"},{"kind":"set_comparison","value":"larger_value"}],"references":[{"kind":"last_two_results","selector":null}]}},
+    {"id":"cmp_c03_absolute","category":"compare_calculate","context":"two_results","message_override":"Вычисли абсолютную разницу между ними","expected":{"action":"patch","mutations":[{"kind":"set_operation","value":"calculate"},{"kind":"set_comparison","value":"absolute_difference"}],"references":[{"kind":"last_two_results","selector":null}]}},
+    {"id":"cmp_c04_percent","category":"compare_calculate","context":"two_results","message_override":"На сколько процентов отличаются два результата?","expected":{"action":"patch","mutations":[{"kind":"set_operation","value":"calculate"},{"kind":"set_comparison","value":"percent_difference"}],"references":[{"kind":"last_two_results","selector":null}]}},
+    {"id":"cmp_c05_compare_bare","category":"compare_calculate","context":"two_results","message_override":"Просто сравни их рядом","expected":{"action":"patch","mutations":[{"kind":"set_operation","value":"compare"},{"kind":"set_comparison","value":"last_two_results"}],"references":[{"kind":"last_two_results","selector":null}]}},
+    {"id":"cmp_c06_difference_ambiguous","category":"compare_calculate","context":"two_results","message_override":"Покажи разницу","expected":{"action":"clarify","clarification_reason":"ambiguous_result_reference"}},
+    {"id":"cmp_c07_single_compare","category":"compare_calculate","context":"single_result","message_override":"Сравни с другим","expected":{"action":"clarify","clarification_reason":"missing_second_result"}},
+    {"id":"cmp_c08_zero_compare","category":"compare_calculate","context":"zero_results","expected":{"action":"clarify","clarification_reason":"missing_second_result"}},
+    {"id":"cmp_c09_named_periods","category":"compare_calculate","context":"two_results","message_override":"Сравни весну и лето","expected":{"action":"patch","mutations":[{"kind":"set_operation","value":"compare"},{"kind":"set_comparison","value":"named_periods"}],"references":[]}},
+    {"id":"cmp_c10_percent_single","category":"compare_calculate","context":"single_result","message_override":"На сколько процентов он отличается от второго?","expected":{"action":"clarify","clarification_reason":"missing_second_result"}}
+  ]
+}

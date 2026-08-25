@@ -9,7 +9,8 @@ from balance_chat.semantic_repair.backend import (
     SemanticShadowUnavailable,
     ShadowModelResponse,
 )
-from balance_chat.semantic_repair.contracts import ShadowValidationStatus
+from balance_chat.semantic_repair.context import SemanticShadowContext
+from balance_chat.semantic_repair.contracts import ContextualGateStatus, ShadowValidationStatus
 from balance_chat.semantic_repair.shadow import SemanticShadowRunner
 
 
@@ -127,6 +128,35 @@ def test_valid_shadow_proposal_is_recorded_only_as_result(active_state) -> None:
     assert result.model == "Qwen/Qwen3.8-27B"
     assert active_state.model_dump(mode="json") == before
     assert len(backend.calls) == 1
+
+
+def test_shadow_records_raw_normalized_and_context_gate_layers() -> None:
+    payload = {
+        **_valid_payload(),
+        "mutations": [
+            {"kind": "set_operation", "value": "compare"},
+            {"kind": "set_comparison", "value": "last_two_results"},
+            {"kind": "reference_prior_result", "value": None},
+        ],
+        "references": [{"kind": "last_two_results", "selector": None}],
+    }
+    context = SemanticShadowContext(
+        current_active_state={"operation": "show", "operands": []},
+        recent_semantic_turns=[],
+        recent_addressable_results=[{"recency": 1}],
+        current_user_message="Сравни их",
+    )
+
+    result = SemanticShadowRunner(
+        Backend(json.dumps(payload)), enabled=True
+    ).run_context(context, request_id="layers")
+
+    assert result.raw_payload == payload
+    assert result.raw_validation_status == ShadowValidationStatus.VALID
+    assert result.normalization_actions == ["remove_redundant_reference_prior_result"]
+    assert len(result.normalized_proposal.mutations) == 2
+    assert result.contextual_gate_status == ContextualGateStatus.REJECTED
+    assert result.contextual_gate_reasons == ["g3_insufficient_addressable_results"]
 
 
 @pytest.mark.parametrize(

@@ -12,10 +12,13 @@ from .backend import (
 )
 from .context import SemanticShadowContext, build_semantic_shadow_context
 from .contracts import (
+    ContextualGateStatus,
     SemanticShadowResult,
     ShadowValidationStatus,
     semantic_transition_proposal_json_schema,
 )
+from .normalization import normalize_proposal
+from .semantic_gate import evaluate_contextual_gate
 from .validator import ProposalValidator
 from ..contracts import ContextContractV2
 
@@ -164,14 +167,38 @@ class SemanticShadowRunner:
             payload,
             output_chars=len(response.content),
         )
+        raw_status = (
+            ShadowValidationStatus.VALID
+            if validation.valid
+            else ShadowValidationStatus.REJECTED
+        )
+        normalized = (
+            normalize_proposal(validation.proposal)
+            if validation.valid and validation.proposal is not None
+            else None
+        )
+        gate = (
+            evaluate_contextual_gate(normalized.proposal, context)
+            if normalized is not None
+            else None
+        )
         return SemanticShadowResult(
             **common,
-            proposal=validation.proposal,
-            validation_status=(
-                ShadowValidationStatus.VALID
-                if validation.valid
-                else ShadowValidationStatus.REJECTED
+            raw_payload=dict(payload),
+            raw_validation_status=raw_status,
+            raw_validation_errors=list(validation.errors),
+            proposal=normalized.proposal if normalized is not None else validation.proposal,
+            normalized_proposal=(normalized.proposal if normalized is not None else None),
+            normalization_actions=list(normalized.actions) if normalized else [],
+            contextual_gate_status=(
+                ContextualGateStatus.ACCEPTED
+                if gate is not None and gate.accepted
+                else ContextualGateStatus.REJECTED
+                if gate is not None
+                else ContextualGateStatus.NOT_EVALUATED
             ),
+            contextual_gate_reasons=list(gate.reasons) if gate else [],
+            validation_status=raw_status,
             validation_errors=list(validation.errors),
             latency_ms=latency_ms,
             model=response.model,

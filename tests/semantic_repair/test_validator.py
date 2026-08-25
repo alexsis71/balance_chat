@@ -12,6 +12,7 @@ def _proposal(**updates):
         "references": [],
         "unresolved_mentions": [],
         "clarification_question": None,
+        "clarification_reason": None,
         "confidence": 0.9,
         "reason_code": "reverse_requested",
     }
@@ -109,3 +110,28 @@ def test_reference_prior_result_requires_bounded_result_reference() -> None:
 
     assert result.valid is False
     assert "prior_result_reference_required" in result.errors
+
+
+def test_clarification_requires_bounded_reason() -> None:
+    result = ProposalValidator().validate(
+        _proposal(
+            action="clarify",
+            mutations=[],
+            clarification_question="Какой результат вы имеете в виду?",
+            clarification_reason="ambiguous_result_reference",
+        )
+    )
+
+    assert result.valid is True
+
+
+def test_invalid_selector_product_space_is_rejected_structurally() -> None:
+    result = ProposalValidator().validate(
+        _proposal(
+            mutations=[{"kind": "reference_prior_result", "value": None}],
+            references=[{"kind": "last_two_results", "selector": "last"}],
+        )
+    )
+
+    assert result.valid is False
+    assert "unknown_reference_selector" in result.errors
