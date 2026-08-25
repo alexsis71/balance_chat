@@ -9,6 +9,7 @@ from balance_chat.semantic_repair.context import build_semantic_shadow_context
 from balance_chat.semantic_repair.contracts import (
     ProposalAction,
     SemanticMutation,
+    SemanticReference,
     SemanticTransitionProposal,
     semantic_transition_proposal_json_schema,
 )
@@ -50,6 +51,8 @@ def test_context_is_bounded_and_excludes_canonical_ids(active_state) -> None:
     assert "entity_id" not in serialized
     assert len(context.recent_semantic_turns) <= 4
     assert len(context.recent_addressable_results) <= 4
+    assert context.addressable_result_count == 0
+    assert context.directed_relation_count == 0
 
 
 def test_context_keeps_only_four_recent_turns_and_results(active_state) -> None:
@@ -81,3 +84,17 @@ def test_context_keeps_only_four_recent_turns_and_results(active_state) -> None:
     assert len(context.recent_addressable_results) == 4
     assert context.recent_semantic_turns[0]["user"] == "message-2"
     assert context.recent_semantic_turns[-1]["user"] == "message-5"
+    assert context.addressable_result_count == 4
+    assert context.recent_addressable_results[-1]["relative_position"] == "most_recent"
+    assert context.recent_addressable_results[-2]["relative_position"] == "previous"
+
+
+def test_selector_product_space_is_explicit() -> None:
+    assert SemanticReference(kind="last_two_results", selector="first").selector.value == "first"
+    assert SemanticReference(kind="last_two_results", selector="second").selector.value == "second"
+    assert SemanticReference(kind="previous_result", selector=None).selector is None
+
+    with pytest.raises(ValidationError):
+        SemanticReference(kind="last_two_results", selector="last")
+    with pytest.raises(ValidationError):
+        SemanticReference(kind="previous_result", selector="first")

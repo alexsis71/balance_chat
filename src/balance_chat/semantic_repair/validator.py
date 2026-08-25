@@ -9,6 +9,7 @@ from typing import Any, Mapping
 from pydantic import ValidationError
 
 from .contracts import (
+    ClarificationReason,
     ProposalAction,
     ReferenceKind,
     ReferenceSelector,
@@ -128,10 +129,7 @@ class ProposalValidator:
                 item.value for item in ReferenceSelector
             }:
                 errors.append("unknown_reference_selector")
-            if kind != ReferenceKind.LAST_TWO_RESULTS and selector in {
-                ReferenceSelector.FIRST,
-                ReferenceSelector.SECOND,
-            }:
+            if kind != ReferenceKind.LAST_TWO_RESULTS and selector is not None:
                 errors.append("reference_selector_mismatch")
         if len(reference_kinds) != len(set(reference_kinds)):
             errors.append("duplicate_reference_kind")
@@ -146,11 +144,14 @@ class ProposalValidator:
             errors.append("invalid_confidence")
 
         question = payload.get("clarification_question")
+        clarification_reason = payload.get("clarification_reason")
         if action_value == ProposalAction.PATCH:
             if not mutations:
                 errors.append("patch_requires_mutation")
             if question:
                 errors.append("patch_cannot_clarify")
+            if clarification_reason is not None:
+                errors.append("patch_cannot_have_clarification_reason")
             kinds = set(mutation_kinds)
             if SemanticMutationKind.SWAP_DIRECTION in kinds and len(kinds) != 1:
                 errors.append("unsupported_multi_field_combination")
@@ -166,8 +167,12 @@ class ProposalValidator:
                 errors.append("clarify_requires_question")
             if mutations:
                 errors.append("clarify_cannot_mutate")
+            if clarification_reason not in {
+                item.value for item in ClarificationReason
+            }:
+                errors.append("clarify_requires_reason")
         elif action_value == ProposalAction.UNSUPPORTED:
-            if mutations or references or question:
+            if mutations or references or question or clarification_reason:
                 errors.append("unsupported_must_be_empty")
         elif action_value == ProposalAction.REBUILD:
             errors.append("rebuild_not_supported_in_pr5")

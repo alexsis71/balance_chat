@@ -69,7 +69,7 @@ class PipelineSemanticShadowBackend:
                 self.profile,
                 messages,
                 self._models.OutputContract.json_schema(
-                    "semantic_transition_proposal_v1", schema
+                    "semantic_transition_proposal_v2", schema
                 ),
                 self._models.SamplingConfig(
                     temperature=0.0,
